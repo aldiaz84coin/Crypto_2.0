@@ -3,27 +3,21 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Detector inteligente de criptoactivos invertibles con análisis en tiempo real y aprendizaje automático">
-    <meta name="keywords" content="crypto, cryptocurrency, bitcoin, ethereum, trading, inversión, detector">
-    <title>Crypto Detector - Detecta Oportunidades de Inversión en Tiempo Real</title>
-    
-    <!-- React -->
-    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-    
-    <!-- Babel para JSX -->
-    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <meta name="description" content="Detector inteligente de criptoactivos invertibles con análisis en tiempo real">
+    <title>Crypto Detector - Detecta Oportunidades de Inversión</title>
     
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     
+    <!-- React y ReactDOM desde CDN -->
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    
+    <!-- Babel Standalone para JSX -->
+    <script src="https://unpkg.com/@babel/standalone@7.23.5/babel.min.js"></script>
+    
     <!-- Favicon -->
     <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>💰</text></svg>">
-    
-    <!-- Open Graph para redes sociales -->
-    <meta property="og:title" content="Crypto Detector - Detecta Oportunidades">
-    <meta property="og:description" content="Sistema inteligente de detección de criptoactivos invertibles">
-    <meta property="og:type" content="website">
     
     <style>
         body {
@@ -32,7 +26,6 @@
             overflow-x: hidden;
         }
         
-        /* Loading screen */
         #loading {
             position: fixed;
             top: 0;
@@ -64,6 +57,10 @@
         @keyframes spin {
             to { transform: rotate(360deg); }
         }
+
+        #root {
+            min-height: 100vh;
+        }
     </style>
 </head>
 <body>
@@ -72,24 +69,69 @@
         <div class="text-center">
             <div class="spinner mx-auto mb-4"></div>
             <p class="text-white text-lg">Cargando Crypto Detector...</p>
+            <p class="text-white text-sm mt-2" id="loading-status">Inicializando...</p>
         </div>
     </div>
     
     <!-- App container -->
     <div id="root"></div>
     
-    <!-- Load app -->
-    <script type="text/babel" src="app.jsx"></script>
-    <script type="text/babel">
-        // Render app
-        ReactDOM.createRoot(document.getElementById('root')).render(<CryptoDetectorApp />);
-        
-        // Hide loading screen when app is ready
-        window.addEventListener('load', () => {
-            setTimeout(() => {
-                document.getElementById('loading').classList.add('hidden');
-            }, 500);
+    <!-- Error handler -->
+    <script>
+        window.addEventListener('error', function(e) {
+            const status = document.getElementById('loading-status');
+            if (status) {
+                status.textContent = 'Error: ' + e.message;
+                status.style.color = '#ef4444';
+            }
+            console.error('Error:', e);
         });
+
+        if (typeof React === 'undefined') {
+            document.getElementById('loading-status').textContent = 'Error: React no cargó';
+            document.getElementById('loading-status').style.color = '#ef4444';
+        }
+    </script>
+    
+    <!-- App Script -->
+    <script type="text/babel">
+        if (typeof React === 'undefined' || typeof ReactDOM === 'undefined') {
+            document.getElementById('loading-status').textContent = 'Error: React no disponible';
+            throw new Error('React no disponible');
+        }
+
+        fetch('app.jsx')
+            .then(response => response.text())
+            .then(code => {
+                document.getElementById('loading-status').textContent = 'Compilando...';
+                
+                try {
+                    eval(Babel.transform(code, { presets: ['react'] }).code);
+                    
+                    if (typeof CryptoDetectorApp === 'undefined') {
+                        throw new Error('CryptoDetectorApp no definido');
+                    }
+                    
+                    document.getElementById('loading-status').textContent = 'Renderizando...';
+                    
+                    const root = ReactDOM.createRoot(document.getElementById('root'));
+                    root.render(React.createElement(CryptoDetectorApp));
+                    
+                    setTimeout(() => {
+                        document.getElementById('loading').classList.add('hidden');
+                    }, 500);
+                    
+                } catch (error) {
+                    document.getElementById('loading-status').textContent = 'Error: ' + error.message;
+                    document.getElementById('loading-status').style.color = '#ef4444';
+                    console.error('Error:', error);
+                }
+            })
+            .catch(error => {
+                document.getElementById('loading-status').textContent = 'Error cargando: ' + error.message;
+                document.getElementById('loading-status').style.color = '#ef4444';
+                console.error('Error:', error);
+            });
     </script>
 </body>
 </html>

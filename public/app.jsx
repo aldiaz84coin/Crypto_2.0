@@ -969,4 +969,4 @@ const CryptoDetectorApp = () => {
   );
 };
 
-export default CryptoDetectorApp;
+// NO usar export en el navegador - el componente ya está disponible globalmente
