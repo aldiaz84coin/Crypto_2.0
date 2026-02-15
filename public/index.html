@@ -3,8 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta name="description" content="Detector inteligente de criptoactivos invertibles">
-    <title>Crypto Detector - Sistema Completo</title>
+    <title>Crypto Detector - Sistema Completo con Debug</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -124,6 +123,8 @@ const CryptoDetectorApp = () => {
   const [activeTab, setActiveTab] = useState('monitor');
   const [simulationRunning, setSimulationRunning] = useState(false);
   const [lastUpdate, setLastUpdate] = useState(null);
+  const [debugInfo, setDebugInfo] = useState(null);
+  const [loadingDebug, setLoadingDebug] = useState(false);
 
   // Función para obtener datos reales de CoinGecko
   const fetchCoinGeckoData = async () => {
@@ -528,6 +529,7 @@ const CryptoDetectorApp = () => {
   useEffect(() => {
     loadRealData();
     checkEmailConfiguration();
+    loadDebugInfo();
     
     // Auto-refresh cada 5 minutos
     const interval = setInterval(() => {
@@ -1009,7 +1011,7 @@ const CryptoDetectorApp = () => {
 
 // NO usar export en el navegador - el componente ya está disponible globalmente
 
-        // Renderizar la aplicación
+        // Renderizar
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<CryptoDetectorApp />);
         
