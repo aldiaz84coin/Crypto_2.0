@@ -40,6 +40,17 @@ else
     exit 1
 fi
 
+# Copiar módulos necesarios a /api
+if [ -f "report-generator.js" ]; then
+    cp report-generator.js api/
+    echo "   ✅ report-generator.js copiado a api/"
+fi
+
+if [ -f "email-service.js" ]; then
+    cp email-service.js api/
+    echo "   ✅ email-service.js copiado a api/"
+fi
+
 # Copiar frontend a /public
 if [ -f "crypto-detector-real-api.jsx" ]; then
     cp crypto-detector-real-api.jsx public/app.jsx
