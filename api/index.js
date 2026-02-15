@@ -265,8 +265,10 @@ app.get('/api/fear-greed', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINTS - Binance Exchange Data
+// ENDPOINTS - Binance Exchange Data (OPCIONAL)
 // ============================================
+// NOTA: Binance puede estar bloqueado geográficamente (error 451)
+// El sistema funciona perfectamente sin Binance usando solo CoinGecko
 
 app.get('/api/exchange/:symbol', async (req, res) => {
   try {
@@ -280,7 +282,8 @@ app.get('/api/exchange/:symbol', async (req, res) => {
     }
 
     const response = await axios.get(`https://api.binance.com/api/v3/ticker/24hr`, {
-      params: { symbol: tradingPair }
+      params: { symbol: tradingPair },
+      timeout: 5000
     });
 
     const result = {
@@ -295,7 +298,18 @@ app.get('/api/exchange/:symbol', async (req, res) => {
     res.json({ data: result, source: 'api' });
   } catch (error) {
     console.error('Binance API Error:', error.message);
-    res.status(404).json({ error: 'Trading pair not found or API error' });
+    
+    // Error 451 = Restricción geográfica (bloqueado en tu región)
+    // Esto NO es crítico - CoinGecko ya proporciona volumen de trading
+    const isGeoBlocked = error.response?.status === 451;
+    
+    res.status(503).json({ 
+      error: isGeoBlocked ? 'Binance bloqueado geográficamente' : 'Binance API error',
+      message: error.message,
+      note: 'No es crítico - El sistema usa volumen de CoinGecko',
+      geoBlocked: isGeoBlocked,
+      source: 'error'
+    });
   }
 });
 
@@ -638,17 +652,23 @@ app.get('/api/debug', async (req, res) => {
     };
   }
 
-  // Test Binance
+  // Test Binance (OPCIONAL - puede estar bloqueado geográficamente)
   try {
     const binanceResponse = await axios.get('https://api.binance.com/api/v3/ping', { timeout: 5000 });
     connectivity.binance = { 
       status: 'online',
-      latency: 'OK'
+      latency: 'OK',
+      note: 'Opcional - CoinGecko proporciona volumen'
     };
   } catch (error) {
+    const isGeoBlocked = error.response?.status === 451;
     connectivity.binance = { 
-      status: 'error', 
-      error: error.message 
+      status: isGeoBlocked ? 'geo_blocked' : 'error',
+      error: error.message,
+      geoBlocked: isGeoBlocked,
+      note: isGeoBlocked 
+        ? 'Bloqueado geográficamente - No afecta funcionalidad (usamos CoinGecko)'
+        : 'Error de conexión - No es crítico'
     };
   }
 
@@ -798,3 +818,83 @@ if (require.main === module) {
 
 // Exportar para Vercel serverless
 module.exports = app;
+// ============================================
+// INTEGRACIÓN - CICLOS Y ENTRENAMIENTO
+// ============================================
+
+// Importar helpers de KV (solo si está disponible)
+let kvHelpers = null;
+try {
+  kvHelpers = require('./kv-helpers');
+  console.log('✅ Vercel KV disponible - Funcionalidad de ciclos habilitada');
+} catch (error) {
+  console.log('⚠️  Vercel KV no disponible - Funcionalidad de ciclos deshabilitada');
+  console.log('   Configura Vercel KV para habilitar ciclos de 12h');
+}
+
+// Solo habilitar endpoints de ciclos si KV está disponible
+if (kvHelpers) {
+  // Importar y ejecutar los endpoints de ciclos
+  require('./cycles-endpoints');
+  // Importar y ejecutar los endpoints de entrenamiento
+  require('./algorithm-training');
+  
+  console.log('✅ Endpoints de ciclos y entrenamiento habilitados');
+} else {
+  // Endpoints deshabilitados - devolver error amigable
+  const kvNotAvailable = (req, res) => {
+    res.status(503).json({
+      error: 'Vercel KV no configurado',
+      message: 'Para usar ciclos de 12h y entrenamiento, configura Vercel KV en tu proyecto',
+      setup: 'https://vercel.com/docs/storage/vercel-kv'
+    });
+  };
+  
+  app.post('/api/cycles/start', kvNotAvailable);
+  app.get('/api/cycles/active', kvNotAvailable);
+  app.get('/api/cycles/history', kvNotAvailable);
+  app.post('/api/algorithm/train', kvNotAvailable);
+  
+  console.log('⚠️  Endpoints de ciclos deshabilitados (KV no disponible)');
+}
+
+
+
+// ============================================
+// INTEGRACIÓN - CICLOS Y ENTRENAMIENTO
+// ============================================
+
+// Cargar KV helpers
+let kvHelpers = null;
+try {
+  kvHelpers = require('./kv-helpers');
+  console.log('✅ Vercel KV disponible');
+} catch (error) {
+  console.log('⚠️  Vercel KV no disponible');
+}
+
+if (kvHelpers) {
+  // Cargar e inicializar los endpoints
+  const initCyclesEndpoints = require('./cycles-endpoints');
+  const initAlgorithmTraining = require('./algorithm-training');
+  
+  // Pasar las dependencias necesarias
+  initCyclesEndpoints(app, kvHelpers, reportGenerator, emailService);
+  initAlgorithmTraining(app, kvHelpers);
+  
+  console.log('✅ Endpoints de ciclos habilitados');
+} else {
+  // Endpoints deshabilitados
+  const kvNotAvailable = (req, res) => {
+    res.status(503).json({
+      error: 'Vercel KV no configurado',
+      message: 'Configura Vercel KV para usar ciclos de 12h',
+      docs: 'Ver INSTRUCCIONES-DESPLIEGUE.md'
+    });
+  };
+  
+  app.post('/api/cycles/start', kvNotAvailable);
+  app.get('/api/cycles/active', kvNotAvailable);
+  app.get('/api/cycles/history', kvNotAvailable);
+  app.post('/api/algorithm/train', kvNotAvailable);
+}
