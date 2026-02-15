@@ -161,11 +161,12 @@ app.get('/api/trends/:symbol', async (req, res) => {
   } catch (error) {
     console.error('Google Trends API Error:', error.message);
     
-    // Fallback a datos simulados
-    const simulatedTrend = Math.random() * 300;
-    res.json({ 
-      data: { trend: simulatedTrend, simulated: true, error: error.message },
-      source: 'fallback'
+    // NO usar datos simulados - devolver error
+    res.status(503).json({ 
+      error: 'Google Trends API no disponible',
+      message: error.message,
+      configured: !!process.env.SERPAPI_KEY,
+      source: 'error'
     });
   }
 });
@@ -185,13 +186,12 @@ app.get('/api/news/:symbol', async (req, res) => {
     }
 
     if (!process.env.CRYPTOCOMPARE_KEY) {
-      // Modo simulado
-      const simulatedNews = {
-        count: Math.floor(Math.random() * 20),
-        sentiment: Math.random(),
-        simulated: true
-      };
-      return res.json({ data: simulatedNews, source: 'simulated' });
+      return res.status(503).json({ 
+        error: 'CryptoCompare API no configurada',
+        message: 'Se requiere CRYPTOCOMPARE_KEY en variables de entorno',
+        configured: false,
+        source: 'error'
+      });
     }
 
     const response = await axios.get('https://min-api.cryptocompare.com/data/v2/news/', {
@@ -570,6 +570,167 @@ app.get('/api/health', (req, res) => {
   });
 });
 
+// Endpoint de debug completo
+app.get('/api/debug', async (req, res) => {
+  const debugInfo = {
+    timestamp: new Date().toISOString(),
+    server: {
+      uptime: process.uptime(),
+      memory: process.memoryUsage(),
+      nodeVersion: process.version,
+      platform: process.platform
+    },
+    cache: {
+      size: cache.size,
+      keys: Array.from(cache.keys())
+    },
+    apis: {
+      serpapi: {
+        configured: !!process.env.SERPAPI_KEY,
+        keyPresent: !!process.env.SERPAPI_KEY,
+        keyLength: process.env.SERPAPI_KEY ? process.env.SERPAPI_KEY.length : 0
+      },
+      cryptocompare: {
+        configured: !!process.env.CRYPTOCOMPARE_KEY,
+        keyPresent: !!process.env.CRYPTOCOMPARE_KEY,
+        keyLength: process.env.CRYPTOCOMPARE_KEY ? process.env.CRYPTOCOMPARE_KEY.length : 0
+      },
+      coingecko: {
+        configured: true,
+        type: 'public',
+        note: 'No requiere API key'
+      },
+      binance: {
+        configured: true,
+        type: 'public',
+        note: 'No requiere API key'
+      },
+      fearGreed: {
+        configured: true,
+        type: 'public',
+        note: 'No requiere API key'
+      }
+    },
+    email: {
+      configured: !!(process.env.SENDGRID_API_KEY || process.env.GMAIL_USER || process.env.SMTP_HOST),
+      provider: process.env.SENDGRID_API_KEY ? 'SendGrid' : 
+                process.env.GMAIL_USER ? 'Gmail' : 
+                process.env.SMTP_HOST ? 'SMTP' : 'None',
+      recipient: !!process.env.REPORT_RECIPIENT_EMAIL
+    }
+  };
+
+  // Probar conectividad con cada API
+  const connectivity = {};
+
+  // Test CoinGecko
+  try {
+    const cgResponse = await axios.get('https://api.coingecko.com/api/v3/ping', { timeout: 5000 });
+    connectivity.coingecko = { 
+      status: 'online', 
+      response: cgResponse.data,
+      latency: cgResponse.headers['x-response-time'] || 'N/A'
+    };
+  } catch (error) {
+    connectivity.coingecko = { 
+      status: 'error', 
+      error: error.message 
+    };
+  }
+
+  // Test Binance
+  try {
+    const binanceResponse = await axios.get('https://api.binance.com/api/v3/ping', { timeout: 5000 });
+    connectivity.binance = { 
+      status: 'online',
+      latency: 'OK'
+    };
+  } catch (error) {
+    connectivity.binance = { 
+      status: 'error', 
+      error: error.message 
+    };
+  }
+
+  // Test Fear & Greed
+  try {
+    const fgResponse = await axios.get('https://api.alternative.me/fng/?limit=1', { timeout: 5000 });
+    connectivity.fearGreed = { 
+      status: 'online',
+      currentIndex: fgResponse.data.data[0].value,
+      classification: fgResponse.data.data[0].value_classification
+    };
+  } catch (error) {
+    connectivity.fearGreed = { 
+      status: 'error', 
+      error: error.message 
+    };
+  }
+
+  // Test SerpAPI (solo si está configurado)
+  if (process.env.SERPAPI_KEY) {
+    try {
+      const serpResponse = await axios.get('https://serpapi.com/search.json', {
+        params: {
+          engine: 'google',
+          q: 'test',
+          api_key: process.env.SERPAPI_KEY
+        },
+        timeout: 5000
+      });
+      connectivity.serpapi = { 
+        status: 'online',
+        accountType: serpResponse.data.search_metadata?.account_type || 'unknown',
+        totalSearches: serpResponse.data.search_metadata?.total_searches_left || 'unknown'
+      };
+    } catch (error) {
+      connectivity.serpapi = { 
+        status: 'error', 
+        error: error.message,
+        configured: true
+      };
+    }
+  } else {
+    connectivity.serpapi = { 
+      status: 'not_configured',
+      message: 'SERPAPI_KEY no encontrada en variables de entorno'
+    };
+  }
+
+  // Test CryptoCompare (solo si está configurado)
+  if (process.env.CRYPTOCOMPARE_KEY) {
+    try {
+      const ccResponse = await axios.get('https://min-api.cryptocompare.com/data/v2/news/', {
+        params: {
+          lang: 'EN',
+          api_key: process.env.CRYPTOCOMPARE_KEY
+        },
+        timeout: 5000
+      });
+      connectivity.cryptocompare = { 
+        status: 'online',
+        newsCount: ccResponse.data.Data?.length || 0,
+        rateLimit: ccResponse.headers['x-ratelimit-remaining'] || 'unknown'
+      };
+    } catch (error) {
+      connectivity.cryptocompare = { 
+        status: 'error', 
+        error: error.message,
+        configured: true
+      };
+    }
+  } else {
+    connectivity.cryptocompare = { 
+      status: 'not_configured',
+      message: 'CRYPTOCOMPARE_KEY no encontrada en variables de entorno'
+    };
+  }
+
+  debugInfo.connectivity = connectivity;
+
+  res.json(debugInfo);
+});
+
 app.get('/api/cache/clear', (req, res) => {
   cache.clear();
   res.json({ message: 'Cache cleared successfully', timestamp: new Date().toISOString() });
@@ -624,6 +785,7 @@ if (require.main === module) {
    POST /api/email/test          - Send test email
    GET  /api/email/verify        - Verify email configuration
    GET  /api/health              - Health check
+   GET  /api/debug               - Debug & connectivity status
    GET  /api/cache/clear         - Clear cache
 
 💡 Tip: Configure email in .env file:
