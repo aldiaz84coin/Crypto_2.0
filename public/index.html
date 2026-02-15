@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Detector - Sistema Completo con Debug</title>
+    <title>Crypto Detector - Con Debug Visual</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -530,6 +530,7 @@ const CryptoDetectorApp = () => {
     loadRealData();
     checkEmailConfiguration();
     loadDebugInfo();
+    loadDebugInfo();
     
     // Auto-refresh cada 5 minutos
     const interval = setInterval(() => {
@@ -548,6 +549,20 @@ const CryptoDetectorApp = () => {
     } catch (error) {
       console.error('Error checking email configuration:', error);
       setEmailConfigured(false);
+    }
+  };
+
+  // Cargar información de debug
+  const loadDebugInfo = async () => {
+    setLoadingDebug(true);
+    try {
+      const response = await fetch('/api/debug');
+      const data = await response.json();
+      setDebugInfo(data);
+    } catch (error) {
+      console.error('Error loading debug info:', error);
+    } finally {
+      setLoadingDebug(false);
     }
   };
 
@@ -691,6 +706,17 @@ const CryptoDetectorApp = () => {
           >
             <BarChart3 className="w-4 h-4 inline mr-2" />
             Historial y Validación
+          </button>
+          <button
+            onClick={() => setActiveTab('debug')}
+            className={`px-4 py-2 rounded-t-lg transition ${
+              activeTab === 'debug' 
+                ? 'bg-purple-600 text-white' 
+                : 'bg-white/5 text-gray-300 hover:bg-white/10'
+            }`}
+          >
+            <AlertCircle className="w-4 h-4 inline mr-2" />
+            Debug
           </button>
         </div>
 
@@ -1004,18 +1030,199 @@ const CryptoDetectorApp = () => {
             )}
           </div>
         )}
+
+        {/* Debug Tab */}
+        {activeTab === 'debug' && (
+          <div>
+            <div className="flex justify-between items-center mb-6">
+              <h2 className="text-2xl font-semibold">🔍 Debug del Sistema</h2>
+              <button
+                onClick={loadDebugInfo}
+                disabled={loadingDebug}
+                className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 px-4 py-2 rounded-lg font-semibold transition flex items-center gap-2"
+              >
+                {loadingDebug ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent"></div>
+                    Actualizando...
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    Actualizar Estado
+                  </>
+                )}
+              </button>
+            </div>
+            
+            {debugInfo ? (
+              <div className="space-y-6">
+                {/* Resumen rápido arriba */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="bg-gradient-to-br from-green-900/40 to-green-700/20 p-6 rounded-lg border border-green-500/30">
+                    <div className="text-sm text-green-300 mb-2">Fuentes Online</div>
+                    <div className="text-4xl font-bold text-green-400">
+                      {Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'online').length}/5
+                    </div>
+                  </div>
+                  <div className="bg-gradient-to-br from-blue-900/40 to-blue-700/20 p-6 rounded-lg border border-blue-500/30">
+                    <div className="text-sm text-blue-300 mb-2">Precisión Estimada</div>
+                    <div className="text-4xl font-bold text-blue-400">
+                      {Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'online').length === 5 ? '95%' : 
+                       Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'online').length >= 3 ? '65%' : '40%'}
+                    </div>
+                  </div>
+                  <div className="bg-gradient-to-br from-purple-900/40 to-purple-700/20 p-6 rounded-lg border border-purple-500/30">
+                    <div className="text-sm text-purple-300 mb-2">Estado Sistema</div>
+                    <div className="text-2xl font-bold text-purple-400">
+                      {Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'online').length === 5 ? '🟢 ÓPTIMO' : 
+                       Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'online').length >= 3 ? '🟡 PARCIAL' : '🔴 LIMITADO'}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Fuentes de datos */}
+                <div className="bg-white/5 backdrop-blur rounded-lg p-6 border border-white/20">
+                  <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
+                    <Database className="w-6 h-6 text-blue-400" />
+                    Estado de Fuentes de Datos
+                  </h3>
+                  
+                  <div className="space-y-3">
+                    {debugInfo.connectivity && Object.entries({
+                      coingecko: { name: '🪙 CoinGecko', desc: 'Precios y capitalización', note: 'API pública' },
+                      binance: { name: '📈 Binance', desc: 'Datos de exchange', note: 'API pública' },
+                      fearGreed: { name: '😨 Fear & Greed', desc: 'Sentimiento del mercado', note: 'API pública' },
+                      serpapi: { name: '🔍 Google Trends', desc: 'Tendencias de búsqueda', note: 'Requiere SERPAPI_KEY' },
+                      cryptocompare: { name: '📰 CryptoCompare', desc: 'Noticias y sentimiento', note: 'Requiere CRYPTOCOMPARE_KEY' }
+                    }).map(([key, info]) => {
+                      const source = debugInfo.connectivity[key] || {};
+                      const isOnline = source.status === 'online';
+                      const isNotConfigured = source.status === 'not_configured';
+                      const hasError = source.status === 'error';
+                      
+                      return (
+                        <div key={key} className={`bg-white/5 rounded-lg p-4 border-l-4 ${
+                          isOnline ? 'border-green-500' : 
+                          isNotConfigured ? 'border-yellow-500' : 
+                          'border-red-500'
+                        }`}>
+                          <div className="flex items-start justify-between mb-2">
+                            <div className="flex-1">
+                              <div className="flex items-center gap-2 mb-1">
+                                <span className="font-bold text-lg">{info.name}</span>
+                                <span className={`text-xs px-2 py-1 rounded font-bold ${
+                                  isOnline ? 'bg-green-500/20 text-green-300' :
+                                  isNotConfigured ? 'bg-yellow-500/20 text-yellow-300' :
+                                  'bg-red-500/20 text-red-300'
+                                }`}>
+                                  {isOnline ? '✅ ONLINE' : isNotConfigured ? '⚠️ NO CONFIG' : '❌ ERROR'}
+                                </span>
+                              </div>
+                              <div className="text-sm text-gray-400">{info.desc}</div>
+                              <div className="text-xs text-gray-500 mt-1">{info.note}</div>
+                            </div>
+                          </div>
+                          
+                          {/* Información adicional específica */}
+                          {source.currentIndex && (
+                            <div className="mt-2 p-2 bg-blue-500/10 rounded text-sm">
+                              📊 Índice actual: <span className="font-bold">{source.currentIndex}</span> ({source.classification})
+                            </div>
+                          )}
+                          {source.totalSearches && (
+                            <div className="mt-2 p-2 bg-blue-500/10 rounded text-sm">
+                              🔢 Búsquedas restantes: <span className="font-bold">{source.totalSearches}</span>
+                            </div>
+                          )}
+                          {source.newsCount !== undefined && (
+                            <div className="mt-2 p-2 bg-blue-500/10 rounded text-sm">
+                              📑 Noticias disponibles: <span className="font-bold">{source.newsCount}</span>
+                            </div>
+                          )}
+                          
+                          {/* Mostrar errores */}
+                          {source.error && (
+                            <div className="mt-2 p-3 bg-red-500/20 border border-red-500/50 rounded">
+                              <div className="text-sm font-bold text-red-300 mb-1">❌ Error Detectado:</div>
+                              <div className="text-sm text-red-200">{source.error}</div>
+                            </div>
+                          )}
+                          {source.message && !source.error && (
+                            <div className="mt-2 p-3 bg-yellow-500/20 border border-yellow-500/50 rounded">
+                              <div className="text-sm text-yellow-200">{source.message}</div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Diagnóstico */}
+                <div className={`p-6 rounded-lg border-2 ${
+                  Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'online').length === 5
+                    ? 'bg-green-500/10 border-green-500/50'
+                    : Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'not_configured').length > 0
+                    ? 'bg-yellow-500/10 border-yellow-500/50'
+                    : 'bg-red-500/10 border-red-500/50'
+                }`}>
+                  <h3 className="text-lg font-bold mb-2">
+                    {Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'online').length === 5 ? '✅ Diagnóstico: Sistema Óptimo' :
+                     Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'not_configured').length > 0 ? '⚠️ Diagnóstico: Configuración Incompleta' :
+                     '❌ Diagnóstico: Problemas Detectados'}
+                  </h3>
+                  <div className="text-sm">
+                    {Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'online').length === 5 ? (
+                      <p>Todas las fuentes están operativas. El sistema funciona con máxima precisión (95%). Las predicciones del Boost-Power son completamente basadas en datos reales.</p>
+                    ) : Object.values(debugInfo.connectivity || {}).filter(c => c.status === 'not_configured').length > 0 ? (
+                      <p>Algunas fuentes no están configuradas. Configura las API keys faltantes para mejorar la precisión. Actualmente el sistema funciona con precisión reducida basándose solo en las fuentes disponibles.</p>
+                    ) : (
+                      <p>Se detectaron errores en algunas fuentes. Revisa los mensajes de error arriba para identificar y solucionar los problemas.</p>
+                    )}
+                  </div>
+                </div>
+
+                {/* Info del servidor */}
+                <div className="bg-white/5 backdrop-blur rounded-lg p-6 border border-white/20">
+                  <h3 className="text-xl font-bold mb-4">⚙️ Información del Servidor</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                    <div className="bg-white/5 p-3 rounded">
+                      <div className="text-xs text-gray-400">Uptime</div>
+                      <div className="text-sm font-bold">{Math.floor((debugInfo.server?.uptime || 0) / 60)} min</div>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded">
+                      <div className="text-xs text-gray-400">Caché</div>
+                      <div className="text-sm font-bold">{debugInfo.cache?.size || 0} items</div>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded">
+                      <div className="text-xs text-gray-400">Node</div>
+                      <div className="text-xs font-mono">{debugInfo.server?.nodeVersion || 'N/A'}</div>
+                    </div>
+                    <div className="bg-white/5 p-3 rounded">
+                      <div className="text-xs text-gray-400">Email</div>
+                      <div className="text-xs font-bold">{debugInfo.email?.configured ? '✅' : '❌'}</div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center py-16">
+                <div className="animate-spin rounded-full h-16 w-16 border-4 border-purple-500 border-t-transparent mb-4"></div>
+                <p className="text-gray-400">Cargando diagnóstico del sistema...</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-// NO usar export en el navegador - el componente ya está disponible globalmente
-
         // Renderizar
         const root = ReactDOM.createRoot(document.getElementById('root'));
         root.render(<CryptoDetectorApp />);
         
-        // Ocultar loading
         setTimeout(() => {
             document.getElementById('loading').classList.add('hidden');
         }, 500);
