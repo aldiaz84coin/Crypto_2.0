@@ -1,76 +1,11 @@
-// cycles-endpoints-no-cron.js - Ciclos sin necesidad de cron job
+// cycles-endpoints.js - Endpoints para ciclos de 12h
+// Este archivo es importado por index.js que ya tiene app y kvHelpers disponibles
+
+// Obtener referencias globales
+const express = require('express');
+const axios = require('axios');
 
 module.exports = function(app, kvHelpers, reportGenerator, emailService) {
-
-// Función helper para verificar y completar ciclos pendientes
-async function checkAndCompletePendingCycles() {
-  try {
-    const pendingCycles = await kvHelpers.getPendingCycles();
-    
-    for (const cycle of pendingCycles) {
-      console.log(`Auto-completing cycle ${cycle.id}`);
-      
-      const currentData = await axios.get(
-        'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1',
-        { timeout: 10000 }
-      );
-
-      const cycleResults = cycle.snapshot.map(originalAsset => {
-        const currentAsset = currentData.data.find(c => c.id === originalAsset.id);
-        if (!currentAsset) {
-          return { ...originalAsset, actualChange: 0, actualPrice: 0, correct: false };
-        }
-
-        const actualChange = ((currentAsset.current_price - originalAsset.price) / originalAsset.price) * 100;
-        const predictedChange = originalAsset.predictedChange || 0;
-        const sameDirection = (predictedChange >= 0 && actualChange >= 0) || (predictedChange < 0 && actualChange < 0);
-        const magnitudeDiff = Math.abs(predictedChange - actualChange);
-        const correct = sameDirection && magnitudeDiff < 15;
-
-        return {
-          id: originalAsset.id,
-          symbol: originalAsset.symbol,
-          name: originalAsset.name,
-          classification: originalAsset.classification,
-          snapshotPrice: originalAsset.price,
-          currentPrice: currentAsset.current_price,
-          predictedChange: predictedChange.toFixed(2),
-          actualChange: actualChange.toFixed(2),
-          correct
-        };
-      });
-
-      const completedCycle = await kvHelpers.completeCycle(cycle.id, cycleResults);
-
-      // Enviar email si está configurado
-      if (cycle.userEmail && !completedCycle.emailSent) {
-        try {
-          const successRate = (cycleResults.filter(r => r.correct).length / cycleResults.length) * 100;
-          const reportData = {
-            iterationNumber: cycle.id.split('_')[1],
-            timestamp: new Date(completedCycle.completedAt).toISOString(),
-            results: cycleResults,
-            successRate: successRate.toFixed(2),
-            algorithm: cycle.algorithm || {},
-            totalPredictions: cycleResults.length,
-            correctPredictions: cycleResults.filter(r => r.correct).length
-          };
-
-          await emailService.sendIterationReport(reportData);
-          await kvHelpers.markEmailSent(cycle.id);
-          console.log(`Email sent for cycle ${cycle.id}`);
-        } catch (emailError) {
-          console.error(`Error sending email:`, emailError);
-        }
-      }
-    }
-    
-    return pendingCycles.length;
-  } catch (error) {
-    console.error('Error checking pending cycles:', error);
-    return 0;
-  }
-}
 
 // Iniciar ciclo
 app.post('/api/cycles/start', async (req, res) => {
@@ -106,7 +41,7 @@ app.post('/api/cycles/start', async (req, res) => {
         assetsCount: snapshot.length,
         status: cycle.status
       },
-      message: 'Ciclo iniciado. Vuelve después de 12 horas para ver los resultados.'
+      message: 'Ciclo iniciado. Recibirás un email en 12 horas.'
     });
 
   } catch (error) {
@@ -118,13 +53,9 @@ app.post('/api/cycles/start', async (req, res) => {
   }
 });
 
-// Obtener ciclos activos - TAMBIÉN verifica y completa pendientes
+// Obtener ciclos activos
 app.get('/api/cycles/active', async (req, res) => {
   try {
-    // Primero verificar y completar ciclos pendientes
-    await checkAndCompletePendingCycles();
-    
-    // Luego obtener los ciclos activos actualizados
     const activeCycles = await kvHelpers.getActiveCycles();
     const now = Date.now();
 
@@ -153,12 +84,9 @@ app.get('/api/cycles/active', async (req, res) => {
   }
 });
 
-// Histórico - TAMBIÉN verifica y completa pendientes
+// Histórico
 app.get('/api/cycles/history', async (req, res) => {
   try {
-    // Verificar y completar ciclos pendientes antes de mostrar histórico
-    await checkAndCompletePendingCycles();
-    
     const limit = parseInt(req.query.limit) || 20;
     const history = await kvHelpers.getCycleHistory(limit);
 
@@ -222,7 +150,6 @@ app.post('/api/cycles/:cycleId/complete', async (req, res) => {
       return res.status(404).json({ error: 'Ciclo no encontrado' });
     }
 
-    const axios = require('axios');
     const currentData = await axios.get(
       'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1'
     );
@@ -280,6 +207,90 @@ app.get('/api/cycles/stats', async (req, res) => {
   } catch (error) {
     console.error('Error getting stats:', error);
     res.status(500).json({ error: 'Error al obtener estadísticas', message: error.message });
+  }
+});
+
+// CRON JOB
+app.get('/api/cron/check-cycles', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
+      return res.status(401).json({ error: 'Unauthorized' });
+    }
+
+    const pendingCycles = await kvHelpers.getPendingCycles();
+    const results = [];
+
+    for (const cycle of pendingCycles) {
+      try {
+        console.log(`Processing cycle ${cycle.id}`);
+
+        const currentData = await axios.get(
+          'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1',
+          { timeout: 10000 }
+        );
+
+        const cycleResults = cycle.snapshot.map(originalAsset => {
+          const currentAsset = currentData.data.find(c => c.id === originalAsset.id);
+          if (!currentAsset) {
+            return { ...originalAsset, actualChange: 0, actualPrice: 0, correct: false };
+          }
+
+          const actualChange = ((currentAsset.current_price - originalAsset.price) / originalAsset.price) * 100;
+          const predictedChange = originalAsset.predictedChange || 0;
+          const sameDirection = (predictedChange >= 0 && actualChange >= 0) || (predictedChange < 0 && actualChange < 0);
+          const magnitudeDiff = Math.abs(predictedChange - actualChange);
+          const correct = sameDirection && magnitudeDiff < 15;
+
+          return {
+            id: originalAsset.id,
+            symbol: originalAsset.symbol,
+            name: originalAsset.name,
+            classification: originalAsset.classification,
+            snapshotPrice: originalAsset.price,
+            currentPrice: currentAsset.current_price,
+            predictedChange: predictedChange.toFixed(2),
+            actualChange: actualChange.toFixed(2),
+            correct
+          };
+        });
+
+        const completedCycle = await kvHelpers.completeCycle(cycle.id, cycleResults);
+
+        if (cycle.userEmail && !completedCycle.emailSent) {
+          try {
+            const successRate = (cycleResults.filter(r => r.correct).length / cycleResults.length) * 100;
+            const reportData = {
+              iterationNumber: cycle.id.split('_')[1],
+              timestamp: new Date(completedCycle.completedAt).toISOString(),
+              results: cycleResults,
+              successRate: successRate.toFixed(2),
+              algorithm: cycle.algorithm || {},
+              totalPredictions: cycleResults.length,
+              correctPredictions: cycleResults.filter(r => r.correct).length
+            };
+
+            await emailService.sendIterationReport(reportData);
+            await kvHelpers.markEmailSent(cycle.id);
+            console.log(`Email sent for cycle ${cycle.id}`);
+          } catch (emailError) {
+            console.error(`Error sending email:`, emailError);
+          }
+        }
+
+        results.push({ cycleId: cycle.id, status: 'completed', emailSent: true });
+
+      } catch (cycleError) {
+        console.error(`Error processing cycle:`, cycleError);
+        results.push({ cycleId: cycle.id, status: 'error', error: cycleError.message });
+      }
+    }
+
+    res.json({ success: true, processed: results.length, results });
+
+  } catch (error) {
+    console.error('Cron job error:', error);
+    res.status(500).json({ error: 'Error en cron job', message: error.message });
   }
 });
 
