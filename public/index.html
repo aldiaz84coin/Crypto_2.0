@@ -3,13 +3,18 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Detector v3.1 - Iteración 2</title>
+    <title>Crypto Detector v3.1 - Iteración 3</title>
     <script src="https://cdn.tailwindcss.com"></script>
 </head>
 <body class="bg-gray-900 text-white">
-    <div class="container mx-auto p-8 max-w-7xl">
-        <h1 class="text-4xl font-bold mb-2">🚀 Crypto Detector v3.1</h1>
-        <p class="text-gray-400 mb-8">Iteración 2: 8 Factores + 6 Umbrales</p>
+    <div class="container mx-auto p-6 max-w-7xl">
+        <div class="flex justify-between items-center mb-6">
+            <div>
+                <h1 class="text-4xl font-bold">🚀 Crypto Detector v3.1</h1>
+                <p class="text-gray-400">Iter 3: Datos Reales + Ciclos + Validación</p>
+            </div>
+            <div id="external-data" class="text-sm text-right"></div>
+        </div>
         
         <!-- Tabs -->
         <div class="flex gap-2 mb-6 border-b border-gray-700">
@@ -17,149 +22,119 @@
                 📊 Monitor
             </button>
             <button onclick="setTab('config')" id="tab-config" class="px-4 py-2 rounded-t-lg bg-gray-700">
-                ⚙️ Configuración
+                ⚙️ Config
+            </button>
+            <button onclick="setTab('validation')" id="tab-validation" class="px-4 py-2 rounded-t-lg bg-gray-700">
+                ✅ Validación
             </button>
         </div>
         
         <!-- Tab Monitor -->
         <div id="content-monitor" class="tab-content">
             <div class="flex justify-between items-center mb-4">
-                <h2 class="text-2xl font-semibold">Top 20 Criptomonedas</h2>
-                <button onclick="loadCryptos()" class="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg">
-                    🔄 Cargar Datos
-                </button>
+                <h2 class="text-2xl font-semibold">Monitor en Tiempo Real</h2>
+                <div class="flex gap-3">
+                    <button onclick="loadCryptos()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg">
+                        🔄 Cargar
+                    </button>
+                    <button onclick="startCycle()" id="btn-start-cycle" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg font-semibold">
+                        ⏰ Iniciar Ciclo 12h
+                    </button>
+                </div>
             </div>
             
-            <div id="stats" class="grid grid-cols-4 gap-4 mb-6"></div>
+            <div id="stats" class="grid grid-cols-4 gap-4 mb-4"></div>
             <div id="crypto-list" class="space-y-3"></div>
         </div>
         
-        <!-- Tab Config -->
-        <div id="content-config" class="tab-content hidden">
-            <h2 class="text-2xl font-semibold mb-6">⚙️ Configuración Avanzada</h2>
-            
-            <!-- Meta-pesos -->
-            <div class="bg-gray-800 rounded-lg p-6 mb-6">
-                <h3 class="text-lg font-semibold mb-4">Meta-Pesos</h3>
-                <div class="mb-4">
+        <!-- Tab Config (simplificado de Iter 2) -->
+        <div id="content-config" class="tab-content" style="display:none">
+            <h2 class="text-2xl font-semibold mb-4">Configuración</h2>
+            <div class="bg-gray-800 rounded-lg p-6 mb-4">
+                <h3 class="text-lg font-semibold mb-3">Meta-Pesos</h3>
+                <div class="mb-3">
                     <label class="block text-sm mb-2">
                         Cuantitativo: <span id="meta-quant-val">60</span>%
                     </label>
                     <input type="range" id="meta-quant" min="0" max="100" step="5" value="60" 
                            onchange="updateMetaWeights()" class="w-full"/>
                 </div>
-                <div class="mb-4">
-                    <label class="block text-sm mb-2">
-                        Cualitativo: <span id="meta-qual-val">40</span>% (automático)
-                    </label>
-                </div>
             </div>
             
-            <!-- Pesos de Factores -->
-            <div class="bg-gray-800 rounded-lg p-6 mb-6">
-                <h3 class="text-lg font-semibold mb-4">Pesos de Factores (8 factores)</h3>
-                <div class="grid grid-cols-2 gap-6">
+            <div class="bg-gray-800 rounded-lg p-6 mb-4">
+                <h3 class="text-lg font-semibold mb-3">Pesos de Factores</h3>
+                <div class="grid grid-cols-2 gap-4">
                     <div>
-                        <h4 class="font-medium text-green-400 mb-3">Cuantitativos</h4>
+                        <h4 class="text-green-400 mb-2">Cuantitativos</h4>
                         <div id="quant-factors"></div>
                     </div>
                     <div>
-                        <h4 class="font-medium text-purple-400 mb-3">Cualitativos</h4>
+                        <h4 class="text-purple-400 mb-2">Cualitativos</h4>
                         <div id="qual-factors"></div>
                     </div>
                 </div>
             </div>
             
-            <!-- Umbrales -->
-            <div class="bg-gray-800 rounded-lg p-6 mb-6">
-                <h3 class="text-lg font-semibold mb-4">Umbrales (6 umbrales)</h3>
-                <div class="grid grid-cols-3 gap-4">
-                    <div>
-                        <label class="block text-sm mb-2">Volumen Mín ($M)</label>
-                        <input type="number" id="thr-volMin" class="w-full bg-gray-700 rounded px-3 py-2" value="100"/>
-                    </div>
-                    <div>
-                        <label class="block text-sm mb-2">Volumen Máx ($B)</label>
-                        <input type="number" id="thr-volMax" class="w-full bg-gray-700 rounded px-3 py-2" value="10"/>
-                    </div>
-                    <div></div>
-                    <div>
-                        <label class="block text-sm mb-2">Volatilidad Mín (%)</label>
-                        <input type="number" id="thr-volMin2" class="w-full bg-gray-700 rounded px-3 py-2" value="5"/>
-                    </div>
-                    <div>
-                        <label class="block text-sm mb-2">Volatilidad Máx (%)</label>
-                        <input type="number" id="thr-volMax2" class="w-full bg-gray-700 rounded px-3 py-2" value="50"/>
-                    </div>
-                    <div></div>
-                    <div>
-                        <label class="block text-sm mb-2">Noticias Mín</label>
-                        <input type="number" id="thr-newsMin" class="w-full bg-gray-700 rounded px-3 py-2" value="3"/>
-                    </div>
-                    <div>
-                        <label class="block text-sm mb-2">Noticias Máx</label>
-                        <input type="number" id="thr-newsMax" class="w-full bg-gray-700 rounded px-3 py-2" value="100"/>
-                    </div>
-                </div>
+            <button onclick="saveConfig()" class="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg">
+                💾 Guardar
+            </button>
+            <div id="config-message" class="mt-3"></div>
+        </div>
+        
+        <!-- Tab Validación -->
+        <div id="content-validation" class="tab-content" style="display:none">
+            <h2 class="text-2xl font-semibold mb-4">Validación de Ciclos</h2>
+            
+            <!-- Ciclos Activos -->
+            <div class="mb-6">
+                <h3 class="text-xl font-semibold mb-3">🔄 Ciclos Activos</h3>
+                <div id="active-cycles"></div>
             </div>
             
-            <!-- Umbral Clasificación -->
-            <div class="bg-gray-800 rounded-lg p-6 mb-6">
-                <h3 class="text-lg font-semibold mb-4">Umbral INVERTIBLE</h3>
-                <div>
-                    <label class="block text-sm mb-2">
-                        Umbral: <span id="thr-boost-val">40</span>%
-                    </label>
-                    <input type="range" id="thr-boost" min="30" max="50" value="40" 
-                           onchange="updateBoostThreshold()" class="w-full"/>
-                </div>
+            <!-- Ciclos Completados -->
+            <div>
+                <h3 class="text-xl font-semibold mb-3">✅ Historial de Ciclos</h3>
+                <div id="completed-cycles"></div>
             </div>
             
-            <!-- Botones -->
-            <div class="flex gap-3 mb-4">
-                <button onclick="saveConfig()" class="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg font-semibold">
-                    💾 Guardar
-                </button>
-                <button onclick="resetConfig()" class="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded-lg font-semibold">
-                    🔄 Resetear
-                </button>
+            <!-- Estadísticas Globales -->
+            <div class="mt-6">
+                <h3 class="text-xl font-semibold mb-3">📊 Estadísticas Globales</h3>
+                <div id="global-stats"></div>
             </div>
-            
-            <div id="config-message"></div>
         </div>
     </div>
 
     <script>
         let config = null;
         let metadata = null;
+        let currentCryptos = [];
         
+        // Init
         async function init() {
             await loadMetadata();
             await loadConfig();
             renderFactorControls();
+            await loadValidation();
         }
         
         async function loadMetadata() {
             try {
-                const response = await fetch('/api/config/metadata');
-                const data = await response.json();
+                const res = await fetch('/api/config/metadata');
+                const data = await res.json();
                 if (data.success) metadata = data.metadata;
-            } catch (error) {
-                console.error('Error loading metadata:', error);
-            }
+            } catch (err) {}
         }
         
         async function loadConfig() {
             try {
-                const response = await fetch('/api/config');
-                const data = await response.json();
+                const res = await fetch('/api/config');
+                const data = await res.json();
                 if (data.success) {
                     config = data.config;
                     updateUIFromConfig();
                 }
-            } catch (error) {
-                console.error('Error loading config:', error);
-            }
+            } catch (err) {}
         }
         
         function updateUIFromConfig() {
@@ -167,18 +142,6 @@
             const quantPercent = Math.round(config.metaWeights.quantitative * 100);
             document.getElementById('meta-quant').value = quantPercent;
             document.getElementById('meta-quant-val').textContent = quantPercent;
-            document.getElementById('meta-qual-val').textContent = 100 - quantPercent;
-            
-            document.getElementById('thr-volMin').value = config.thresholds.volumeMin / 1000000;
-            document.getElementById('thr-volMax').value = config.thresholds.volumeMax / 1000000000;
-            document.getElementById('thr-volMin2').value = config.thresholds.volatilityMin * 100;
-            document.getElementById('thr-volMax2').value = config.thresholds.volatilityMax * 100;
-            document.getElementById('thr-newsMin').value = config.thresholds.newsCountMin;
-            document.getElementById('thr-newsMax').value = config.thresholds.newsCountMax;
-            
-            const boostPercent = Math.round(config.boostPowerThreshold * 100);
-            document.getElementById('thr-boost').value = boostPercent;
-            document.getElementById('thr-boost-val').textContent = boostPercent;
         }
         
         function renderFactorControls() {
@@ -189,8 +152,8 @@
             metadata.quantitative.forEach(factor => {
                 const weight = Math.round((config.factorWeights[factor.id] || 0) * 100);
                 quantDiv.innerHTML += `
-                    <div class="mb-3">
-                        <label class="block text-xs mb-1">${factor.name}: <span id="fw-${factor.id}">${weight}</span>%</label>
+                    <div class="mb-2">
+                        <label class="block text-xs">${factor.name}: <span id="fw-${factor.id}">${weight}</span>%</label>
                         <input type="range" id="factor-${factor.id}" min="0" max="30" value="${weight}" 
                                onchange="updateFactorWeight('${factor.id}')" class="w-full"/>
                     </div>
@@ -202,8 +165,8 @@
             metadata.qualitative.forEach(factor => {
                 const weight = Math.round((config.factorWeights[factor.id] || 0) * 100);
                 qualDiv.innerHTML += `
-                    <div class="mb-3">
-                        <label class="block text-xs mb-1">${factor.name}: <span id="fw-${factor.id}">${weight}</span>%</label>
+                    <div class="mb-2">
+                        <label class="block text-xs">${factor.name}: <span id="fw-${factor.id}">${weight}</span>%</label>
                         <input type="range" id="factor-${factor.id}" min="0" max="30" value="${weight}" 
                                onchange="updateFactorWeight('${factor.id}')" class="w-full"/>
                     </div>
@@ -214,7 +177,6 @@
         function updateMetaWeights() {
             const quant = parseInt(document.getElementById('meta-quant').value);
             document.getElementById('meta-quant-val').textContent = quant;
-            document.getElementById('meta-qual-val').textContent = 100 - quant;
             config.metaWeights.quantitative = quant / 100;
             config.metaWeights.qualitative = (100 - quant) / 100;
         }
@@ -225,85 +187,55 @@
             config.factorWeights[factorId] = value / 100;
         }
         
-        function updateBoostThreshold() {
-            const value = parseInt(document.getElementById('thr-boost').value);
-            document.getElementById('thr-boost-val').textContent = value;
-            config.boostPowerThreshold = value / 100;
-        }
-        
-        function collectConfig() {
-            return {
-                version: '3.1-iter2',
-                metaWeights: config.metaWeights,
-                factorWeights: config.factorWeights,
-                thresholds: {
-                    volumeMin: parseFloat(document.getElementById('thr-volMin').value) * 1000000,
-                    volumeMax: parseFloat(document.getElementById('thr-volMax').value) * 1000000000,
-                    volatilityMin: parseFloat(document.getElementById('thr-volMin2').value) / 100,
-                    volatilityMax: parseFloat(document.getElementById('thr-volMax2').value) / 100,
-                    newsCountMin: parseInt(document.getElementById('thr-newsMin').value),
-                    newsCountMax: parseInt(document.getElementById('thr-newsMax').value)
-                },
-                boostPowerThreshold: config.boostPowerThreshold
-            };
-        }
-        
         async function saveConfig() {
             const msgDiv = document.getElementById('config-message');
-            msgDiv.innerHTML = '<div class="text-gray-400 p-3">💾 Guardando...</div>';
+            msgDiv.innerHTML = '<div class="text-gray-400">💾 Guardando...</div>';
             
             try {
-                const configToSave = collectConfig();
-                const response = await fetch('/api/config', {
+                const res = await fetch('/api/config', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ config: configToSave })
+                    body: JSON.stringify({ config })
                 });
                 
-                const data = await response.json();
+                const data = await res.json();
                 
                 if (data.success) {
                     msgDiv.innerHTML = '<div class="text-green-400 p-3 bg-green-900/30 rounded">✅ Guardado</div>';
                 } else {
-                    msgDiv.innerHTML = '<div class="text-red-400 p-3 bg-red-900/30 rounded">❌ ' + 
-                        (data.errors ? data.errors.join(', ') : data.error) + '</div>';
+                    msgDiv.innerHTML = '<div class="text-red-400 p-3 bg-red-900/30 rounded">❌ Error</div>';
                 }
                 
                 setTimeout(() => msgDiv.innerHTML = '', 3000);
             } catch (error) {
-                msgDiv.innerHTML = '<div class="text-red-400 p-3 bg-red-900/30 rounded">❌ ' + error.message + '</div>';
-            }
-        }
-        
-        async function resetConfig() {
-            if (!confirm('¿Resetear?')) return;
-            
-            try {
-                const response = await fetch('/api/config/reset', { method: 'POST' });
-                const data = await response.json();
-                
-                if (data.success) {
-                    await loadConfig();
-                    renderFactorControls();
-                    document.getElementById('config-message').innerHTML = 
-                        '<div class="text-green-400 p-3 bg-green-900/30 rounded">✅ Reseteado</div>';
-                    setTimeout(() => document.getElementById('config-message').innerHTML = '', 3000);
-                }
-            } catch (error) {
-                console.error('Error:', error);
+                msgDiv.innerHTML = '<div class="text-red-400">❌ ' + error.message + '</div>';
             }
         }
         
         async function loadCryptos() {
             const listDiv = document.getElementById('crypto-list');
             const statsDiv = document.getElementById('stats');
-            listDiv.innerHTML = '<div class="text-gray-400">⏳ Cargando...</div>';
+            const externalDiv = document.getElementById('external-data');
+            listDiv.innerHTML = '<div class="text-gray-400">⏳ Cargando datos reales...</div>';
             
             try {
-                const response = await fetch('/api/crypto');
-                const data = await response.json();
+                const res = await fetch('/api/crypto');
+                const data = await res.json();
                 
                 if (data.success) {
+                    currentCryptos = data.data;
+                    
+                    // Mostrar datos externos
+                    if (data.externalData.fearGreed) {
+                        externalDiv.innerHTML = `
+                            <div class="text-xs">
+                                <div>Fear & Greed: <span class="font-bold">${data.externalData.fearGreed.value}</span></div>
+                                <div>${data.externalData.fearGreed.classification}</div>
+                            </div>
+                        `;
+                    }
+                    
+                    // Stats
                     const invertible = data.data.filter(c => c.classification === 'INVERTIBLE').length;
                     const apalancado = data.data.filter(c => c.classification === 'APALANCADO').length;
                     const ruidoso = data.data.filter(c => c.classification === 'RUIDOSO').length;
@@ -327,6 +259,7 @@
                         </div>
                     `;
                     
+                    // List
                     listDiv.innerHTML = '';
                     data.data.forEach(crypto => {
                         const colorClass = crypto.color === 'green' ? 'border-green-500' : 
@@ -337,39 +270,212 @@
                         card.innerHTML = `
                             <div class="flex justify-between items-start">
                                 <div>
-                                    <div class="font-bold text-xl">${crypto.name} <span class="text-gray-500">${crypto.symbol.toUpperCase()}</span></div>
-                                    <div class="text-2xl text-blue-400">$${crypto.current_price.toLocaleString()}</div>
-                                    <div class="${crypto.price_change_percentage_24h >= 0 ? 'text-green-400' : 'text-red-400'}">
+                                    <div class="font-bold text-lg">${crypto.name} <span class="text-gray-500 text-sm">${crypto.symbol.toUpperCase()}</span></div>
+                                    <div class="text-xl text-blue-400">$${crypto.current_price.toLocaleString()}</div>
+                                    <div class="${crypto.price_change_percentage_24h >= 0 ? 'text-green-400' : 'text-red-400'} text-sm">
                                         ${crypto.price_change_percentage_24h >= 0 ? '↑' : '↓'} 
                                         ${Math.abs(crypto.price_change_percentage_24h).toFixed(2)}%
                                     </div>
                                 </div>
                                 <div class="text-right">
                                     <div class="text-sm font-medium mb-1">${crypto.classification}</div>
-                                    <div class="text-3xl font-bold">${crypto.boostPowerPercent}%</div>
+                                    <div class="text-2xl font-bold">${crypto.boostPowerPercent}%</div>
                                     <div class="text-xs text-gray-400">BoostPower</div>
+                                    <div class="text-xs text-gray-500 mt-1">Pred: ${crypto.predictedChange.toFixed(1)}%</div>
                                 </div>
                             </div>
                         `;
                         listDiv.appendChild(card);
                     });
+                    
+                    // Habilitar botón de ciclo
+                    document.getElementById('btn-start-cycle').disabled = false;
                 }
             } catch (error) {
                 listDiv.innerHTML = '<div class="text-red-400">❌ Error: ' + error.message + '</div>';
             }
         }
         
+        async function startCycle() {
+            if (currentCryptos.length === 0) {
+                alert('Primero carga los datos con el botón Cargar');
+                return;
+            }
+            
+            if (!confirm('¿Iniciar ciclo de predicción de 12 horas con los top 20 activos?')) return;
+            
+            try {
+                const snapshot = currentCryptos.slice(0, 20);
+                
+                const res = await fetch('/api/cycles/start', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ snapshot })
+                });
+                
+                const data = await res.json();
+                
+                if (data.success) {
+                    alert(`✅ Ciclo iniciado!\nID: ${data.cycle.id}\nFinaliza en 12 horas`);
+                    setTab('validation');
+                    await loadValidation();
+                } else {
+                    alert('❌ Error: ' + data.error);
+                }
+            } catch (error) {
+                alert('❌ Error: ' + error.message);
+            }
+        }
+        
+        async function loadValidation() {
+            await loadActiveCycles();
+            await loadCompletedCycles();
+            await loadGlobalStats();
+        }
+        
+        async function loadActiveCycles() {
+            const div = document.getElementById('active-cycles');
+            div.innerHTML = '<div class="text-gray-400">Cargando...</div>';
+            
+            try {
+                const res = await fetch('/api/cycles/active');
+                const data = await res.json();
+                
+                if (data.success && data.cycles.length > 0) {
+                    div.innerHTML = '';
+                    data.cycles.forEach(cycle => {
+                        const card = document.createElement('div');
+                        card.className = 'bg-gray-800 p-4 rounded-lg mb-3';
+                        card.innerHTML = `
+                            <div class="flex justify-between items-center">
+                                <div>
+                                    <div class="font-bold">Ciclo activo</div>
+                                    <div class="text-sm text-gray-400">${cycle.snapshot.length} activos</div>
+                                </div>
+                                <div class="text-right">
+                                    <div class="text-2xl font-bold text-blue-400">${cycle.hoursRemaining}h</div>
+                                    <div class="text-xs text-gray-400">restantes</div>
+                                </div>
+                            </div>
+                        `;
+                        div.appendChild(card);
+                    });
+                } else {
+                    div.innerHTML = '<div class="text-gray-500">No hay ciclos activos</div>';
+                }
+            } catch (error) {
+                div.innerHTML = '<div class="text-red-400">Error al cargar</div>';
+            }
+        }
+        
+        async function loadCompletedCycles() {
+            const div = document.getElementById('completed-cycles');
+            div.innerHTML = '<div class="text-gray-400">Cargando...</div>';
+            
+            try {
+                const res = await fetch('/api/cycles/history');
+                const data = await res.json();
+                
+                if (data.success && data.cycles.length > 0) {
+                    div.innerHTML = '';
+                    data.cycles.slice(0, 5).forEach(cycle => {
+                        const card = document.createElement('div');
+                        card.className = 'bg-gray-800 p-4 rounded-lg mb-3';
+                        card.innerHTML = `
+                            <div class="flex justify-between items-center">
+                                <div class="flex-1">
+                                    <div class="font-bold">Ciclo ${new Date(cycle.completedAt).toLocaleDateString()}</div>
+                                    <div class="text-sm text-gray-400">
+                                        ${cycle.metrics.correct}/${cycle.metrics.total} correctas
+                                    </div>
+                                </div>
+                                <div class="text-right mr-4">
+                                    <div class="text-2xl font-bold text-green-400">${cycle.metrics.successRate}%</div>
+                                    <div class="text-xs text-gray-400">Tasa acierto</div>
+                                </div>
+                                <button onclick="downloadReport('${cycle.id}')" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm">
+                                    📄 Informe
+                                </button>
+                            </div>
+                        `;
+                        div.appendChild(card);
+                    });
+                } else {
+                    div.innerHTML = '<div class="text-gray-500">No hay ciclos completados. Inicia tu primer ciclo!</div>';
+                }
+            } catch (error) {
+                div.innerHTML = '<div class="text-red-400">Error al cargar</div>';
+            }
+        }
+        
+        async function loadGlobalStats() {
+            const div = document.getElementById('global-stats');
+            
+            try {
+                const res = await fetch('/api/cycles/stats/global');
+                const data = await res.json();
+                
+                if (data.success) {
+                    const stats = data.stats;
+                    div.innerHTML = `
+                        <div class="grid grid-cols-3 gap-4">
+                            <div class="bg-gray-800 p-4 rounded">
+                                <div class="text-2xl font-bold text-blue-400">${stats.totalCycles}</div>
+                                <div class="text-sm text-gray-400">Total Ciclos</div>
+                            </div>
+                            <div class="bg-gray-800 p-4 rounded">
+                                <div class="text-2xl font-bold text-green-400">${stats.avgSuccessRate}%</div>
+                                <div class="text-sm text-gray-400">Accuracy Promedio</div>
+                            </div>
+                            <div class="bg-gray-800 p-4 rounded">
+                                <div class="text-2xl font-bold text-purple-400">${stats.totalPredictions}</div>
+                                <div class="text-sm text-gray-400">Total Predicciones</div>
+                            </div>
+                        </div>
+                    `;
+                }
+            } catch (error) {}
+        }
+        
+        async function downloadReport(cycleId) {
+            try {
+                window.location.href = `/api/cycles/${cycleId}/report`;
+            } catch (error) {
+                alert('Error al descargar informe');
+            }
+        }
+        
         function setTab(tab) {
-            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
             document.querySelectorAll('[id^="tab-"]').forEach(el => {
                 el.classList.remove('bg-blue-600');
                 el.classList.add('bg-gray-700');
             });
             
-            document.getElementById('content-' + tab).classList.remove('hidden');
+            document.getElementById('content-' + tab).style.display = 'block';
             document.getElementById('tab-' + tab).classList.remove('bg-gray-700');
             document.getElementById('tab-' + tab).classList.add('bg-blue-600');
+            
+            if (tab === 'validation') {
+                loadValidation();
+            }
         }
+        
+        // Auto-check pending cycles
+        setInterval(async () => {
+            try {
+                const res = await fetch('/api/cycles/pending');
+                const data = await res.json();
+                if (data.success && data.cycles.length > 0) {
+                    for (const cycle of data.cycles) {
+                        await fetch(`/api/cycles/${cycle.id}/complete`, { method: 'POST' });
+                    }
+                    if (document.getElementById('content-validation').style.display !== 'none') {
+                        loadValidation();
+                    }
+                }
+            } catch (error) {}
+        }, 60000); // Cada minuto
         
         window.onload = () => {
             init();

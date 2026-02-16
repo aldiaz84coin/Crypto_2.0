@@ -7,9 +7,10 @@ const { normalize } = require('./algorithm-config');
  * 
  * @param {Object} crypto - Datos del activo
  * @param {Object} config - Configuración del algoritmo
+ * @param {Object} externalData - Datos externos (fearGreed, news, etc.)
  * @returns {Object} - { boostPower, breakdown }
  */
-function calculateBoostPower(crypto, config) {
+function calculateBoostPower(crypto, config, externalData = {}) {
   const { metaWeights, factorWeights, thresholds } = config;
   
   // Calcular scores de cada factor
@@ -21,10 +22,10 @@ function calculateBoostPower(crypto, config) {
     historicalLow: calculateHistoricalLowScore(crypto),
     googleTrends: calculateGoogleTrendsScore(crypto),
     
-    // Cualitativos
-    fearGreedIndex: calculateFearGreedScore(crypto),
-    newsVolume: calculateNewsVolumeScore(crypto, thresholds),
-    newsCount: calculateNewsCountScore(crypto, thresholds)
+    // Cualitativos (ahora usan datos reales)
+    fearGreedIndex: calculateFearGreedScore(crypto, externalData.fearGreed),
+    newsVolume: calculateNewsVolumeScore(crypto, externalData.news, thresholds),
+    newsCount: calculateNewsCountScore(crypto, externalData.news, thresholds)
   };
   
   // Calcular puntajes ponderados por categoría
@@ -134,35 +135,66 @@ function calculateHistoricalLowScore(crypto) {
  * Calcular score de Google Trends
  */
 function calculateGoogleTrendsScore(crypto) {
-  // Por ahora, score neutral (requiere SerpAPI)
-  // En versión futura se implementará con datos reales
+  // Usar interés de mercado como proxy (market cap rank)
+  // Activos más conocidos tienen más búsquedas
+  if (crypto.market_cap_rank) {
+    const rank = crypto.market_cap_rank;
+    if (rank <= 10) return 1.0;
+    if (rank <= 50) return 0.8;
+    if (rank <= 100) return 0.6;
+    return 0.4;
+  }
   return 0.5;
 }
 
 /**
  * Calcular score de Fear & Greed
  */
-function calculateFearGreedScore(crypto) {
-  // Por ahora, score neutral (requiere API Fear & Greed)
-  // En versión futura: miedo = oportunidad
-  return 0.5;
+function calculateFearGreedScore(crypto, fearGreedData) {
+  if (!fearGreedData || !fearGreedData.value) return 0.5;
+  
+  const fgi = fearGreedData.value; // 0-100
+  
+  // Estrategia contrarian: miedo = oportunidad
+  // FGI bajo (miedo) = score alto
+  if (fgi < 25) return 1.0;      // Miedo extremo = máxima oportunidad
+  if (fgi < 45) return 0.8;      // Miedo = buena oportunidad
+  if (fgi < 55) return 0.5;      // Neutral
+  if (fgi < 75) return 0.3;      // Avaricia = precaución
+  return 0.1;                     // Avaricia extrema = evitar
 }
 
 /**
  * Calcular score de volumen de noticias
  */
-function calculateNewsVolumeScore(crypto, thresholds) {
-  // Por ahora, score neutral (requiere CryptoCompare API)
-  // En versión futura se implementará con datos reales
-  return 0.5;
+function calculateNewsVolumeScore(crypto, newsData, thresholds) {
+  if (!newsData || !newsData.articles) return 0.5;
+  
+  const articles = newsData.articles;
+  
+  // Cantidad de noticias
+  const count = articles.length;
+  const countScore = normalize(count, thresholds.newsCountMin, thresholds.newsCountMax);
+  
+  // Sentimiento promedio
+  const sentiments = articles.map(a => a.sentiment.score);
+  const avgSentiment = sentiments.length > 0 
+    ? sentiments.reduce((sum, s) => sum + s, 0) / sentiments.length 
+    : 0;
+  
+  // Score combinado (50% cantidad, 50% sentimiento)
+  const sentimentNormalized = (avgSentiment + 1) / 2; // -1 a 1 → 0 a 1
+  
+  return (countScore * 0.5) + (sentimentNormalized * 0.5);
 }
 
 /**
  * Calcular score de cantidad de noticias
  */
-function calculateNewsCountScore(crypto, thresholds) {
-  // Por ahora, score neutral
-  return 0.5;
+function calculateNewsCountScore(crypto, newsData, thresholds) {
+  if (!newsData || !newsData.count) return 0.5;
+  
+  return normalize(newsData.count, thresholds.newsCountMin, thresholds.newsCountMax);
 }
 
 /**
