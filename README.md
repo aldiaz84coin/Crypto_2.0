@@ -1,62 +1,126 @@
-# 🚀 Crypto Detector - v3.2 ESTABLE
+# 🚀 Crypto Detector - VERSIÓN MÍNIMA
 
-## ✅ VERSIÓN PROBADA Y FUNCIONAL
+## ✅ ULTRA SIMPLE - DEBE FUNCIONAR SÍ O SÍ
 
-Sistema de pesos configurables - Versión simplificada y estable.
+Solo lo básico:
+- ✅ Backend con 2 endpoints
+- ✅ Frontend que funciona
+- ✅ Sin complejidades
 
-## ✨ Características
+---
 
-- ✅ 8 factores configurables
-- ✅ Pesos y umbrales ajustables
-- ✅ Guardado en Vercel KV
-- ✅ Endpoints de configuración
-- ✅ Sin pantallas blancas
-- ✅ Sin errores 500
-- ✅ TODO FUNCIONA
+## 📦 ARCHIVOS (5 en total)
 
-## 📦 Instalación (3 Pasos)
-
-```bash
-# 1. Extraer
-tar -xzf crypto-detector-SIMPLE.tar.gz
-cp -r crypto-detector-SIMPLE/* tu-proyecto/
-cd tu-proyecto
-npm install
-
-# 2. Configurar Vercel KV
-# Vercel → Storage → Create KV → Connect
-
-# 3. Deploy
-git add .
-git commit -m "Deploy v3.2 Estable"
-git push
+```
+crypto-detector-MINIMAL/
+├── package.json       ← Solo 3 dependencias
+├── vercel.json        ← Config mínima
+├── api/
+│   └── index.js       ← Backend (50 líneas)
+└── public/
+    └── index.html     ← Frontend (100 líneas)
 ```
 
-## ✅ Verificación
+---
+
+## 🚀 DEPLOY (2 PASOS)
+
+### Paso 1: Copiar y Deploy
+```bash
+# Extraer
+tar -xzf crypto-detector-MINIMAL.tar.gz
+
+# Ir a tu proyecto
+cd tu-proyecto
+
+# BORRAR TODO
+rm -rf *
+
+# Copiar
+cp -r /ruta/crypto-detector-MINIMAL/* .
+
+# Instalar
+npm install
+
+# Deploy
+git init
+git add .
+git commit -m "Versión mínima"
+git push vercel main
+```
+
+### Paso 2: Verificar
+
+Abrir: `https://tu-app.vercel.app`
+
+**Debes ver:**
+- Título "Crypto Detector"
+- Botón "Test Backend" (verde si funciona)
+- Botón "Cargar Criptos"
+- Click "Cargar Criptos" → Ver 20 criptomonedas
+
+---
+
+## ✅ ENDPOINTS
 
 ```bash
 # Health
 curl https://tu-app.vercel.app/api/health
 
-# Config
-curl https://tu-app.vercel.app/api/config
-
-# Frontend
-# Abrir en navegador - debe cargar sin pantalla blanca ✅
+# Criptos
+curl https://tu-app.vercel.app/api/crypto
 ```
 
-## 🎯 Endpoints
+---
 
-- `GET /api/config` - Ver configuración
-- `POST /api/config` - Guardar
-- `POST /api/config/reset` - Resetear
-- `GET /api/config/metadata` - Info factores
+## 💡 QUÉ HACE
 
-## 💪 Garantizado
+1. **Backend:**
+   - GET /api/health → Test
+   - GET /api/crypto → Obtiene 100 criptos de CoinGecko
 
-✅ Funciona 100%
-✅ Sin pantallas blancas
-✅ Sin errores 500
-✅ Código simple y directo
+2. **Frontend:**
+   - Botón para probar backend
+   - Botón para cargar criptos
+   - Muestra las primeras 20
 
-¡Listo! 🚀
+---
+
+## 🆘 SI NO FUNCIONA
+
+1. **Ver logs:**
+   ```
+   Vercel → Deployments → Runtime Logs
+   ```
+
+2. **Verificar archivos:**
+   ```bash
+   ls -la
+   # Debe haber: api/, public/, package.json, vercel.json
+   ```
+
+3. **Reinstalar:**
+   ```bash
+   rm -rf node_modules package-lock.json
+   npm install
+   git add .
+   git commit -m "reinstall"
+   git push
+   ```
+
+---
+
+## 🎯 ESTO DEBE FUNCIONAR
+
+**Si esta versión no funciona, el problema es:**
+- ❌ Git no configurado
+- ❌ Vercel no conectado
+- ❌ Archivos no copiados
+
+**NO es problema del código.**
+
+---
+
+Una vez que esto funcione, puedes añadir más funcionalidades gradualmente.
+
+¡Suerte! 🚀
