@@ -203,6 +203,30 @@ async function getStats() {
   };
 }
 
+
+// Get/Set genéricos para configuración
+async function get(key) {
+  try {
+    const value = await kv.get(key);
+    if (value) {
+      return { value: typeof value === 'string' ? value : JSON.stringify(value) };
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+async function set(key, value) {
+  try {
+    const parsedValue = typeof value === 'string' ? JSON.parse(value) : value;
+    await kv.set(key, parsedValue);
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
 module.exports = {
   createCycle,
   getCycle,
@@ -215,5 +239,7 @@ module.exports = {
   getCompletedCycles,
   deleteCycle,
   cleanOldCycles,
-  getStats
+  getStats,
+  get,
+  set
 };

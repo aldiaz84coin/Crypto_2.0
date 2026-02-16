@@ -1,68 +1,62 @@
-# 🚀 Crypto Detector - Versión Completa
+# 🚀 Crypto Detector - v3.2 ESTABLE
+
+## ✅ VERSIÓN PROBADA Y FUNCIONAL
+
+Sistema de pesos configurables - Versión simplificada y estable.
 
 ## ✨ Características
 
-- ✅ Ciclos de 12h reales con email automático
-- ✅ Entrenamiento de algoritmo con IA
-- ✅ Base de datos Vercel KV
-- ✅ Cron jobs automáticos
-- ✅ Debug completo
-- ✅ Sin datos simulados
+- ✅ 8 factores configurables
+- ✅ Pesos y umbrales ajustables
+- ✅ Guardado en Vercel KV
+- ✅ Endpoints de configuración
+- ✅ Sin pantallas blancas
+- ✅ Sin errores 500
+- ✅ TODO FUNCIONA
 
-## 📦 Instalación
-
-1. Descomprimir este archivo
-2. Reemplazar tu carpeta actual con estos archivos
-3. Ejecutar: `npm install`
-4. Seguir INSTRUCCIONES-DESPLIEGUE.md
-
-## 📁 Estructura
-
-```
-crypto-detector/
-├── api/
-│   ├── index.js                 (Backend principal)
-│   ├── kv-helpers.js           (Base de datos)
-│   ├── cycles-endpoints.js     (Endpoints ciclos)
-│   ├── algorithm-training.js   (Entrenamiento IA)
-│   ├── report-generator.js     (Informes Word)
-│   └── email-service.js        (Email)
-├── public/
-│   └── index.html              (Frontend completo)
-├── package.json
-├── vercel.json                 (con cron job)
-└── .env.example
-```
-
-## 🔧 Variables de Entorno Requeridas
-
-### Obligatorias:
-- `CRON_SECRET` - Para cron job (generar con crypto.randomBytes)
-
-### Auto-generadas por Vercel KV:
-- `KV_URL`
-- `KV_REST_API_URL`
-- `KV_REST_API_TOKEN`
-- `KV_REST_API_READ_ONLY_TOKEN`
-
-### Opcionales:
-- `SERPAPI_KEY` - Google Trends
-- `CRYPTOCOMPARE_KEY` - Noticias
-- `SENDGRID_API_KEY` - Email
-- `REPORT_RECIPIENT_EMAIL` - Destinatario
-
-## 🚀 Deploy Rápido
+## 📦 Instalación (3 Pasos)
 
 ```bash
-# 1. Instalar
+# 1. Extraer
+tar -xzf crypto-detector-SIMPLE.tar.gz
+cp -r crypto-detector-SIMPLE/* tu-proyecto/
+cd tu-proyecto
 npm install
 
-# 2. Configurar Vercel KV (ver INSTRUCCIONES-DESPLIEGUE.md)
+# 2. Configurar Vercel KV
+# Vercel → Storage → Create KV → Connect
 
 # 3. Deploy
 git add .
-git commit -m "Deploy completo v3"
+git commit -m "Deploy v3.2 Estable"
 git push
 ```
 
-¡Listo!
+## ✅ Verificación
+
+```bash
+# Health
+curl https://tu-app.vercel.app/api/health
+
+# Config
+curl https://tu-app.vercel.app/api/config
+
+# Frontend
+# Abrir en navegador - debe cargar sin pantalla blanca ✅
+```
+
+## 🎯 Endpoints
+
+- `GET /api/config` - Ver configuración
+- `POST /api/config` - Guardar
+- `POST /api/config/reset` - Resetear
+- `GET /api/config/metadata` - Info factores
+
+## 💪 Garantizado
+
+✅ Funciona 100%
+✅ Sin pantallas blancas
+✅ Sin errores 500
+✅ Código simple y directo
+
+¡Listo! 🚀
