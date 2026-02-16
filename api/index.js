@@ -31,16 +31,14 @@ try {
 }
 
 // ============================================
-// CONFIGURACIÓN POR DEFECTO
+// MÓDULOS DE ALGORITMO (ITERACIÓN 2)
 // ============================================
 
-const DEFAULT_CONFIG = {
-  version: '3.1-iter1',
-  quantitativeWeight: 0.60,
-  qualitativeWeight: 0.40,
-  boostPowerThreshold: 0.40,
-  lastModified: null
-};
+const algorithmConfig = require('./algorithm-config');
+const boostPowerCalc = require('./boost-power-calculator');
+
+// Usar config por defecto del módulo
+const DEFAULT_CONFIG = algorithmConfig.DEFAULT_CONFIG;
 
 // ============================================
 // ENDPOINTS BÁSICOS
@@ -110,34 +108,14 @@ app.post('/api/config', async (req, res) => {
       });
     }
     
-    // Validar
-    const errors = [];
+    // Validar usando el módulo
+    const validation = algorithmConfig.validateConfig(config);
     
-    if (typeof config.quantitativeWeight !== 'number' || 
-        config.quantitativeWeight < 0 || config.quantitativeWeight > 1) {
-      errors.push('quantitativeWeight debe estar entre 0 y 1');
-    }
-    
-    if (typeof config.qualitativeWeight !== 'number' || 
-        config.qualitativeWeight < 0 || config.qualitativeWeight > 1) {
-      errors.push('qualitativeWeight debe estar entre 0 y 1');
-    }
-    
-    const sum = config.quantitativeWeight + config.qualitativeWeight;
-    if (Math.abs(sum - 1.0) > 0.01) {
-      errors.push(`Los pesos deben sumar 1.0 (actual: ${sum.toFixed(2)})`);
-    }
-    
-    if (typeof config.boostPowerThreshold !== 'number' || 
-        config.boostPowerThreshold < 0.30 || config.boostPowerThreshold > 0.50) {
-      errors.push('boostPowerThreshold debe estar entre 0.30 y 0.50');
-    }
-    
-    if (errors.length > 0) {
+    if (!validation.valid) {
       return res.status(400).json({
         success: false,
         error: 'Validación fallida',
-        errors: errors
+        errors: validation.errors
       });
     }
     
@@ -216,19 +194,56 @@ app.post('/api/config/reset', async (req, res) => {
 });
 
 // ============================================
-// ENDPOINT DE CRIPTOS (básico)
+// ENDPOINT DE CRIPTOS (con BoostPower - ITERACIÓN 2)
 // ============================================
 
 app.get('/api/crypto', async (req, res) => {
   try {
+    // Obtener config actual
+    let config = { ...DEFAULT_CONFIG };
+    if (redis) {
+      try {
+        const stored = await redis.get('algorithm-config');
+        if (stored) {
+          config = typeof stored === 'string' ? JSON.parse(stored) : stored;
+        }
+      } catch (error) {
+        console.log('Usando config por defecto');
+      }
+    }
+    
+    // Obtener datos de CoinGecko
     const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false'
+      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage_24h=true'
     );
+    
+    // Calcular BoostPower para cada activo
+    const cryptosWithBoost = response.data.map(crypto => {
+      const { boostPower, breakdown } = boostPowerCalc.calculateBoostPower(crypto, config);
+      const classification = boostPowerCalc.classifyAsset(boostPower, config.boostPowerThreshold);
+      
+      return {
+        ...crypto,
+        boostPower: boostPower,
+        boostPowerPercent: Math.round(boostPower * 100),
+        breakdown: breakdown,
+        classification: classification.category,
+        color: classification.color,
+        recommendation: classification.recommendation
+      };
+    });
+    
+    // Ordenar por BoostPower descendente
+    cryptosWithBoost.sort((a, b) => b.boostPower - a.boostPower);
     
     res.json({
       success: true,
-      data: response.data,
-      timestamp: new Date().toISOString()
+      data: cryptosWithBoost,
+      timestamp: new Date().toISOString(),
+      config: {
+        version: config.version,
+        threshold: config.boostPowerThreshold
+      }
     });
   } catch (error) {
     console.error('Error fetching crypto data:', error.message);
@@ -236,6 +251,43 @@ app.get('/api/crypto', async (req, res) => {
       success: false,
       error: 'Error al obtener datos de criptos',
       message: error.message
+    });
+  }
+});
+
+// ============================================
+// DESARROLLO LOCAL
+// ============================================
+
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000;
+  app.listen(PORT, () => {
+    console.log(`🚀 Server running on port ${PORT}`);
+    console.log(`📊 Redis: ${redis ? 'Connected' : 'Not available'}`);
+  });
+}
+
+
+// ============================================
+// ENDPOINT DE METADATA (ITERACIÓN 2)
+// ============================================
+
+/**
+ * GET /api/config/metadata
+ * Obtener información de factores para UI
+ */
+app.get('/api/config/metadata', (req, res) => {
+  try {
+    const metadata = algorithmConfig.getFactorMetadata();
+    res.json({
+      success: true,
+      metadata: metadata
+    });
+  } catch (error) {
+    console.error('Error getting metadata:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error al obtener metadata'
     });
   }
 });

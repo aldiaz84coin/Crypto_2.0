@@ -1,64 +1,130 @@
-// algorithm-config.js - Sistema de Configuración Básico (Iteración 1)
+// algorithm-config.js - Configuración Expandida (Iteración 2)
 
 /**
- * CONFIGURACIÓN POR DEFECTO
- * En Iteración 1 manejamos solo 3 parámetros básicos:
- * - quantitativeWeight: Peso de factores cuantitativos (0-1)
- * - qualitativeWeight: Peso de factores cualitativos (0-1)
- * - boostPowerThreshold: Umbral para clasificar como INVERTIBLE (0.30-0.50)
+ * CONFIGURACIÓN POR DEFECTO - ITERACIÓN 2
+ * 
+ * Expandida con:
+ * - 2 meta-pesos (cuantitativo/cualitativo)
+ * - 8 pesos de factores individuales
+ * - 6 umbrales básicos
  */
 
 const DEFAULT_CONFIG = {
-  version: '3.1-iter1',
+  version: '3.1-iter2',
   
-  // Pesos principales (deben sumar 1.0)
-  quantitativeWeight: 0.60,  // 60% peso a factores cuantitativos
-  qualitativeWeight: 0.40,   // 40% peso a factores cualitativos
+  // Meta-pesos (deben sumar 1.0)
+  metaWeights: {
+    quantitative: 0.60,  // 60% a factores cuantitativos
+    qualitative: 0.40    // 40% a factores cualitativos
+  },
+  
+  // Pesos de factores individuales
+  factorWeights: {
+    // Cuantitativos (deben sumar ~1.0 dentro de su categoría)
+    volume: 0.10,           // Volumen 24h
+    marketCap: 0.08,        // Market Cap ratio vs BTC
+    volatility: 0.07,       // Volatilidad 7 días
+    historicalLow: 0.05,    // Distancia desde ATL
+    googleTrends: 0.10,     // Tendencias de búsqueda
+    
+    // Cualitativos (deben sumar ~1.0 dentro de su categoría)
+    fearGreedIndex: 0.02,   // Índice Fear & Greed
+    newsVolume: 0.12,       // Volumen de noticias
+    newsCount: 0.08         // Cantidad de noticias
+  },
+  
+  // Umbrales básicos (6 umbrales críticos)
+  thresholds: {
+    // Volumen
+    volumeMin: 100000000,      // $100M mínimo
+    volumeMax: 10000000000,    // $10B máximo
+    
+    // Volatilidad
+    volatilityMin: 0.05,       // 5% mínimo
+    volatilityMax: 0.50,       // 50% máximo
+    
+    // Noticias
+    newsCountMin: 3,           // Mínimo 3 noticias
+    newsCountMax: 100          // Máximo 100 noticias
+  },
   
   // Umbral de clasificación
-  boostPowerThreshold: 0.40,  // >=0.40 = INVERTIBLE
+  boostPowerThreshold: 0.40,
   
   // Metadata
   lastModified: null,
-  modifiedBy: 'default'
+  modifiedBy: 'system'
 };
 
 /**
- * Validar configuración
+ * Validar configuración expandida
  */
 function validateConfig(config) {
   const errors = [];
   
-  // Validar que existan los campos requeridos
-  if (typeof config.quantitativeWeight !== 'number') {
-    errors.push('quantitativeWeight debe ser un número');
+  // Validar meta-pesos
+  if (!config.metaWeights) {
+    errors.push('Faltan metaWeights');
+    return { valid: false, errors };
   }
   
-  if (typeof config.qualitativeWeight !== 'number') {
-    errors.push('qualitativeWeight debe ser un número');
+  const { quantitative, qualitative } = config.metaWeights;
+  
+  if (typeof quantitative !== 'number' || quantitative < 0 || quantitative > 1) {
+    errors.push('metaWeights.quantitative debe estar entre 0 y 1');
   }
   
-  if (typeof config.boostPowerThreshold !== 'number') {
-    errors.push('boostPowerThreshold debe ser un número');
+  if (typeof qualitative !== 'number' || qualitative < 0 || qualitative > 1) {
+    errors.push('metaWeights.qualitative debe estar entre 0 y 1');
   }
   
-  // Validar rangos
-  if (config.quantitativeWeight < 0 || config.quantitativeWeight > 1) {
-    errors.push('quantitativeWeight debe estar entre 0 y 1');
+  const metaSum = quantitative + qualitative;
+  if (Math.abs(metaSum - 1.0) > 0.01) {
+    errors.push(`Meta-pesos deben sumar 1.0 (actual: ${metaSum.toFixed(2)})`);
   }
   
-  if (config.qualitativeWeight < 0 || config.qualitativeWeight > 1) {
-    errors.push('qualitativeWeight debe estar entre 0 y 1');
+  // Validar pesos de factores
+  if (!config.factorWeights) {
+    errors.push('Faltan factorWeights');
+    return { valid: false, errors };
   }
   
-  // Validar que sumen aproximadamente 1.0
-  const sum = config.quantitativeWeight + config.qualitativeWeight;
-  if (Math.abs(sum - 1.0) > 0.01) {
-    errors.push(`Los pesos deben sumar 1.0 (actual: ${sum.toFixed(2)})`);
+  const requiredFactors = [
+    'volume', 'marketCap', 'volatility', 'historicalLow', 'googleTrends',
+    'fearGreedIndex', 'newsVolume', 'newsCount'
+  ];
+  
+  for (const factor of requiredFactors) {
+    const weight = config.factorWeights[factor];
+    if (typeof weight !== 'number' || weight < 0 || weight > 1) {
+      errors.push(`factorWeights.${factor} debe estar entre 0 y 1`);
+    }
   }
   
-  // Validar threshold
-  if (config.boostPowerThreshold < 0.30 || config.boostPowerThreshold > 0.50) {
+  // Validar umbrales
+  if (!config.thresholds) {
+    errors.push('Faltan thresholds');
+    return { valid: false, errors };
+  }
+  
+  const { thresholds } = config;
+  
+  if (thresholds.volumeMin >= thresholds.volumeMax) {
+    errors.push('volumeMin debe ser menor que volumeMax');
+  }
+  
+  if (thresholds.volatilityMin >= thresholds.volatilityMax) {
+    errors.push('volatilityMin debe ser menor que volatilityMax');
+  }
+  
+  if (thresholds.newsCountMin >= thresholds.newsCountMax) {
+    errors.push('newsCountMin debe ser menor que newsCountMax');
+  }
+  
+  // Validar threshold de clasificación
+  if (typeof config.boostPowerThreshold !== 'number' || 
+      config.boostPowerThreshold < 0.30 || 
+      config.boostPowerThreshold > 0.50) {
     errors.push('boostPowerThreshold debe estar entre 0.30 y 0.50');
   }
   
@@ -69,75 +135,37 @@ function validateConfig(config) {
 }
 
 /**
- * Obtener configuración (desde KV o default)
+ * Normalizar un valor a rango 0-1
  */
-async function getConfig(kvHelpers) {
-  if (!kvHelpers) {
-    return DEFAULT_CONFIG;
-  }
-  
-  try {
-    const stored = await kvHelpers.get('algorithm-config:v1');
-    if (stored && stored.value) {
-      const config = JSON.parse(stored.value);
-      return config;
-    }
-  } catch (error) {
-    console.error('Error loading config from KV:', error);
-  }
-  
-  return DEFAULT_CONFIG;
+function normalize(value, min, max) {
+  if (value <= min) return 0;
+  if (value >= max) return 1;
+  return (value - min) / (max - min);
 }
 
 /**
- * Guardar configuración
+ * Obtener metadata de factores (para UI)
  */
-async function saveConfig(kvHelpers, config) {
-  if (!kvHelpers) {
-    return { success: false, error: 'KV no disponible' };
-  }
-  
-  // Validar primero
-  const validation = validateConfig(config);
-  if (!validation.valid) {
-    return { success: false, errors: validation.errors };
-  }
-  
-  // Añadir metadata
-  config.lastModified = new Date().toISOString();
-  config.version = '3.1-iter1';
-  
-  try {
-    await kvHelpers.set('algorithm-config:v1', JSON.stringify(config));
-    return { success: true, config: config };
-  } catch (error) {
-    console.error('Error saving config to KV:', error);
-    return { success: false, error: error.message };
-  }
-}
-
-/**
- * Resetear a configuración por defecto
- */
-async function resetConfig(kvHelpers) {
-  const defaultConfig = { ...DEFAULT_CONFIG };
-  defaultConfig.lastModified = new Date().toISOString();
-  
-  if (kvHelpers) {
-    try {
-      await kvHelpers.set('algorithm-config:v1', JSON.stringify(defaultConfig));
-    } catch (error) {
-      console.error('Error resetting config:', error);
-    }
-  }
-  
-  return defaultConfig;
+function getFactorMetadata() {
+  return {
+    quantitative: [
+      { id: 'volume', name: 'Volumen 24h', description: 'Liquidez del activo' },
+      { id: 'marketCap', name: 'Market Cap', description: 'Capitalización vs BTC' },
+      { id: 'volatility', name: 'Volatilidad', description: 'Movimiento de precio' },
+      { id: 'historicalLow', name: 'Desde ATL', description: 'Distancia del mínimo' },
+      { id: 'googleTrends', name: 'Google Trends', description: 'Interés de búsqueda' }
+    ],
+    qualitative: [
+      { id: 'fearGreedIndex', name: 'Fear & Greed', description: 'Sentimiento de mercado' },
+      { id: 'newsVolume', name: 'Volumen Noticias', description: 'Cantidad + sentimiento' },
+      { id: 'newsCount', name: 'Cantidad Noticias', description: 'Número de artículos' }
+    ]
+  };
 }
 
 module.exports = {
   DEFAULT_CONFIG,
-  getConfig,
-  saveConfig,
   validateConfig,
-  resetConfig
+  normalize,
+  getFactorMetadata
 };
