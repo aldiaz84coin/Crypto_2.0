@@ -1,126 +1,168 @@
-# 🚀 Crypto Detector - VERSIÓN MÍNIMA
+# 🚀 Crypto Detector v3.1 - Con Upstash Redis
 
-## ✅ ULTRA SIMPLE - DEBE FUNCIONAR SÍ O SÍ
+## ⚠️ CAMBIO IMPORTANTE: Upstash Redis en lugar de Vercel KV
 
-Solo lo básico:
-- ✅ Backend con 2 endpoints
-- ✅ Frontend que funciona
-- ✅ Sin complejidades
+Vercel KV está deprecado. Esta versión usa **Upstash Redis** correctamente.
 
 ---
 
-## 📦 ARCHIVOS (5 en total)
+## ✨ FUNCIONALIDADES
 
-```
-crypto-detector-MINIMAL/
-├── package.json       ← Solo 3 dependencias
-├── vercel.json        ← Config mínima
-├── api/
-│   └── index.js       ← Backend (50 líneas)
-└── public/
-    └── index.html     ← Frontend (100 líneas)
-```
+### Backend:
+- ✅ Conexión a Upstash Redis (sin @vercel/kv deprecado)
+- ✅ 3 endpoints de configuración
+- ✅ Endpoint /api/crypto para obtener datos
+- ✅ Validación completa de configuración
+
+### Frontend:
+- ✅ 2 tabs: Monitor y Configuración
+- ✅ Sliders para ajustar pesos
+- ✅ Guardar/Resetear configuración
+- ✅ Vista de criptos
 
 ---
 
-## 🚀 DEPLOY (2 PASOS)
+## 🚀 INSTALACIÓN Y DEPLOY
 
-### Paso 1: Copiar y Deploy
+### Paso 1: Extraer
 ```bash
-# Extraer
-tar -xzf crypto-detector-MINIMAL.tar.gz
+tar -xzf crypto-detector-v3.1-ITER1-UPSTASH.tar.gz
+cd crypto-detector-v3.1-ITER1-UPSTASH
+```
 
-# Ir a tu proyecto
-cd tu-proyecto
+### Paso 2: Configurar Upstash Redis en Vercel
 
-# BORRAR TODO
-rm -rf *
+#### CRÍTICO: Ya NO uses "Create KV". Ahora es así:
 
-# Copiar
-cp -r /ruta/crypto-detector-MINIMAL/* .
+1. Ve a **Vercel Dashboard**
+2. Tu proyecto → **Integrations**
+3. Busca "**Upstash Redis**" en Marketplace
+4. Click **Add Integration**
+5. Selecciona tu proyecto
+6. Autoriza la integración
+7. Vercel añadirá automáticamente las variables:
+   - `KV_REST_API_URL`
+   - `KV_REST_API_TOKEN`
 
-# Instalar
+**NO NECESITAS** crear nada manualmente. La integración lo hace todo.
+
+### Paso 3: Deploy
+```bash
 npm install
 
-# Deploy
 git init
 git add .
-git commit -m "Versión mínima"
-git push vercel main
+git commit -m "Deploy v3.1 con Upstash Redis"
+git push origin main
 ```
-
-### Paso 2: Verificar
-
-Abrir: `https://tu-app.vercel.app`
-
-**Debes ver:**
-- Título "Crypto Detector"
-- Botón "Test Backend" (verde si funciona)
-- Botón "Cargar Criptos"
-- Click "Cargar Criptos" → Ver 20 criptomonedas
 
 ---
 
-## ✅ ENDPOINTS
+## ✅ VERIFICACIÓN
 
+### 1. Backend
 ```bash
-# Health
 curl https://tu-app.vercel.app/api/health
 
-# Criptos
-curl https://tu-app.vercel.app/api/crypto
+# Debe devolver:
+# {
+#   "status": "ok",
+#   "redis": "connected"  ← IMPORTANTE: debe decir "connected"
+# }
+```
+
+### 2. Configuración
+```bash
+curl https://tu-app.vercel.app/api/config
+
+# Debe devolver la config por defecto
+```
+
+### 3. Frontend
+1. Abrir: https://tu-app.vercel.app
+2. Tab "Monitor" → Click "Cargar Datos"
+3. Tab "Configuración" → Mover sliders → Guardar
+4. Debe aparecer "✅ Guardado correctamente"
+5. Recargar página (F5)
+6. Verificar que sliders mantienen valores
+
+---
+
+## 📊 PARÁMETROS
+
+| Parámetro | Rango | Default |
+|-----------|-------|---------|
+| Peso Cuantitativo | 0-100% | 60% |
+| Peso Cualitativo | 0-100% | 40% |
+| Umbral INVERTIBLE | 30-50% | 40% |
+
+---
+
+## 🆘 TROUBLESHOOTING
+
+### Error: "redis: 'not available'"
+**Causa:** Upstash Redis no configurado  
+**Solución:**
+1. Vercel → Integrations
+2. Añadir "Upstash Redis"
+3. Conectar a tu proyecto
+4. Redeploy
+
+### Config no se guarda
+**Causa:** Redis no conectado  
+**Verificar:** `/api/health` debe mostrar `"redis": "connected"`
+
+### Pantalla blanca
+**Causa:** Error en JavaScript  
+**Solución:**
+1. F12 → Console
+2. Ver errores
+3. Vercel → Deployments → Runtime Logs
+
+---
+
+## 📦 DEPENDENCIAS
+
+```json
+{
+  "express": "^4.18.2",
+  "axios": "^1.6.0",
+  "cors": "^2.8.5",
+  "@upstash/redis": "^1.28.0"  ← Nueva dependencia (NO @vercel/kv)
+}
 ```
 
 ---
 
-## 💡 QUÉ HACE
+## 🎯 DIFERENCIAS vs Versión Anterior
 
-1. **Backend:**
-   - GET /api/health → Test
-   - GET /api/crypto → Obtiene 100 criptos de CoinGecko
-
-2. **Frontend:**
-   - Botón para probar backend
-   - Botón para cargar criptos
-   - Muestra las primeras 20
+| Aspecto | Anterior | Nueva (Upstash) |
+|---------|----------|-----------------|
+| Dependencia | `@vercel/kv` | `@upstash/redis` |
+| Configuración | Vercel KV Storage | Vercel Integration |
+| Setup | Manual | Automático |
+| Estado | Deprecado ⚠️ | Soportado ✅ |
 
 ---
 
-## 🆘 SI NO FUNCIONA
+## ✅ CHECKLIST DE VALIDACIÓN
 
-1. **Ver logs:**
-   ```
-   Vercel → Deployments → Runtime Logs
-   ```
-
-2. **Verificar archivos:**
-   ```bash
-   ls -la
-   # Debe haber: api/, public/, package.json, vercel.json
-   ```
-
-3. **Reinstalar:**
-   ```bash
-   rm -rf node_modules package-lock.json
-   npm install
-   git add .
-   git commit -m "reinstall"
-   git push
-   ```
+- [ ] `npm install` sin warnings de deprecación
+- [ ] `/api/health` responde `"redis": "connected"`
+- [ ] GET /api/config funciona
+- [ ] POST /api/config guarda correctamente
+- [ ] Frontend carga sin pantalla blanca
+- [ ] Tab Config funciona
+- [ ] Config persiste al recargar
 
 ---
 
-## 🎯 ESTO DEBE FUNCIONAR
+## 🚀 PRÓXIMOS PASOS
 
-**Si esta versión no funciona, el problema es:**
-- ❌ Git no configurado
-- ❌ Vercel no conectado
-- ❌ Archivos no copiados
-
-**NO es problema del código.**
+Una vez validada esta versión, continuaremos con:
+- **Iteración 2:** 8 pesos de factores + 6 umbrales
 
 ---
 
-Una vez que esto funcione, puedes añadir más funcionalidades gradualmente.
-
-¡Suerte! 🚀
+**Versión:** 3.1-iter1-upstash  
+**Estado:** Lista para Deploy con Upstash Redis
