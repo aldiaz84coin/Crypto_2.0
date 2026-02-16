@@ -20,12 +20,6 @@
       "dest": "/public/$1"
     }
   ],
-  "crons": [
-    {
-      "path": "/api/cron/check-cycles",
-      "schedule": "* * * * *"
-    }
-  ],
   "env": {
     "NODE_ENV": "production"
   }
