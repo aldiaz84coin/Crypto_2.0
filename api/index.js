@@ -898,3 +898,42 @@ if (kvHelpers) {
   app.get('/api/cycles/history', kvNotAvailable);
   app.post('/api/algorithm/train', kvNotAvailable);
 }
+
+
+// ============================================
+// INTEGRACIÓN - CONFIGURACIÓN AVANZADA
+// ============================================
+
+// Cargar endpoints de configuración si KV está disponible
+if (kvHelpers) {
+  const initConfigEndpoints = require('./config-endpoints');
+  initConfigEndpoints(app, kvHelpers);
+  console.log('✅ Endpoints de configuración avanzada habilitados');
+} else {
+  // Endpoints básicos sin KV
+  app.get('/api/config', (req, res) => {
+    const { DEFAULT_ALGORITHM_CONFIG } = require('./algorithm-config-advanced');
+    res.json({ success: true, config: DEFAULT_ALGORITHM_CONFIG });
+  });
+  
+  app.post('/api/config', (req, res) => {
+    res.status(503).json({
+      error: 'KV no disponible',
+      message: 'Configura Vercel KV para guardar configuraciones personalizadas'
+    });
+  });
+}
+
+// Endpoint de metadata siempre disponible
+app.get('/api/config/metadata', (req, res) => {
+  const metadata = {
+    metaWeights: {
+      quantitative: { name: 'Cuantitativos', min: 0, max: 1, step: 0.01 },
+      qualitative: { name: 'Cualitativos', min: 0, max: 1, step: 0.01 }
+    },
+    factors: ['volume', 'marketCap', 'volatility', 'historicalLow', 'googleTrends',
+              'fearGreedIndex', 'newsVolume', 'newsCount']
+  };
+  res.json({ success: true, metadata });
+});
+
