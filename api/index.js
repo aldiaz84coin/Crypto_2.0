@@ -817,6 +817,48 @@ if (require.main === module) {
 }
 
 // Exportar para Vercel serverless
+module.exports = app;
+// ============================================
+// INTEGRACIÓN - CICLOS Y ENTRENAMIENTO
+// ============================================
+
+// Importar helpers de KV (solo si está disponible)
+let kvHelpers = null;
+try {
+  kvHelpers = require('./kv-helpers');
+  console.log('✅ Vercel KV disponible - Funcionalidad de ciclos habilitada');
+} catch (error) {
+  console.log('⚠️  Vercel KV no disponible - Funcionalidad de ciclos deshabilitada');
+  console.log('   Configura Vercel KV para habilitar ciclos de 12h');
+}
+
+// Solo habilitar endpoints de ciclos si KV está disponible
+if (kvHelpers) {
+  // Importar y ejecutar los endpoints de ciclos
+  require('./cycles-endpoints');
+  // Importar y ejecutar los endpoints de entrenamiento
+  require('./algorithm-training');
+  
+  console.log('✅ Endpoints de ciclos y entrenamiento habilitados');
+} else {
+  // Endpoints deshabilitados - devolver error amigable
+  const kvNotAvailable = (req, res) => {
+    res.status(503).json({
+      error: 'Vercel KV no configurado',
+      message: 'Para usar ciclos de 12h y entrenamiento, configura Vercel KV en tu proyecto',
+      setup: 'https://vercel.com/docs/storage/vercel-kv'
+    });
+  };
+  
+  app.post('/api/cycles/start', kvNotAvailable);
+  app.get('/api/cycles/active', kvNotAvailable);
+  app.get('/api/cycles/history', kvNotAvailable);
+  app.post('/api/algorithm/train', kvNotAvailable);
+  
+  console.log('⚠️  Endpoints de ciclos deshabilitados (KV no disponible)');
+}
+
+
 
 // ============================================
 // INTEGRACIÓN - CICLOS Y ENTRENAMIENTO
@@ -847,7 +889,7 @@ if (kvHelpers) {
     res.status(503).json({
       error: 'Vercel KV no configurado',
       message: 'Configura Vercel KV para usar ciclos de 12h',
-      docs: 'Ver INSTRUCCIONES.md'
+      docs: 'Ver INSTRUCCIONES-DESPLIEGUE.md'
     });
   };
   
@@ -856,43 +898,3 @@ if (kvHelpers) {
   app.get('/api/cycles/history', kvNotAvailable);
   app.post('/api/algorithm/train', kvNotAvailable);
 }
-
-// ============================================
-// INTEGRACIÓN - CONFIGURACIÓN AVANZADA
-// ============================================
-
-// Cargar endpoints de configuración si KV está disponible
-if (kvHelpers) {
-  const initConfigEndpoints = require('./config-endpoints');
-  initConfigEndpoints(app, kvHelpers);
-  console.log('✅ Endpoints de configuración avanzada habilitados');
-} else {
-  // Endpoints básicos sin KV
-  app.get('/api/config', (req, res) => {
-    const { DEFAULT_ALGORITHM_CONFIG } = require('./algorithm-config-advanced');
-    res.json({ success: true, config: DEFAULT_ALGORITHM_CONFIG });
-  });
-  
-  app.post('/api/config', (req, res) => {
-    res.status(503).json({
-      error: 'KV no disponible',
-      message: 'Configura Vercel KV para guardar configuraciones personalizadas'
-    });
-  });
-}
-
-// Endpoint de metadata siempre disponible
-app.get('/api/config/metadata', (req, res) => {
-  const metadata = {
-    metaWeights: {
-      quantitative: { name: 'Cuantitativos', min: 0, max: 1, step: 0.01 },
-      qualitative: { name: 'Cualitativos', min: 0, max: 1, step: 0.01 }
-    },
-    factors: ['volume', 'marketCap', 'volatility', 'historicalLow', 'googleTrends',
-              'fearGreedIndex', 'newsVolume', 'newsCount']
-  };
-  res.json({ success: true, metadata });
-});
-
-// Exportar para Vercel serverless (al final)
-module.exports = app;
