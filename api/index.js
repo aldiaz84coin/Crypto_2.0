@@ -27,10 +27,12 @@ try {
 
 // ── Módulos ───────────────────────────────────────────────────────────────────
 const algorithmConfig = require('./algorithm-config');
-const boostPowerCalc  = require('./boost-power-calculator');
-const cyclesManager   = require('./cycles-manager');
-const reportGenerator = require('./report-generator');
-const apiHealthCheck  = require('./api-health-check');
+const boostPowerCalc    = require('./boost-power-calculator');
+const cyclesManager     = require('./cycles-manager');
+const reportGenerator   = require('./report-generator');
+const apiHealthCheck    = require('./api-health-check');
+const investManager     = require('./investment-manager');
+const exchangeConnector = require('./exchange-connector');
 
 const DEFAULT_CONFIG = algorithmConfig.DEFAULT_CONFIG;
 
@@ -949,6 +951,423 @@ app.get('/api/cycles/:cycleId/report', async (req, res) => {
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
     res.setHeader('Content-Disposition', `attachment; filename=Informe_${req.params.cycleId}.docx`);
     res.send(buffer);
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// MÓDULO DE INVERSIÓN v4
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Helpers de Redis para inversión ──────────────────────────────────────────
+const INVEST_CONFIG_KEY = 'invest-config';
+const POSITIONS_KEY     = 'invest-positions';
+const INVEST_LOG_KEY    = 'invest-cycle-log';
+
+async function getInvestConfig() {
+  const stored = await redisGet(INVEST_CONFIG_KEY);
+  let cfg = null;
+  if (stored && typeof stored === 'object') cfg = stored;
+  else if (stored) { try { cfg = JSON.parse(stored); } catch(_){} }
+  return cfg || { ...investManager.DEFAULT_INVEST_CONFIG };
+}
+
+async function getPositions() {
+  const stored = await redisGet(POSITIONS_KEY);
+  if (stored && Array.isArray(stored)) return stored;
+  if (stored && typeof stored === 'string') { try { return JSON.parse(stored); } catch(_){} }
+  return [];
+}
+
+async function savePositions(positions) {
+  await redisSet(POSITIONS_KEY, positions);
+}
+
+async function getInvestLog() {
+  const stored = await redisGet(INVEST_LOG_KEY);
+  if (stored && Array.isArray(stored)) return stored;
+  if (stored && typeof stored === 'string') { try { return JSON.parse(stored); } catch(_){} }
+  return [];
+}
+
+async function appendInvestLog(entry) {
+  const log = await getInvestLog();
+  log.unshift(entry); // más reciente primero
+  await redisSet(INVEST_LOG_KEY, log.slice(0, 50)); // max 50 entradas
+}
+
+// Obtener keys de exchange desde Redis
+async function getExchangeKeys(exchange) {
+  if (exchange === 'binance') {
+    return {
+      apiKey: await getRedisKey('BINANCE_API_KEY'),
+      secret: await getRedisKey('BINANCE_SECRET_KEY')
+    };
+  } else if (exchange === 'coinbase') {
+    return {
+      apiKey: await getRedisKey('COINBASE_API_KEY'),
+      secret: await getRedisKey('COINBASE_SECRET_KEY')
+    };
+  }
+  return {};
+}
+
+// ── GET /api/invest/config ───────────────────────────────────────────────────
+app.get('/api/invest/config', async (_req, res) => {
+  try {
+    const cfg = await getInvestConfig();
+    res.json({ success: true, config: cfg, defaults: investManager.DEFAULT_INVEST_CONFIG });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/config ──────────────────────────────────────────────────
+app.post('/api/invest/config', async (req, res) => {
+  try {
+    const current = await getInvestConfig();
+    const updated = { ...current, ...req.body, lastModified: new Date().toISOString() };
+    await redisSet(INVEST_CONFIG_KEY, updated);
+    res.json({ success: true, config: updated });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── GET /api/invest/exchange/ping ────────────────────────────────────────────
+app.get('/api/invest/exchange/ping', async (_req, res) => {
+  try {
+    const cfg       = await getInvestConfig();
+    const keys      = await getExchangeKeys(cfg.exchange);
+    const isTestnet = cfg.mode !== 'real';
+    const result    = await exchangeConnector.pingExchange(cfg.exchange, keys, isTestnet);
+    res.json({ success: true, exchange: cfg.exchange, mode: cfg.mode, ...result });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── GET /api/invest/positions ────────────────────────────────────────────────
+app.get('/api/invest/positions', async (_req, res) => {
+  try {
+    const positions = await getPositions();
+    const cfg       = await getInvestConfig();
+    const open      = positions.filter(p => p.status === 'open');
+    const closed    = positions.filter(p => p.status === 'closed');
+    const available = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
+
+    // Actualizar precios actuales de posiciones abiertas (datos reales de CoinGecko)
+    if (open.length > 0) {
+      try {
+        const ids  = [...new Set(open.map(p => p.assetId))].join(',');
+        const pRes = await axios.get(
+          `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`,
+          { timeout: 5000 }
+        );
+        open.forEach(p => {
+          const price = pRes.data?.[p.assetId]?.usd;
+          if (price) {
+            p.currentPrice    = price;
+            p.unrealizedPnL   = parseFloat(((price - p.entryPrice) * p.units).toFixed(4));
+            p.unrealizedPnLPct = parseFloat(((price - p.entryPrice) / p.entryPrice * 100).toFixed(2));
+          }
+        });
+      } catch(_) {}
+    }
+
+    res.json({
+      success: true,
+      summary: {
+        capitalTotal:     cfg.capitalTotal,
+        capitalAvailable: parseFloat(available.toFixed(2)),
+        capitalInvested:  parseFloat((cfg.capitalTotal - available).toFixed(2)),
+        openPositions:    open.length,
+        closedPositions:  closed.length,
+        totalUnrealizedPnL: parseFloat(open.reduce((s,p) => s + (p.unrealizedPnL||0), 0).toFixed(4)),
+        totalRealizedPnL:   parseFloat(closed.reduce((s,p) => s + (p.realizedPnL||0), 0).toFixed(4))
+      },
+      open,
+      closed: closed.slice(0, 20)
+    });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/decide ──────────────────────────────────────────────────
+// Analiza el snapshot actual y decide dónde invertir (sin ejecutar)
+app.post('/api/invest/decide', async (req, res) => {
+  try {
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const snapshot  = req.body.snapshot || [];
+
+    if (!snapshot.length) return res.status(400).json({ success: false, error: 'Snapshot vacío' });
+
+    const decision = investManager.selectInvestmentTargets(snapshot, cfg, positions);
+    const available = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
+
+    res.json({
+      success:         true,
+      shouldInvest:    decision.shouldInvest,
+      reason:          decision.reason,
+      capitalAvailable: parseFloat(available.toFixed(2)),
+      targets:         decision.selected,
+      cycleCapital:    decision.cycleCapital,
+      mode:            cfg.mode,
+      exchange:        cfg.exchange
+    });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/execute ─────────────────────────────────────────────────
+// Ejecuta las inversiones decididas (simuladas o reales)
+app.post('/api/invest/execute', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const { snapshot, cycleId } = req.body;
+
+    if (!snapshot?.length) return res.status(400).json({ success: false, error: 'Snapshot requerido' });
+
+    // Solo ejecutar en ciclos significativos (≥12h)
+    if (cycleId) {
+      const cycle = await cyclesManager.getCycle(redis, cycleId);
+      if (cycle && (cycle.durationMs || 0) < 12 * 3600000) {
+        return res.status(400).json({ success: false, error: 'Solo se opera en ciclos ≥12 horas' });
+      }
+    }
+
+    const available = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
+    if (available < 10) {
+      return res.status(400).json({ success: false, error: `Capital disponible insuficiente: $${available.toFixed(2)}` });
+    }
+
+    const decision = investManager.selectInvestmentTargets(snapshot, cfg, positions);
+    if (!decision.shouldInvest) {
+      const logEntry = {
+        type: 'no_invest', cycleId, timestamp: new Date().toISOString(),
+        reason: decision.reason, capitalAvailable: available
+      };
+      await appendInvestLog(logEntry);
+      return res.json({ success: true, invested: false, reason: decision.reason, capitalAvailable: available });
+    }
+
+    const keys   = await getExchangeKeys(cfg.exchange);
+    const orders = [];
+    const newPositions = [];
+
+    for (const target of decision.selected) {
+      // Ejecutar orden (simulada o real)
+      const order = await exchangeConnector.placeOrder(target.symbol, 'BUY', target.capitalUSD, cfg, keys);
+      const position = investManager.createPosition(target, cycleId || `manual_${Date.now()}`, cfg);
+      position.exchangeOrderId = order.orderId || position.exchangeOrderId;
+      position.orderDetails    = order;
+      position.executedAt      = new Date().toISOString();
+      newPositions.push(position);
+      orders.push({ symbol: target.symbol, order, position: position.id });
+    }
+
+    // Guardar nuevas posiciones
+    const allPositions = [...positions, ...newPositions];
+    await savePositions(allPositions);
+
+    // Log de ciclo de inversión
+    const logEntry = {
+      type: 'invest', cycleId, timestamp: new Date().toISOString(),
+      mode: cfg.mode, exchange: cfg.exchange,
+      positionsOpened: newPositions.length,
+      totalInvested:   newPositions.reduce((s,p) => s + p.capitalUSD, 0),
+      positions:       newPositions.map(p => ({ id:p.id, symbol:p.symbol, capitalUSD:p.capitalUSD, entryPrice:p.entryPrice }))
+    };
+    await appendInvestLog(logEntry);
+
+    res.json({
+      success:          true,
+      invested:         true,
+      mode:             cfg.mode,
+      exchange:         cfg.exchange,
+      positionsOpened:  newPositions.length,
+      totalInvestedUSD: parseFloat(newPositions.reduce((s,p) => s + p.capitalUSD, 0).toFixed(2)),
+      positions:        newPositions,
+      orders
+    });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/evaluate ────────────────────────────────────────────────
+// Al completar un ciclo: evalúa posiciones abiertas y decide vender/mantener
+app.post('/api/invest/evaluate', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const { cycleId } = req.body;
+
+    const openPositions = positions.filter(p => p.status === 'open');
+    if (!openPositions.length) return res.json({ success: true, evaluations: [], message: 'Sin posiciones abiertas' });
+
+    // Obtener precios actuales reales de CoinGecko
+    const ids    = [...new Set(openPositions.map(p => p.assetId))].join(',');
+    let prices = {};
+    try {
+      const pRes = await axios.get(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`,
+        { timeout: 6000 }
+      );
+      prices = pRes.data || {};
+    } catch(_) {}
+
+    const evaluations = [];
+    const keys = await getExchangeKeys(cfg.exchange);
+
+    for (const position of openPositions) {
+      const currentPrice = prices[position.assetId]?.usd || position.currentPrice;
+      const evaluation   = investManager.evaluatePosition(position, currentPrice, cycleId, cfg);
+      const result = { positionId: position.id, symbol: position.symbol, ...evaluation, currentPrice };
+
+      if (evaluation.decision === 'sell') {
+        // Ejecutar venta
+        const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
+        investManager.closePosition(position, evaluation);
+        position.exchangeCloseOrderId = order.orderId;
+        result.sold    = true;
+        result.orderOk = order.success;
+
+        // Log de retroalimentación si fue pérdida
+        if (evaluation.algorithmFeedback && !evaluation.algorithmFeedback.predictionCorrect) {
+          result.feedback = evaluation.algorithmFeedback;
+        }
+      } else {
+        result.sold = false;
+        result.holdCycles = position.holdCycles;
+      }
+      evaluations.push(result);
+    }
+
+    // Guardar estado actualizado
+    await savePositions(positions);
+
+    const summary = investManager.buildCycleSummary(positions, cycleId, cfg);
+
+    // Registrar en log
+    const logEntry = {
+      type: 'evaluate', cycleId, timestamp: new Date().toISOString(),
+      evaluations: evaluations.length,
+      sells:       evaluations.filter(e => e.sold).length,
+      holds:       evaluations.filter(e => !e.sold).length,
+      netReturnUSD: summary.netReturnUSD,
+      netReturnPct: summary.netReturnPct
+    };
+    await appendInvestLog(logEntry);
+
+    res.json({
+      success: true,
+      evaluations,
+      summary,
+      algorithmFeedback: evaluations.filter(e => e.feedback).map(e => e.feedback)
+    });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/positions/:id/close ─────────────────────────────────────
+// Cerrar manualmente una posición
+app.post('/api/invest/positions/:id/close', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const position  = positions.find(p => p.id === req.params.id);
+    if (!position) return res.status(404).json({ success: false, error: 'Posición no encontrada' });
+    if (position.status !== 'open') return res.status(400).json({ success: false, error: 'Posición ya cerrada' });
+
+    // Precio actual real
+    let currentPrice = position.currentPrice;
+    try {
+      const pRes = await axios.get(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${position.assetId}&vs_currencies=usd`,
+        { timeout: 5000 }
+      );
+      currentPrice = pRes.data?.[position.assetId]?.usd || currentPrice;
+    } catch(_) {}
+
+    const evaluation = investManager.evaluatePosition(position, currentPrice, 'manual', cfg);
+    evaluation.reason = 'manual: cierre manual del usuario';
+    const keys = await getExchangeKeys(cfg.exchange);
+    const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
+    investManager.closePosition(position, evaluation);
+    await savePositions(positions);
+
+    res.json({ success: true, position, evaluation, order });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── GET /api/invest/log ──────────────────────────────────────────────────────
+app.get('/api/invest/log', async (_req, res) => {
+  try {
+    const log = await getInvestLog();
+    res.json({ success: true, log });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── GET /api/invest/performance ──────────────────────────────────────────────
+app.get('/api/invest/performance', async (_req, res) => {
+  try {
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const closed    = positions.filter(p => p.status === 'closed');
+    const open      = positions.filter(p => p.status === 'open');
+
+    const totalInvested  = closed.reduce((s,p) => s + (p.capitalUSD||0), 0);
+    const totalPnL       = closed.reduce((s,p) => s + (p.realizedPnL||0), 0);
+    const totalFees      = closed.reduce((s,p) => s + (p.totalFeesUSD||0), 0);
+    const netReturn      = totalPnL - totalFees;
+    const wins           = closed.filter(p => (p.realizedPnL||0) > 0);
+    const losses         = closed.filter(p => (p.realizedPnL||0) <= 0);
+    const available      = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
+
+    // Breakdown por razón de cierre
+    const closeReasons = {};
+    closed.forEach(p => {
+      const r = p.closeReason || 'unknown';
+      closeReasons[r] = (closeReasons[r] || 0) + 1;
+    });
+
+    // Feedback del algoritmo (cuántas predicciones fueron malas)
+    const badPredictions = closed.filter(p => p.algorithmFeedback && !p.algorithmFeedback.predictionCorrect);
+
+    res.json({
+      success: true,
+      mode:    cfg.mode,
+      exchange: cfg.exchange,
+      capital: {
+        total:     cfg.capitalTotal,
+        available: parseFloat(available.toFixed(2)),
+        invested:  parseFloat((cfg.capitalTotal - available).toFixed(2)),
+        unrealizedPnL: parseFloat(open.reduce((s,p) => s + (p.unrealizedPnL||0), 0).toFixed(4))
+      },
+      performance: {
+        totalOperations:  closed.length,
+        openPositions:    open.length,
+        totalInvestedUSD: parseFloat(totalInvested.toFixed(2)),
+        totalPnLUSD:      parseFloat(totalPnL.toFixed(4)),
+        totalFeesUSD:     parseFloat(totalFees.toFixed(4)),
+        netReturnUSD:     parseFloat(netReturn.toFixed(4)),
+        netReturnPct:     totalInvested > 0 ? parseFloat((netReturn/totalInvested*100).toFixed(2)) : 0,
+        winRate:          closed.length > 0 ? parseFloat((wins.length/closed.length*100).toFixed(1)) : null,
+        avgWinPct:        wins.length   > 0 ? parseFloat((wins.reduce((s,p)=>s+(p.realizedPnLPct||0),0)/wins.length).toFixed(2)) : null,
+        avgLossPct:       losses.length > 0 ? parseFloat((losses.reduce((s,p)=>s+(p.realizedPnLPct||0),0)/losses.length).toFixed(2)) : null,
+        closeReasons,
+        badPredictions:   badPredictions.length,
+        badPredictionRate: closed.length > 0 ? parseFloat((badPredictions.length/closed.length*100).toFixed(1)) : 0
+      }
+    });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/api-key ─────────────────────────────────────────────────
+// Guardar keys de exchange en Redis
+app.post('/api/invest/api-key', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  const { keyName, keyValue } = req.body;
+  const allowed = ['BINANCE_API_KEY','BINANCE_SECRET_KEY','COINBASE_API_KEY','COINBASE_SECRET_KEY'];
+  if (!allowed.includes(keyName)) return res.status(400).json({ success: false, error: 'Key no permitida' });
+  if (!keyValue?.trim()) return res.status(400).json({ success: false, error: 'Valor requerido' });
+  try {
+    await redisSet(`apikey:${keyName}`, keyValue.trim());
+    res.json({ success: true, saved: keyName });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 

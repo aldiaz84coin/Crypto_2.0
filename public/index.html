@@ -195,6 +195,7 @@
     <button onclick="setTab('validation')" id="tab-validation" class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors whitespace-nowrap px-3">✅ Validación</button>
     <button onclick="setTab('analysis')"   id="tab-analysis"   class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors whitespace-nowrap px-3">🔬 Análisis</button>
     <button onclick="setTab('status')"     id="tab-status"     class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors whitespace-nowrap px-3">🔌 APIs</button>
+    <button onclick="setTab('invest')"    id="tab-invest"     class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors whitespace-nowrap px-3">💼 Inversión</button>
   </div>
 
   <!-- ════ MONITOR ════ -->
@@ -310,6 +311,230 @@
       <div><h3 class="text-sm font-semibold text-red-400 mb-2">🔴 PREMIUM</h3><div id="apis-premium" class="space-y-2"></div></div>
     </div>
   </div>
+
+  <!-- ════ INVERSIÓN ════ -->
+  <div id="content-invest" class="tab-content">
+
+    <!-- Header con modo badge -->
+    <div class="flex flex-wrap justify-between items-center mb-4 gap-3">
+      <div class="flex items-center gap-3">
+        <h2 class="text-xl font-semibold">💼 Módulo de Inversión</h2>
+        <span id="inv-mode-badge" class="pill bg-blue-900 text-blue-300">⚗️ Simulado</span>
+        <span id="inv-exchange-badge" class="pill bg-gray-800 text-gray-300">Binance</span>
+      </div>
+      <div class="flex gap-2">
+        <button onclick="loadInvestData()" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">🔄 Actualizar</button>
+        <button onclick="openTab('inv-config')" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm">⚙️ Configurar</button>
+        <button onclick="pingExchange()" class="bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm">🔗 Test Exchange</button>
+      </div>
+    </div>
+
+    <!-- Alerta modo real -->
+    <div id="inv-real-warning" class="hidden bg-red-950 border border-red-700 rounded-xl p-4 mb-4">
+      <p class="text-red-400 font-semibold">⚠️ MODO REAL ACTIVO — Las operaciones se ejecutarán con dinero real</p>
+      <p class="text-red-300 text-sm mt-1">Asegúrate de que las claves de exchange son correctas y el capital configurado es el deseado.</p>
+    </div>
+
+    <!-- Sub-tabs -->
+    <div class="flex gap-1 mb-5 bg-gray-900 p-1 rounded-xl border border-gray-800">
+      <button onclick="openTab('inv-overview')"    id="invtab-inv-overview"    class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">📊 Resumen</button>
+      <button onclick="openTab('inv-positions')"   id="invtab-inv-positions"   class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">📋 Posiciones</button>
+      <button onclick="openTab('inv-performance')" id="invtab-inv-performance" class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">📈 Rendimiento</button>
+      <button onclick="openTab('inv-config')"      id="invtab-inv-config"      class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">⚙️ Config</button>
+      <button onclick="openTab('inv-log')"         id="invtab-inv-log"         class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">📜 Log</button>
+    </div>
+
+    <!-- Resumen -->
+    <div id="inv-overview" class="inv-subtab">
+      <div id="inv-capital-grid" class="grid grid-cols-4 gap-3 mb-5"></div>
+      <!-- Decisión manual (con datos del monitor) -->
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-5">
+        <div class="flex justify-between items-center mb-3">
+          <div>
+            <p class="font-semibold">🤖 Decisión de inversión</p>
+            <p class="text-xs text-gray-500 mt-0.5">Basada en el snapshot actual del monitor</p>
+          </div>
+          <button onclick="decideCycle()" id="btn-decide"
+            class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-40">
+            🎯 Analizar & Decidir
+          </button>
+        </div>
+        <div id="inv-decision" class="text-gray-500 text-sm">Haz click en "Analizar & Decidir" con activos cargados en el monitor.</div>
+      </div>
+      <!-- Posiciones abiertas resumen -->
+      <div>
+        <p class="text-sm font-semibold mb-3">🔓 Posiciones abiertas</p>
+        <div id="inv-open-summary"><p class="text-gray-500 text-sm">Sin posiciones abiertas.</p></div>
+      </div>
+    </div>
+
+    <!-- Posiciones -->
+    <div id="inv-positions" class="inv-subtab hidden">
+      <div class="flex justify-between items-center mb-4">
+        <p class="font-semibold">Todas las posiciones</p>
+        <button onclick="evaluateCycle()" class="bg-orange-700 hover:bg-orange-600 px-4 py-2 rounded-lg text-sm font-semibold">
+          ⚖️ Evaluar ciclo actual
+        </button>
+      </div>
+      <div id="inv-positions-open" class="mb-5">
+        <p class="text-xs font-semibold text-green-400 mb-2">ABIERTAS</p>
+        <div id="inv-pos-open-list"><p class="text-gray-500 text-sm">—</p></div>
+      </div>
+      <div id="inv-positions-closed">
+        <p class="text-xs font-semibold text-gray-400 mb-2">CERRADAS (últimas 20)</p>
+        <div id="inv-pos-closed-list"><p class="text-gray-500 text-sm">—</p></div>
+      </div>
+    </div>
+
+    <!-- Rendimiento -->
+    <div id="inv-performance" class="inv-subtab hidden">
+      <div id="inv-perf-content"><p class="text-gray-500 text-sm">Cargando rendimiento...</p></div>
+    </div>
+
+    <!-- Config -->
+    <div id="inv-config" class="inv-subtab hidden">
+      <div class="space-y-5">
+        <!-- Modo y Exchange -->
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+          <h3 class="font-semibold text-blue-400 mb-4">🔧 Modo de operación</h3>
+          <div class="grid grid-cols-2 gap-5">
+            <div>
+              <p class="text-xs text-gray-400 mb-2">Modo</p>
+              <div class="flex gap-2">
+                <button onclick="setInvestMode('simulated')" id="imode-simulated"
+                  class="imode-btn flex-1 py-2 rounded-lg text-sm font-semibold bg-blue-700 text-white">⚗️ Simulado</button>
+                <button onclick="setInvestMode('testnet')" id="imode-testnet"
+                  class="imode-btn flex-1 py-2 rounded-lg text-sm font-semibold bg-gray-700 text-gray-300">🧪 Testnet</button>
+                <button onclick="setInvestMode('real')" id="imode-real"
+                  class="imode-btn flex-1 py-2 rounded-lg text-sm font-semibold bg-gray-700 text-gray-300">💵 Real</button>
+              </div>
+            </div>
+            <div>
+              <p class="text-xs text-gray-400 mb-2">Exchange</p>
+              <div class="flex gap-2">
+                <button onclick="setInvestExchange('binance')" id="iex-binance"
+                  class="iex-btn flex-1 py-2 rounded-lg text-sm font-semibold bg-yellow-700 text-white">🟡 Binance</button>
+                <button onclick="setInvestExchange('coinbase')" id="iex-coinbase"
+                  class="iex-btn flex-1 py-2 rounded-lg text-sm font-semibold bg-gray-700 text-gray-300">🔵 Coinbase</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- API Keys de Exchange -->
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+          <h3 class="font-semibold text-yellow-400 mb-4">🔑 Claves del Exchange</h3>
+          <p class="text-xs text-gray-500 mb-3">Las claves se guardan en Redis (encriptadas). Para testnet de Binance: <a href="https://testnet.binance.vision" target="_blank" class="text-blue-400">testnet.binance.vision</a></p>
+          <div class="grid grid-cols-2 gap-4">
+            <div>
+              <label class="text-xs text-gray-400">Binance API Key</label>
+              <div class="flex gap-2 mt-1">
+                <input type="password" id="binance-api-key" placeholder="Pega tu API key..."
+                  class="flex-1 bg-gray-800 rounded-lg px-3 py-2 text-sm mono"/>
+                <button onclick="saveExchangeKey('BINANCE_API_KEY','binance-api-key')"
+                  class="bg-yellow-700 hover:bg-yellow-600 px-3 py-2 rounded-lg text-xs font-semibold">💾</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">Binance Secret Key</label>
+              <div class="flex gap-2 mt-1">
+                <input type="password" id="binance-secret-key" placeholder="Pega tu Secret key..."
+                  class="flex-1 bg-gray-800 rounded-lg px-3 py-2 text-sm mono"/>
+                <button onclick="saveExchangeKey('BINANCE_SECRET_KEY','binance-secret-key')"
+                  class="bg-yellow-700 hover:bg-yellow-600 px-3 py-2 rounded-lg text-xs font-semibold">💾</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">Coinbase API Key</label>
+              <div class="flex gap-2 mt-1">
+                <input type="password" id="coinbase-api-key" placeholder="Pega tu API key..."
+                  class="flex-1 bg-gray-800 rounded-lg px-3 py-2 text-sm mono"/>
+                <button onclick="saveExchangeKey('COINBASE_API_KEY','coinbase-api-key')"
+                  class="bg-blue-700 hover:bg-blue-600 px-3 py-2 rounded-lg text-xs font-semibold">💾</button>
+              </div>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">Coinbase Secret Key</label>
+              <div class="flex gap-2 mt-1">
+                <input type="password" id="coinbase-secret-key" placeholder="Pega tu Secret key..."
+                  class="flex-1 bg-gray-800 rounded-lg px-3 py-2 text-sm mono"/>
+                <button onclick="saveExchangeKey('COINBASE_SECRET_KEY','coinbase-secret-key')"
+                  class="bg-blue-700 hover:bg-blue-600 px-3 py-2 rounded-lg text-xs font-semibold">💾</button>
+              </div>
+            </div>
+          </div>
+          <div id="exchange-key-msg" class="text-sm mt-2"></div>
+        </div>
+
+        <!-- Parámetros de inversión -->
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+          <h3 class="font-semibold text-green-400 mb-4">💰 Parámetros de inversión</h3>
+          <div class="grid grid-cols-2 gap-5">
+            <div>
+              <label class="text-xs text-gray-400">Capital total (USD): <span id="ic-capital-v" class="text-white font-bold">$1000</span></label>
+              <input type="number" id="ic-capital" value="1000" min="10" max="1000000" step="10"
+                oninput="document.getElementById('ic-capital-v').textContent='$'+this.value"
+                class="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm mono mt-1"/>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">Capital por ciclo: <span id="ic-percycle-v" class="text-white font-bold">30%</span></label>
+              <input type="range" id="ic-percycle" min="5" max="100" step="5" value="30"
+                oninput="document.getElementById('ic-percycle-v').textContent=this.value+'%'" class="w-full mt-2"/>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">Posiciones máximas por ciclo: <span id="ic-maxpos-v" class="text-white font-bold">3</span></label>
+              <input type="range" id="ic-maxpos" min="1" max="10" step="1" value="3"
+                oninput="document.getElementById('ic-maxpos-v').textContent=this.value" class="w-full mt-2"/>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">Mínimo de señales para operar: <span id="ic-minsig-v" class="text-white font-bold">2</span></label>
+              <input type="range" id="ic-minsig" min="1" max="5" step="1" value="2"
+                oninput="document.getElementById('ic-minsig-v').textContent=this.value" class="w-full mt-2"/>
+            </div>
+          </div>
+        </div>
+
+        <!-- Umbrales de decisión -->
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
+          <h3 class="font-semibold text-orange-400 mb-4">🎯 Umbrales de venta</h3>
+          <div class="grid grid-cols-2 gap-5">
+            <div>
+              <label class="text-xs text-gray-400">Take Profit: <span id="ic-tp-v" class="text-green-400 font-bold">+10%</span></label>
+              <input type="range" id="ic-tp" min="2" max="50" step="1" value="10"
+                oninput="document.getElementById('ic-tp-v').textContent='+'+this.value+'%'" class="w-full mt-2"/>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">Stop Loss: <span id="ic-sl-v" class="text-red-400 font-bold">−5%</span></label>
+              <input type="range" id="ic-sl" min="1" max="30" step="1" value="5"
+                oninput="document.getElementById('ic-sl-v').textContent='−'+this.value+'%'" class="w-full mt-2"/>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">Ciclos máx. sin vender: <span id="ic-hold-v" class="text-yellow-400 font-bold">3</span></label>
+              <input type="range" id="ic-hold" min="1" max="10" step="1" value="3"
+                oninput="document.getElementById('ic-hold-v').textContent=this.value" class="w-full mt-2"/>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400">BoostPower mínimo para invertir: <span id="ic-bp-v" class="text-blue-400 font-bold">65%</span></label>
+              <input type="range" id="ic-bp" min="50" max="90" step="5" value="65"
+                oninput="document.getElementById('ic-bp-v').textContent=this.value+'%'" class="w-full mt-2"/>
+            </div>
+          </div>
+        </div>
+
+        <div class="flex gap-3">
+          <button onclick="saveInvestConfig()" class="bg-green-700 hover:bg-green-600 px-6 py-2 rounded-lg font-semibold">💾 Guardar configuración</button>
+        </div>
+        <div id="inv-config-msg" class="text-sm"></div>
+      </div>
+    </div>
+
+    <!-- Log -->
+    <div id="inv-log" class="inv-subtab hidden">
+      <p class="text-sm font-semibold mb-3">📜 Log de operaciones</p>
+      <div id="inv-log-content"><p class="text-gray-500 text-sm">Cargando...</p></div>
+    </div>
+
+  </div><!-- /content-invest -->
 
 </div><!-- /container -->
 
@@ -1153,7 +1378,430 @@ function timeAgo(iso) {
   if (d<60) return d+'min'; if (d<1440) return Math.floor(d/60)+'h'; return Math.floor(d/1440)+'d';
 }
 
-window.onload = () => init();
+// ═══════════════════════════════════════════════════════════════
+// MÓDULO DE INVERSIÓN v4
+// ═══════════════════════════════════════════════════════════════
+let investConfig  = null;
+let investCurrentSubtab = 'inv-overview';
+
+// ── Navegación sub-tabs ──────────────────────────────────────────
+function openTab(tab) {
+  document.querySelectorAll('.inv-subtab').forEach(el => el.classList.add('hidden'));
+  document.querySelectorAll('.invtab').forEach(el => {
+    el.classList.remove('bg-gray-800','text-white');
+    el.classList.add('text-gray-400');
+  });
+  const el = document.getElementById(tab);
+  if (el) el.classList.remove('hidden');
+  const btn = document.getElementById('invtab-' + tab);
+  if (btn) { btn.classList.add('bg-gray-800','text-white'); btn.classList.remove('text-gray-400'); }
+  investCurrentSubtab = tab;
+  if (tab === 'inv-overview')    loadInvestOverview();
+  if (tab === 'inv-positions')   loadInvestPositions();
+  if (tab === 'inv-performance') loadInvestPerformance();
+  if (tab === 'inv-log')         loadInvestLog();
+}
+
+// ── Carga inicial del módulo ─────────────────────────────────────
+async function loadInvestData() {
+  try {
+    const r = await fetch('/api/invest/config');
+    const d = await r.json();
+    if (d.success) { investConfig = d.config; applyInvestConfigToUI(); }
+  } catch(_) {}
+  openTab(investCurrentSubtab);
+}
+
+function applyInvestConfigToUI() {
+  if (!investConfig) return;
+  const c = investConfig;
+  // Mode buttons
+  ['simulated','testnet','real'].forEach(m => {
+    const btn = document.getElementById('imode-' + m);
+    if (btn) { btn.classList.toggle('bg-blue-700', m === c.mode); btn.classList.toggle('bg-gray-700', m !== c.mode); btn.classList.toggle('text-white', m === c.mode); }
+  });
+  // Exchange buttons
+  ['binance','coinbase'].forEach(ex => {
+    const btn = document.getElementById('iex-' + ex);
+    if (btn) { btn.classList.toggle('bg-yellow-700', ex === 'binance' && c.exchange === ex); btn.classList.toggle('bg-blue-700', ex === 'coinbase' && c.exchange === ex); btn.classList.toggle('bg-gray-700', c.exchange !== ex); btn.classList.toggle('text-white', c.exchange === ex); }
+  });
+  // Sliders/inputs
+  const set = (id, val, lbId, fmt) => { const el=document.getElementById(id); const lb=document.getElementById(lbId); if(el) el.value=val; if(lb) lb.textContent=fmt(val); };
+  set('ic-capital',  c.capitalTotal,                 'ic-capital-v',  v => '$'+v);
+  set('ic-percycle', Math.round((c.capitalPerCycle||0.3)*100), 'ic-percycle-v', v => v+'%');
+  set('ic-maxpos',   c.maxPositions,                 'ic-maxpos-v',   v => v);
+  set('ic-minsig',   c.minSignals,                   'ic-minsig-v',   v => v);
+  set('ic-tp',       c.takeProfitPct,                'ic-tp-v',       v => '+'+v+'%');
+  set('ic-sl',       c.stopLossPct,                  'ic-sl-v',       v => '−'+v+'%');
+  set('ic-hold',     c.maxHoldCycles,                'ic-hold-v',     v => v);
+  set('ic-bp',       Math.round((c.minBoostPower||0.65)*100), 'ic-bp-v', v => v+'%');
+  // Mode badge
+  const badge = document.getElementById('inv-mode-badge');
+  if (badge) { badge.textContent = c.mode === 'simulated' ? '⚗️ Simulado' : c.mode === 'testnet' ? '🧪 Testnet' : '💵 Real'; badge.className = 'pill ' + (c.mode==='real'?'bg-red-900 text-red-300':c.mode==='testnet'?'bg-yellow-900 text-yellow-300':'bg-blue-900 text-blue-300'); }
+  const exBadge = document.getElementById('inv-exchange-badge');
+  if (exBadge) exBadge.textContent = (c.exchange||'binance').charAt(0).toUpperCase()+(c.exchange||'binance').slice(1);
+  document.getElementById('inv-real-warning')?.classList.toggle('hidden', c.mode !== 'real');
+}
+
+function setInvestMode(mode) {
+  investConfig = { ...(investConfig||{}), mode };
+  applyInvestConfigToUI();
+}
+function setInvestExchange(exchange) {
+  investConfig = { ...(investConfig||{}), exchange };
+  applyInvestConfigToUI();
+}
+
+// ── Resumen / Overview ───────────────────────────────────────────
+async function loadInvestOverview() {
+  try {
+    const r = await fetch('/api/invest/positions');
+    const d = await r.json();
+    if (!d.success) return;
+    const s = d.summary;
+    document.getElementById('inv-capital-grid').innerHTML = `
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+        <p class="text-xs text-gray-500">Capital Total</p><p class="text-2xl font-bold text-white mono">$${s.capitalTotal.toFixed(0)}</p>
+        <p class="text-xs text-gray-600 mt-1">${(investConfig?.mode||'simulated')==='simulated'?'⚗️ Simulado':'💵 Real'}</p>
+      </div>
+      <div class="bg-green-950 border border-green-900 rounded-xl p-4 text-center">
+        <p class="text-xs text-gray-500">Disponible</p><p class="text-2xl font-bold text-green-400 mono">$${s.capitalAvailable.toFixed(2)}</p>
+        <p class="text-xs text-gray-600 mt-1">${((s.capitalAvailable/s.capitalTotal)*100).toFixed(0)}% libre</p>
+      </div>
+      <div class="bg-blue-950 border border-blue-900 rounded-xl p-4 text-center">
+        <p class="text-xs text-gray-500">En posiciones</p><p class="text-2xl font-bold text-blue-400 mono">$${s.capitalInvested.toFixed(2)}</p>
+        <p class="text-xs text-gray-600 mt-1">${s.openPositions} abierta${s.openPositions!==1?'s':''}</p>
+      </div>
+      <div class="${s.totalUnrealizedPnL>=0?'bg-green-950 border-green-900':'bg-red-950 border-red-900'} border rounded-xl p-4 text-center">
+        <p class="text-xs text-gray-500">P&L No Realizado</p>
+        <p class="text-2xl font-bold ${s.totalUnrealizedPnL>=0?'text-green-400':'text-red-400'} mono">${s.totalUnrealizedPnL>=0?'+':''}$${s.totalUnrealizedPnL.toFixed(2)}</p>
+        <p class="text-xs text-gray-600 mt-1">Posiciones abiertas</p>
+      </div>`;
+
+    // Posiciones abiertas en resumen
+    const openDiv = document.getElementById('inv-open-summary');
+    if (d.open.length === 0) {
+      openDiv.innerHTML = '<p class="text-gray-500 text-sm">Sin posiciones abiertas.</p>';
+    } else {
+      openDiv.innerHTML = d.open.map(p => renderPositionCard(p, true)).join('');
+    }
+  } catch(e) { console.error(e); }
+}
+
+// ── Decidir inversión ────────────────────────────────────────────
+async function decideCycle() {
+  if (!cryptos?.length) {
+    document.getElementById('inv-decision').innerHTML = '<p class="text-yellow-400 text-sm">⚠️ Primero carga activos en el Monitor.</p>';
+    return;
+  }
+  document.getElementById('inv-decision').innerHTML = '<p class="text-gray-400 text-sm">⏳ Analizando...</p>';
+  try {
+    const r = await fetch('/api/invest/decide', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ snapshot: cryptos })
+    });
+    const d = await r.json();
+    renderDecision(d);
+  } catch(e) { document.getElementById('inv-decision').innerHTML = `<p class="text-red-400 text-sm">❌ ${e.message}</p>`; }
+}
+
+function renderDecision(d) {
+  const div = document.getElementById('inv-decision');
+  if (!d.shouldInvest) {
+    div.innerHTML = `
+      <div class="bg-yellow-950 border border-yellow-800 rounded-xl p-4">
+        <p class="text-yellow-400 font-semibold">⏸️ No invertir en este ciclo</p>
+        <p class="text-gray-400 text-sm mt-1">${d.reason}</p>
+        <p class="text-gray-500 text-sm mt-1">Capital disponible: $${d.capitalAvailable?.toFixed(2)||'—'} → se mantiene en ${investConfig?.stableCoin||'USDT'}</p>
+      </div>`;
+    return;
+  }
+  const cols = d.targets.map(t => `
+    <div class="bg-gray-800 rounded-xl p-4 border-l-4 border-green-600">
+      <div class="flex justify-between items-start mb-2">
+        <div>
+          <p class="font-bold">${t.name} <span class="text-gray-400 mono text-xs">${t.symbol.toUpperCase()}</span></p>
+          <p class="text-xs text-gray-500">#${t.rank} · BP ${t.boostPowerPct}% · ${t.classification}</p>
+        </div>
+        <div class="text-right">
+          <p class="text-green-400 font-bold">$${t.capitalUSD}</p>
+          <p class="text-xs text-gray-500">${t.weight}% del ciclo</p>
+        </div>
+      </div>
+      <div class="grid grid-cols-3 gap-2 text-xs mt-2">
+        <div class="bg-gray-900 rounded p-1.5 text-center"><p class="text-gray-500">Entrada</p><p class="mono font-medium">$${fmt(t.entryPrice)}</p></div>
+        <div class="bg-green-950 rounded p-1.5 text-center"><p class="text-gray-500">Take Profit</p><p class="text-green-400 mono font-medium">$${fmt(t.takeProfitPrice)}</p></div>
+        <div class="bg-red-950 rounded p-1.5 text-center"><p class="text-gray-500">Stop Loss</p><p class="text-red-400 mono font-medium">$${fmt(t.stopLossPrice)}</p></div>
+      </div>
+      <p class="text-xs text-gray-500 mt-2">Predicción: +${t.predictedChange}% · Fee est.: $${t.expectedFeeUSD}</p>
+    </div>`).join('');
+
+  div.innerHTML = `
+    <div class="mb-3">
+      <p class="text-green-400 font-semibold mb-1">✅ ${d.targets.length} inversión${d.targets.length!==1?'es':''} recomendada${d.targets.length!==1?'s':''}</p>
+      <p class="text-gray-400 text-sm">${d.reason} · Capital del ciclo: $${d.cycleCapital} · Modo: ${d.mode}</p>
+    </div>
+    <div class="grid grid-cols-${Math.min(d.targets.length,3)} gap-3 mb-4">${cols}</div>
+    <button onclick="executeInvestment()" class="w-full bg-green-700 hover:bg-green-600 py-3 rounded-xl font-bold text-lg">
+      ${d.mode==='simulated'?'⚗️ Ejecutar (Simulado)':'💵 Ejecutar INVERSIÓN REAL'}
+    </button>`;
+
+  // Guardar targets para ejecutar
+  window._pendingTargets = d;
+}
+
+async function executeInvestment() {
+  if (!window._pendingTargets?.shouldInvest) return;
+  const btn = event.currentTarget;
+  btn.disabled = true; btn.textContent = '⏳ Ejecutando...';
+  try {
+    const r = await fetch('/api/invest/execute', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ snapshot: cryptos, cycleId: null })
+    });
+    const d = await r.json();
+    if (d.success && d.invested) {
+      document.getElementById('inv-decision').innerHTML = `
+        <div class="bg-green-950 border border-green-800 rounded-xl p-4">
+          <p class="text-green-400 font-bold">✅ ${d.positionsOpened} posición${d.positionsOpened!==1?'es':''} ${d.mode==='simulated'?'simulada':'abierta'}${d.positionsOpened!==1?'s':''}</p>
+          <p class="text-gray-400 text-sm mt-1">Total invertido: $${d.totalInvestedUSD} · Exchange: ${d.exchange} · Modo: ${d.mode}</p>
+        </div>`;
+      await loadInvestOverview();
+    } else {
+      document.getElementById('inv-decision').innerHTML = `<p class="text-red-400 text-sm">❌ ${d.reason||d.error}</p>`;
+      btn.disabled = false; btn.textContent = d.mode==='simulated'?'⚗️ Ejecutar (Simulado)':'💵 Ejecutar INVERSIÓN REAL';
+    }
+  } catch(e) { btn.disabled=false; btn.textContent='Error — Reintentar'; }
+}
+
+// ── Posiciones ───────────────────────────────────────────────────
+async function loadInvestPositions() {
+  try {
+    const r = await fetch('/api/invest/positions');
+    const d = await r.json();
+    if (!d.success) return;
+    document.getElementById('inv-pos-open-list').innerHTML =
+      d.open.length ? d.open.map(p => renderPositionCard(p, true)).join('') : '<p class="text-gray-500 text-sm">Sin posiciones abiertas</p>';
+    document.getElementById('inv-pos-closed-list').innerHTML =
+      d.closed.length ? d.closed.map(p => renderPositionCard(p, false)).join('') : '<p class="text-gray-500 text-sm">Sin posiciones cerradas</p>';
+  } catch(e) {}
+}
+
+function renderPositionCard(p, isOpen) {
+  const pnl    = isOpen ? p.unrealizedPnL : p.realizedPnL;
+  const pnlPct = isOpen ? p.unrealizedPnLPct : p.realizedPnLPct;
+  const pnlPos = (pnl||0) >= 0;
+  const border = pnlPos ? 'border-green-800' : 'border-red-800';
+  const pnlColor = pnlPos ? 'text-green-400' : 'text-red-400';
+  const modeBadge = p.mode==='simulated' ? '<span class="pill bg-blue-950 text-blue-400 text-xs">⚗️ SIM</span>' : p.mode==='testnet' ? '<span class="pill bg-yellow-950 text-yellow-400 text-xs">🧪 TEST</span>' : '<span class="pill bg-red-950 text-red-400 text-xs">💵 REAL</span>';
+  return `
+    <div class="bg-gray-900 rounded-xl border ${border} border p-4 mb-2">
+      <div class="flex justify-between items-start">
+        <div>
+          <div class="flex items-center gap-2 mb-1">
+            <span class="font-bold">${p.name}</span>
+            <span class="text-gray-500 mono text-xs">${(p.symbol||'').toUpperCase()}</span>
+            ${modeBadge}
+            ${isOpen ? '<span class="pill bg-green-900 text-green-300 text-xs">ABIERTA</span>' : `<span class="pill bg-gray-800 text-gray-400 text-xs">${p.closeReason||'cerrada'}</span>`}
+          </div>
+          <div class="text-xs text-gray-500 space-y-0.5">
+            <p>Entrada: <span class="mono text-white">$${fmt(p.entryPrice)}</span> · ${isOpen ? `Actual: <span class="mono text-white">$${fmt(p.currentPrice)}</span>` : `Cierre: <span class="mono text-white">$${fmt(p.currentPrice)}</span>`}</p>
+            <p>Capital: <span class="mono text-white">$${p.capitalUSD}</span> · Fees: <span class="mono text-yellow-400">$${(p.totalFeesUSD||p.entryFeeUSD||0).toFixed(4)}</span> · ${p.exchange}</p>
+            <p>TP: <span class="mono text-green-400">$${fmt(p.takeProfitPrice)}</span> · SL: <span class="mono text-red-400">$${fmt(p.stopLossPrice)}</span>${isOpen ? ` · Hold: ${p.holdCycles}/${p.maxHoldCycles}` : ''}</p>
+          </div>
+        </div>
+        <div class="text-right">
+          <p class="${pnlColor} text-xl font-bold mono">${pnlPos?'+':''}${(pnlPct||0).toFixed(2)}%</p>
+          <p class="${pnlColor} text-sm mono">${pnlPos?'+':''}$${(pnl||0).toFixed(4)}</p>
+          ${isOpen ? `<button onclick="closePosition('${p.id}')" class="mt-2 bg-red-900 hover:bg-red-800 px-3 py-1 rounded text-xs text-red-300">Cerrar</button>` : ''}
+        </div>
+      </div>
+      ${p.algorithmFeedback && !p.algorithmFeedback.predictionCorrect ? `
+        <div class="mt-3 pt-3 border-t border-gray-800 bg-red-950/30 rounded-lg p-2">
+          <p class="text-xs text-red-400 font-semibold">⚠️ Predicción incorrecta — retroalimentación al algoritmo</p>
+          <p class="text-xs text-gray-400">Predicho: +${p.algorithmFeedback.predictedChange}% · Real: ${p.algorithmFeedback.actualChange}% · Error: ${p.algorithmFeedback.errorMagnitude}%</p>
+          ${p.algorithmFeedback.suggestion ? `<p class="text-xs text-yellow-400 mt-0.5">→ ${p.algorithmFeedback.suggestion}</p>` : ''}
+        </div>` : ''}
+    </div>`;
+}
+
+async function closePosition(id) {
+  if (!confirm('¿Cerrar esta posición manualmente?')) return;
+  try {
+    const r = await fetch(`/api/invest/positions/${id}/close`, { method:'POST' });
+    const d = await r.json();
+    if (d.success) { await loadInvestPositions(); await loadInvestOverview(); }
+    else alert('❌ ' + d.error);
+  } catch(e) { alert('❌ ' + e.message); }
+}
+
+// ── Evaluar ciclo ────────────────────────────────────────────────
+async function evaluateCycle() {
+  try {
+    const r = await fetch('/api/invest/evaluate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ cycleId: null })
+    });
+    const d = await r.json();
+    if (!d.success) { alert('❌ ' + d.error); return; }
+    const sells = d.evaluations.filter(e => e.sold).length;
+    const holds = d.evaluations.filter(e => !e.sold).length;
+    alert(`Evaluación completada:
+✅ Vendidas: ${sells}
+⏸️ Mantenidas: ${holds}
+P&L neto: $${d.summary?.netReturnUSD??'—'} (${d.summary?.netReturnPct??'—'}%)`);
+    await loadInvestPositions(); await loadInvestOverview();
+  } catch(e) { alert('❌ '+e.message); }
+}
+
+// ── Rendimiento ──────────────────────────────────────────────────
+async function loadInvestPerformance() {
+  const div = document.getElementById('inv-perf-content');
+  try {
+    const r = await fetch('/api/invest/performance');
+    const d = await r.json();
+    if (!d.success) { div.innerHTML=`<p class="text-red-400 text-sm">❌ ${d.error}</p>`; return; }
+    const p = d.performance, cap = d.capital;
+    const netColor = p.netReturnPct >= 0 ? 'text-green-400' : 'text-red-400';
+    div.innerHTML = `
+      <div class="grid grid-cols-3 gap-3 mb-5">
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+          <p class="text-xs text-gray-500">Retorno Neto Total</p>
+          <p class="text-2xl font-bold ${netColor} mono">${p.netReturnPct>=0?'+':''}${p.netReturnPct}%</p>
+          <p class="text-sm ${netColor} mono">${p.netReturnUSD>=0?'+':''}$${p.netReturnUSD}</p>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+          <p class="text-xs text-gray-500">Win Rate</p>
+          <p class="text-2xl font-bold text-blue-400 mono">${p.winRate??'—'}%</p>
+          <p class="text-xs text-gray-500">${p.totalOperations} operaciones</p>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center">
+          <p class="text-xs text-gray-500">Capital Libre</p>
+          <p class="text-2xl font-bold text-white mono">$${cap.available.toFixed(2)}</p>
+          <p class="text-xs text-gray-500">de $${cap.total}</p>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-3 mb-5">
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p class="text-xs font-semibold text-green-400 mb-2">Ganancia promedio</p>
+          <p class="text-xl font-bold text-green-400 mono">+${p.avgWinPct??'—'}%</p>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p class="text-xs font-semibold text-red-400 mb-2">Pérdida promedio</p>
+          <p class="text-xl font-bold text-red-400 mono">${p.avgLossPct??'—'}%</p>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p class="text-xs font-semibold text-yellow-400 mb-2">Fees totales</p>
+          <p class="text-xl font-bold text-yellow-400 mono">$${p.totalFeesUSD}</p>
+        </div>
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+          <p class="text-xs font-semibold text-red-400 mb-2">Predicciones malas</p>
+          <p class="text-xl font-bold text-red-400 mono">${p.badPredictions} <span class="text-sm text-gray-400">(${p.badPredictionRate}%)</span></p>
+        </div>
+      </div>
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+        <p class="text-xs font-semibold mb-3">Razones de cierre</p>
+        <div class="flex flex-wrap gap-2">${Object.entries(p.closeReasons||{}).map(([r,n])=>`<span class="pill bg-gray-800 text-gray-300">${r}: ${n}</span>`).join('')}</div>
+      </div>`;
+  } catch(e) { div.innerHTML=`<p class="text-red-400 text-sm">❌ ${e.message}</p>`; }
+}
+
+// ── Log ──────────────────────────────────────────────────────────
+async function loadInvestLog() {
+  const div = document.getElementById('inv-log-content');
+  try {
+    const r = await fetch('/api/invest/log');
+    const d = await r.json();
+    if (!d.success || !d.log.length) { div.innerHTML='<p class="text-gray-500 text-sm">Sin operaciones registradas.</p>'; return; }
+    div.innerHTML = d.log.map(entry => {
+      const typeColors = { invest:'green', evaluate:'blue', no_invest:'yellow' };
+      const col = typeColors[entry.type] || 'gray';
+      const icons = { invest:'💰', evaluate:'⚖️', no_invest:'⏸️' };
+      return `<div class="bg-gray-900 rounded-xl p-3 mb-2 border border-gray-800 border-l-4 border-${col}-700">
+        <div class="flex justify-between items-center">
+          <span class="font-semibold text-sm">${icons[entry.type]||'📋'} ${entry.type==='invest'?`Inversión — ${entry.positionsOpened} posiciones ($${(entry.totalInvested||0).toFixed(2)})`:entry.type==='evaluate'?`Evaluación — ${entry.sells||0} ventas, ${entry.holds||0} mantenidas · ${entry.netReturnPct||0}%`:'Sin inversión — '+entry.reason}</span>
+          <span class="text-xs text-gray-500">${timeAgo(entry.timestamp)}</span>
+        </div>
+        ${entry.mode?`<p class="text-xs text-gray-500 mt-1">${entry.mode} · ${entry.exchange}</p>`:''}
+      </div>`;
+    }).join('');
+  } catch(e) { div.innerHTML=`<p class="text-red-400 text-sm">❌ ${e.message}</p>`; }
+}
+
+// ── Guardar config ───────────────────────────────────────────────
+async function saveInvestConfig() {
+  const cfg = {
+    mode:           investConfig?.mode || 'simulated',
+    exchange:       investConfig?.exchange || 'binance',
+    capitalTotal:   parseFloat(document.getElementById('ic-capital')?.value || 1000),
+    capitalPerCycle: parseInt(document.getElementById('ic-percycle')?.value || 30) / 100,
+    maxPositions:   parseInt(document.getElementById('ic-maxpos')?.value || 3),
+    minSignals:     parseInt(document.getElementById('ic-minsig')?.value || 2),
+    takeProfitPct:  parseInt(document.getElementById('ic-tp')?.value || 10),
+    stopLossPct:    parseInt(document.getElementById('ic-sl')?.value || 5),
+    maxHoldCycles:  parseInt(document.getElementById('ic-hold')?.value || 3),
+    minBoostPower:  parseInt(document.getElementById('ic-bp')?.value || 65) / 100,
+    stableCoin:     'USDT',
+    diversification: true,
+    feePct:         0.10,
+    apiCostPerCycle: 0.02
+  };
+  const msg = document.getElementById('inv-config-msg');
+  try {
+    const r = await fetch('/api/invest/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(cfg) });
+    const d = await r.json();
+    if (d.success) { investConfig=d.config; applyInvestConfigToUI(); msg.innerHTML='<span class="text-green-400">✅ Guardado</span>'; }
+    else msg.innerHTML=`<span class="text-red-400">❌ ${d.error}</span>`;
+  } catch(e) { msg.innerHTML=`<span class="text-red-400">❌ ${e.message}</span>`; }
+  setTimeout(()=>{ if(msg) msg.innerHTML=''; }, 3000);
+}
+
+// ── Guardar API key de exchange ──────────────────────────────────
+async function saveExchangeKey(keyName, inputId) {
+  const keyValue = document.getElementById(inputId)?.value?.trim();
+  const msg = document.getElementById('exchange-key-msg');
+  if (!keyValue) { msg.innerHTML='<span class="text-red-400">Introduce una key válida</span>'; return; }
+  try {
+    const r = await fetch('/api/invest/api-key', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({keyName, keyValue}) });
+    const d = await r.json();
+    if (d.success) { document.getElementById(inputId).value=''; msg.innerHTML=`<span class="text-green-400">✅ ${keyName} guardada</span>`; }
+    else msg.innerHTML=`<span class="text-red-400">❌ ${d.error}</span>`;
+  } catch(e) { msg.innerHTML=`<span class="text-red-400">❌ ${e.message}</span>`; }
+  setTimeout(()=>{ if(msg) msg.innerHTML=''; }, 3000);
+}
+
+// ── Test de exchange ─────────────────────────────────────────────
+async function pingExchange() {
+  try {
+    const r = await fetch('/api/invest/exchange/ping');
+    const d = await r.json();
+    const msg = d.connected
+      ? `✅ ${d.exchange} conectado · ${d.mode==='simulated'?'Modo simulado':'Modo '+(d.testnet?'testnet':'REAL')} · USDT: $${(d.usdtBalance||d.usdBalance||0).toFixed(2)}`
+      : `❌ ${d.exchange}: ${d.error}`;
+    alert(msg);
+  } catch(e) { alert('❌ ' + e.message); }
+}
+
+// ── Integrar con ciclos: auto-ejecutar al iniciar/completar ──────
+// Sobreescribir confirmCycle para auto-ejecutar si inversión activa
+const _baseConfirmCycle = confirmCycle;
+async function confirmCycle() {
+  await _baseConfirmCycle();
+  // Si inversión configurada, decidir y ejecutar automáticamente
+  if (investConfig?.mode && cryptos?.length > 0) {
+    try {
+      const cycId = (await (await fetch('/api/cycles/active')).json()).cycles?.[0]?.id;
+      if (cycId) {
+        await fetch('/api/invest/execute', {
+          method:'POST', headers:{'Content-Type':'application/json'},
+          body: JSON.stringify({ snapshot: cryptos, cycleId: cycId })
+        });
+      }
+    } catch(_) {}
+  }
+}
+
+window.onload = () => { init(); };
 </script>
 </body>
 </html>
