@@ -1103,19 +1103,22 @@ app.get('/api/invest/positions', async (_req, res) => {
     // Enriquecer posiciones abiertas con datos temporales de su ciclo
     if (open.length > 0) {
       try {
-        const activeIds  = await cyclesManager.getActiveCycles(redis);
-        const allIds     = [...activeIds];
-        // También buscar ciclos históricos recientes por si el ciclo ya completó
-        const allCycles  = await cyclesManager.getAllCycles(redis);
-        const cycleMap   = {};
-        allCycles.forEach(cyc => { cycleMap[cyc.id] = cyc; });
+        // Recuperar IDs activos + completados y cargar sus objetos completos
+        const activeIds    = await cyclesManager.getActiveCycles(redis);     // array de IDs
+        const completedIds = await cyclesManager.getCompletedCycles(redis);  // array de IDs
+        const allIds       = [...new Set([...activeIds, ...completedIds])];
+
+        // Cargar objetos completos de todos los ciclos relevantes
+        const allCycleObjs = await cyclesManager.getCyclesDetails(redis, allIds);
+        const cycleMap     = {};
+        allCycleObjs.forEach(cyc => { if (cyc && cyc.id) cycleMap[cyc.id] = cyc; });
 
         const now = Date.now();
         open.forEach(p => {
-          const cyc = cycleMap[p.cycleId];
+          const cyc = p.cycleId ? cycleMap[p.cycleId] : null;
           if (cyc) {
+            const total     = cyc.durationMs || Math.max(cyc.endTime - cyc.startTime, 1);
             const elapsed   = now - cyc.startTime;
-            const total     = cyc.durationMs || (cyc.endTime - cyc.startTime);
             const remaining = Math.max(0, cyc.endTime - now);
             const pct       = Math.min(100, Math.round(elapsed / total * 100));
             p.cycleInfo = {
@@ -1127,28 +1130,32 @@ app.get('/api/invest/positions', async (_req, res) => {
               remainingMs:      remaining,
               progressPct:      pct,
               isCompleted:      cyc.status === 'completed',
-              // Iteración actual y restantes (ciclos hold)
-              currentIteration: p.holdCycles + 1,           // ciclo en el que está
-              totalIterations:  p.maxHoldCycles,             // máx ciclos permitidos
-              iterationsLeft:   p.maxHoldCycles - p.holdCycles  // ciclos restantes
+              currentIteration: (p.holdCycles || 0) + 1,
+              totalIterations:  p.maxHoldCycles || 3,
+              iterationsLeft:   Math.max(0, (p.maxHoldCycles || 3) - (p.holdCycles || 0))
             };
           } else {
-            // Ciclo no encontrado — calcular desde openedAt
-            const openedMs  = new Date(p.openedAt).getTime();
-            const elapsed   = now - openedMs;
+            // Fallback: calcular desde openedAt si no se encuentra el ciclo
+            const openedMs = p.openedAt ? new Date(p.openedAt).getTime() : now;
+            const elapsed  = now - openedMs;
             p.cycleInfo = {
-              cycleId:          p.cycleId,
+              cycleId:          p.cycleId || null,
+              startTime:        openedMs,
+              endTime:          null,
+              durationMs:       null,
               elapsedMs:        elapsed,
               remainingMs:      null,
               progressPct:      null,
               isCompleted:      false,
-              currentIteration: p.holdCycles + 1,
-              totalIterations:  p.maxHoldCycles,
-              iterationsLeft:   p.maxHoldCycles - p.holdCycles
+              currentIteration: (p.holdCycles || 0) + 1,
+              totalIterations:  p.maxHoldCycles || 3,
+              iterationsLeft:   Math.max(0, (p.maxHoldCycles || 3) - (p.holdCycles || 0))
             };
           }
         });
-      } catch(_) {}
+      } catch(enrichErr) {
+        console.error('[invest/positions] Error enriqueciendo cycleInfo:', enrichErr.message);
+      }
     }
 
     res.json({
