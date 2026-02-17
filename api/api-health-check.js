@@ -1,4 +1,4 @@
-// api-health-check.js - CORREGIDO: checks en paralelo, sin referencias circulares
+// api-health-check.js - CORREGIDO: paralelo, sin referencias circulares, lee keys de Redis
 const axios = require('axios');
 const TIMEOUT_MS = 4000;
 
@@ -11,21 +11,33 @@ function resolveCheck(result, name, tier, factors) {
   return { name, tier, factors, configured: false, available: false, status: 'error', message: result.reason?.message || 'Error', responseTime: 0, lastCheck: new Date().toISOString() };
 }
 
-async function checkAllAPIs() {
+// Leer key: primero process.env, luego Redis (keys guardadas desde la UI)
+async function getKey(envName, redis) {
+  const envVal = process.env[envName];
+  if (envVal) return envVal;
+  if (!redis) return null;
+  try {
+    const v = await redis.get('apikey:' + envName);
+    if (v && typeof v === 'string' && v.trim()) return v.trim();
+  } catch (_) {}
+  return null;
+}
+
+async function checkAllAPIs(redis) {
   const [r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13] = await Promise.allSettled([
     withTimeout(checkCoinGecko()),
     withTimeout(checkAlternative()),
     withTimeout(checkReddit()),
     withTimeout(checkBlockchain()),
-    withTimeout(checkCryptoCompare()),
-    withTimeout(checkNewsAPI()),
-    withTimeout(checkGitHub()),
-    withTimeout(checkTelegram()),
-    withTimeout(checkSerpAPI()),
-    withTimeout(checkTwitter()),
-    withTimeout(checkGlassnode()),
-    withTimeout(checkCryptoQuant()),
-    withTimeout(checkWhaleAlert())
+    withTimeout(checkCryptoCompare(redis)),
+    withTimeout(checkNewsAPI(redis)),
+    withTimeout(checkGitHub(redis)),
+    withTimeout(checkTelegram(redis)),
+    withTimeout(checkSerpAPI(redis)),
+    withTimeout(checkTwitter(redis)),
+    withTimeout(checkGlassnode(redis)),
+    withTimeout(checkCryptoQuant(redis)),
+    withTimeout(checkWhaleAlert(redis))
   ]);
 
   const apis = {
@@ -108,8 +120,8 @@ async function checkBlockchain() {
   }
 }
 
-async function checkCryptoCompare() {
-  const key = process.env.CRYPTOCOMPARE_API_KEY;
+async function checkCryptoCompare(redis) {
+  const key = await getKey('CRYPTOCOMPARE_API_KEY', redis);
   if (!key) return { name:'CryptoCompare', tier:'freemium', factors:['News Volume','News Sentiment'], configured:false, available:false, status:'not_configured', message:'API key no configurada — gratis en cryptocompare.com', responseTime:0, configInstructions:'https://www.cryptocompare.com/cryptopian/api-keys', lastCheck:new Date().toISOString() };
   const t = Date.now();
   try {
@@ -123,8 +135,8 @@ async function checkCryptoCompare() {
   }
 }
 
-async function checkNewsAPI() {
-  const key = process.env.NEWSAPI_KEY;
+async function checkNewsAPI(redis) {
+  const key = await getKey('NEWSAPI_KEY', redis);
   if (!key) return { name:'NewsAPI', tier:'freemium', factors:['Media Coverage','Breaking News'], configured:false, available:false, status:'not_configured', message:'API key no configurada — gratis en newsapi.org', responseTime:0, configInstructions:'https://newsapi.org/register', lastCheck:new Date().toISOString() };
   const t = Date.now();
   try {
@@ -138,12 +150,11 @@ async function checkNewsAPI() {
   }
 }
 
-async function checkGitHub() {
-  // FIX: no usar 'api.configured' dentro del literal — referencia circular
-  const configured = !!process.env.GITHUB_TOKEN;
+async function checkGitHub(redis) {
+  const configured = !!(await getKey('GITHUB_TOKEN', redis));
   const t = Date.now();
   try {
-    const headers = configured ? { 'Authorization':`token ${process.env.GITHUB_TOKEN}` } : {};
+    const headers = configured ? { 'Authorization':`token ${await getKey('GITHUB_TOKEN', redis)}` } : {};
     const r = await axios.get('https://api.github.com/rate_limit', { timeout:TIMEOUT_MS, headers });
     const ms = Date.now()-t;
     const rem = r.data?.rate?.remaining ?? '?';
@@ -156,8 +167,8 @@ async function checkGitHub() {
   }
 }
 
-async function checkTelegram() {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+async function checkTelegram(redis) {
+  const token = await getKey('TELEGRAM_BOT_TOKEN', redis);
   if (!token) return { name:'Telegram Bot', tier:'free', factors:['Telegram Activity'], configured:false, available:false, status:'not_configured', message:'Token no configurado — gratis vía @BotFather', responseTime:0, configInstructions:'Telegram → @BotFather → /newbot', lastCheck:new Date().toISOString() };
   const t = Date.now();
   try {
@@ -170,8 +181,8 @@ async function checkTelegram() {
   }
 }
 
-async function checkSerpAPI() {
-  const key = process.env.SERPAPI_KEY;
+async function checkSerpAPI(redis) {
+  const key = await getKey('SERPAPI_KEY', redis);
   if (!key) return { name:'SerpAPI (Google Trends)', tier:'paid', factors:['Google Trends'], cost:'$50/mes', configured:false, available:false, status:'not_configured', message:'API key no configurada — 100 búsquedas gratis/mes en serpapi.com', responseTime:0, configInstructions:'https://serpapi.com/', lastCheck:new Date().toISOString() };
   const t = Date.now();
   try {
@@ -183,8 +194,8 @@ async function checkSerpAPI() {
   }
 }
 
-async function checkTwitter() {
-  const token = process.env.TWITTER_BEARER_TOKEN;
+async function checkTwitter(redis) {
+  const token = await getKey('TWITTER_BEARER_TOKEN', redis);
   if (!token) return { name:'Twitter API v2', tier:'paid', factors:['Twitter Sentiment'], cost:'$100/mes', configured:false, available:false, status:'not_configured', message:'Bearer token no configurado — desde $100/mes', responseTime:0, configInstructions:'https://developer.twitter.com/', lastCheck:new Date().toISOString() };
   const t = Date.now();
   try {
@@ -197,8 +208,8 @@ async function checkTwitter() {
   }
 }
 
-async function checkGlassnode() {
-  const key = process.env.GLASSNODE_API_KEY;
+async function checkGlassnode(redis) {
+  const key = await getKey('GLASSNODE_API_KEY', redis);
   if (!key) return { name:'Glassnode', tier:'premium', factors:['Unique Addresses','Network Growth'], cost:'$29-799/mes', configured:false, available:false, status:'not_configured', message:'API key no configurada — desde $29/mes', responseTime:0, configInstructions:'https://glassnode.com/', lastCheck:new Date().toISOString() };
   const t = Date.now();
   try {
@@ -211,14 +222,14 @@ async function checkGlassnode() {
   }
 }
 
-async function checkCryptoQuant() {
-  const key = process.env.CRYPTOQUANT_API_KEY;
+async function checkCryptoQuant(redis) {
+  const key = await getKey('CRYPTOQUANT_API_KEY', redis);
   if (!key) return { name:'CryptoQuant', tier:'premium', factors:['Exchange Net Flow'], cost:'$49-899/mes', configured:false, available:false, status:'not_configured', message:'API key no configurada — desde $49/mes', responseTime:0, configInstructions:'https://cryptoquant.com/', lastCheck:new Date().toISOString() };
   return { name:'CryptoQuant', tier:'premium', factors:['Exchange Net Flow'], cost:'$49-899/mes', configured:true, available:false, status:'unknown', message:'Configurada — verificación manual requerida en cryptoquant.com', responseTime:0, lastCheck:new Date().toISOString() };
 }
 
-async function checkWhaleAlert() {
-  const key = process.env.WHALE_ALERT_API_KEY;
+async function checkWhaleAlert(redis) {
+  const key = await getKey('WHALE_ALERT_API_KEY', redis);
   if (!key) return { name:'Whale Alert', tier:'premium', factors:['Whale Activity'], cost:'$49/mes', configured:false, available:false, status:'not_configured', message:'API key no configurada — desde $49/mes', responseTime:0, configInstructions:'https://whale-alert.io/', lastCheck:new Date().toISOString() };
   const t = Date.now();
   try {

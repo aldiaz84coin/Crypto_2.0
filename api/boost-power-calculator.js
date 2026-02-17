@@ -176,10 +176,12 @@ function calculateNewsVolumeScore(crypto, newsData, thresholds) {
   const count = articles.length;
   const countScore = normalize(count, thresholds.newsCountMin, thresholds.newsCountMax);
   
-  // Sentimiento promedio
-  const sentiments = articles.map(a => a.sentiment.score);
-  const avgSentiment = sentiments.length > 0 
-    ? sentiments.reduce((sum, s) => sum + s, 0) / sentiments.length 
+  // Sentimiento promedio — defender contra artículos sin campo sentiment
+  const sentiments = articles
+    .map(a => a.sentiment?.score ?? a.sentimentScore ?? null)
+    .filter(s => s !== null);
+  const avgSentiment = sentiments.length > 0
+    ? sentiments.reduce((sum, s) => sum + s, 0) / sentiments.length
     : 0;
   
   // Score combinado (50% cantidad, 50% sentimiento)

@@ -46,15 +46,36 @@ async function getFearGreedIndex() {
   return { success: false };
 }
 
+function analyzeSentimentInline(text) {
+  const t = (text || '').toLowerCase();
+  const pos = ['surge','gain','rise','bullish','adoption','partnership','upgrade','success',
+               'growth','rally','recovery','innovation','launch','profit','momentum','all-time high'];
+  const neg = ['crash','drop','decline','bearish','hack','scam','ban','lawsuit','loss',
+               'collapse','warning','fear','correction','fraud','exploit','plunge'];
+  let score = 0;
+  pos.forEach(w => { if (t.includes(w)) score++; });
+  neg.forEach(w => { if (t.includes(w)) score--; });
+  const normalized = Math.max(-1, Math.min(1, score / 3));
+  return { score: normalized, label: normalized > 0.2 ? 'positive' : normalized < -0.2 ? 'negative' : 'neutral' };
+}
+
 async function getCryptoNews(symbol = '', limit = 5) {
   try {
-    const key     = process.env.CRYPTOCOMPARE_API_KEY || '';
+    // Intentar primero con key de env, luego con key guardada en Redis
+    let key = process.env.CRYPTOCOMPARE_API_KEY || '';
+    if (!key && redis) {
+      const stored = await redis.get('apikey:CRYPTOCOMPARE_API_KEY');
+      if (stored && typeof stored === 'string') key = stored.trim();
+    }
     const headers = key ? { authorization: `Apikey ${key}` } : {};
     const r = await axios.get('https://min-api.cryptocompare.com/data/v2/news/?lang=EN', {
       headers, timeout: 4000
     });
     if (r.data?.Data) {
-      const articles = r.data.Data.slice(0, limit);
+      const articles = r.data.Data.slice(0, limit).map(a => ({
+        ...a,
+        sentiment: analyzeSentimentInline(a.title + ' ' + (a.body || ''))
+      }));
       return { success: true, count: articles.length, articles };
     }
   } catch (_) {}
@@ -278,7 +299,7 @@ app.get('/api/crypto', async (_req, res) => {
 // ── Estado completo de APIs ──────────────────────────────────────────────────
 app.get('/api/status/complete', async (_req, res) => {
   try {
-    const status = await apiHealthCheck.checkAllAPIs();
+    const status = await apiHealthCheck.checkAllAPIs(redis);
     res.json({ success: true, ...status });
   } catch (e) {
     res.status(500).json({ success: false, error: e.message });
