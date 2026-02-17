@@ -307,7 +307,7 @@ app.post('/api/cycles/start', async (req, res) => {
       });
     }
     
-    const { snapshot } = req.body;
+    const { snapshot, durationMs } = req.body;
     
     if (!snapshot || !Array.isArray(snapshot) || snapshot.length === 0) {
       return res.status(400).json({
@@ -315,6 +315,12 @@ app.post('/api/cycles/start', async (req, res) => {
         error: 'Se requiere array "snapshot" con datos de activos'
       });
     }
+
+    // Validar duración: mínimo 1 minuto, máximo 7 días
+    const parsedDuration = parseInt(durationMs);
+    const finalDuration = (!isNaN(parsedDuration) && parsedDuration >= 60000 && parsedDuration <= 7*24*60*60*1000)
+      ? parsedDuration
+      : 12 * 60 * 60 * 1000;
     
     // Obtener config actual
     let config = { ...DEFAULT_CONFIG };
@@ -325,8 +331,8 @@ app.post('/api/cycles/start', async (req, res) => {
       }
     } catch (error) {}
     
-    // Crear ciclo
-    const cycle = await cyclesManager.createCycle(redis, snapshot, config);
+    // Crear ciclo con duración variable
+    const cycle = await cyclesManager.createCycle(redis, snapshot, config, finalDuration);
     
     res.json({
       success: true,
@@ -335,6 +341,7 @@ app.post('/api/cycles/start', async (req, res) => {
         id: cycle.id,
         startTime: cycle.startTime,
         endTime: cycle.endTime,
+        durationMs: cycle.durationMs,
         assetsCount: snapshot.length
       }
     });
@@ -430,6 +437,47 @@ app.post('/api/cycles/:cycleId/complete', async (req, res) => {
       error: 'Error al completar ciclo',
       message: error.message
     });
+  }
+});
+
+/**
+ * POST /api/cycles/:cycleId/results/:assetId/toggle-exclude
+ * Incluir o excluir un resultado individual de las estadísticas
+ */
+app.post('/api/cycles/:cycleId/results/:assetId/toggle-exclude', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+
+  const { cycleId, assetId } = req.params;
+  try {
+    const cycle = await cyclesManager.getCycle(redis, cycleId);
+    if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+    if (cycle.status !== 'completed') return res.status(400).json({ success: false, error: 'El ciclo no está completado' });
+
+    // Toggle exclusión
+    const excluded = cycle.excludedResults || [];
+    const idx = excluded.indexOf(assetId);
+    if (idx === -1) {
+      excluded.push(assetId);
+    } else {
+      excluded.splice(idx, 1);
+    }
+    cycle.excludedResults = excluded;
+
+    // Recalcular métricas excluyendo los seleccionados
+    const activeResults = cycle.results.filter(r => !excluded.includes(r.id));
+    cycle.metrics = cyclesManager.recalculateMetrics(activeResults);
+    cycle.metricsExcluded = excluded.length;
+
+    await redis.set(cycleId, JSON.stringify(cycle));
+
+    res.json({
+      success: true,
+      excluded,
+      metrics: cycle.metrics,
+      isExcluded: excluded.includes(assetId)
+    });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
   }
 });
 

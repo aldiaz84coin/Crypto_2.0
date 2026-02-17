@@ -1,37 +1,57 @@
-// cycles-manager.js - Gestión de Ciclos de 12 Horas (Iteración 3)
+// cycles-manager.js - Gestión de Ciclos con duración variable (CORREGIDO)
 
 /**
  * Crear un nuevo ciclo de predicción
+ * @param {Object} redis
+ * @param {Array}  snapshot - activos con datos completos
+ * @param {Object} config   - configuración del algoritmo
+ * @param {number} durationMs - duración en ms (default 12h)
  */
-async function createCycle(redis, snapshot, config) {
-  if (!redis) {
-    throw new Error('Redis no disponible');
-  }
-  
-  const cycleId = `cycle_${Date.now()}`;
+async function createCycle(redis, snapshot, config, durationMs) {
+  if (!redis) throw new Error('Redis no disponible');
+
+  // Limpiar snapshot: solo guardar campos esenciales para no saturar Redis
+  const cleanSnapshot = snapshot.map(a => ({
+    id:                       a.id,
+    symbol:                   a.symbol,
+    name:                     a.name,
+    current_price:            a.current_price,
+    market_cap:               a.market_cap,
+    total_volume:             a.total_volume,
+    price_change_percentage_24h: a.price_change_percentage_24h,
+    ath:                      a.ath,
+    atl:                      a.atl,
+    boostPower:               a.boostPower,
+    boostPowerPercent:        a.boostPowerPercent,
+    classification:           a.classification,
+    predictedChange:          a.predictedChange
+  }));
+
+  const cycleId   = `cycle_${Date.now()}`;
   const startTime = Date.now();
-  const endTime = startTime + (12 * 60 * 60 * 1000); // +12 horas
-  
+  const endTime   = startTime + (durationMs || 12 * 60 * 60 * 1000);
+
   const cycle = {
     id: cycleId,
     startTime,
     endTime,
-    status: 'active',
-    snapshot,
-    config,
-    results: null,
-    metrics: null,
-    completedAt: null
+    durationMs: durationMs || 12 * 60 * 60 * 1000,
+    status:      'active',
+    snapshot:    cleanSnapshot,
+    config:      { version: config.version, boostPowerThreshold: config.boostPowerThreshold },
+    results:     null,
+    metrics:     null,
+    completedAt: null,
+    // Para seguimiento de selección manual de resultados
+    excludedResults: []
   };
-  
-  // Guardar en Redis
+
   await redis.set(cycleId, JSON.stringify(cycle));
-  
-  // Añadir a lista de ciclos activos
+
   const activeCycles = await getActiveCycles(redis);
   activeCycles.push(cycleId);
   await redis.set('active_cycles', JSON.stringify(activeCycles));
-  
+
   return cycle;
 }
 
@@ -272,6 +292,26 @@ async function getGlobalStats(redis) {
   };
 }
 
+/**
+ * Recalcular métricas con un subconjunto de resultados (excluidos fuera)
+ */
+function recalculateMetrics(results) {
+  if (!results || results.length === 0) {
+    return { total: 0, correct: 0, successRate: '0.00', avgError: '0.00', maxError: '0.00', invertible: { total: 0, correct: 0, successRate: '0.00' }, apalancado: { total: 0, correct: 0, successRate: '0.00' }, ruidoso: { total: 0, correct: 0, successRate: '0.00' } };
+  }
+  const correct = results.filter(r => r.correct).length;
+  return {
+    total: results.length,
+    correct,
+    successRate: (correct / results.length * 100).toFixed(2),
+    invertible: calculateCategoryMetrics(results, 'INVERTIBLE'),
+    apalancado: calculateCategoryMetrics(results, 'APALANCADO'),
+    ruidoso: calculateCategoryMetrics(results, 'RUIDOSO'),
+    avgError: calculateAvgError(results),
+    maxError: calculateMaxError(results)
+  };
+}
+
 module.exports = {
   createCycle,
   getActiveCycles,
@@ -280,5 +320,6 @@ module.exports = {
   completeCycle,
   getCompletedCycles,
   getCyclesDetails,
-  getGlobalStats
+  getGlobalStats,
+  recalculateMetrics
 };

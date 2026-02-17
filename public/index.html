@@ -1,681 +1,738 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Crypto Detector v3.1 - Iteración 3</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Crypto Detector v3.2</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    .tab-content { display:none }
+    .tab-active  { background:#2563EB !important }
+    .progress-bar { transition: width 1s linear }
+    .card-excluded { opacity:0.45; border-style:dashed !important }
+    .result-card { cursor:pointer; transition:opacity .2s, border .2s }
+    .result-card:hover { opacity:0.85 }
+  </style>
 </head>
-<body class="bg-gray-900 text-white">
-    <div class="container mx-auto p-6 max-w-7xl">
-        <div class="flex justify-between items-center mb-6">
-            <div>
-                <h1 class="text-4xl font-bold">🚀 Crypto Detector v3.1</h1>
-                <p class="text-gray-400">Iter 3: Datos Reales + Ciclos + Validación</p>
-            </div>
-            <div id="external-data" class="text-sm text-right"></div>
-        </div>
-        
-        <!-- Tabs -->
-        <div class="flex gap-2 mb-6 border-b border-gray-700">
-            <button onclick="setTab('monitor')" id="tab-monitor" class="px-4 py-2 rounded-t-lg bg-blue-600">
-                📊 Monitor
-            </button>
-            <button onclick="setTab('config')" id="tab-config" class="px-4 py-2 rounded-t-lg bg-gray-700">
-                ⚙️ Config
-            </button>
-            <button onclick="setTab('validation')" id="tab-validation" class="px-4 py-2 rounded-t-lg bg-gray-700">
-                ✅ Validación
-            </button>
-            <button onclick="setTab('status')" id="tab-status" class="px-4 py-2 rounded-t-lg bg-gray-700">
-                🔌 Estado APIs
-            </button>
-        </div>
-        
-        <!-- Tab Monitor -->
-        <div id="content-monitor" class="tab-content">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-2xl font-semibold">Monitor en Tiempo Real</h2>
-                <div class="flex gap-3">
-                    <button onclick="loadCryptos()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg">
-                        🔄 Cargar
-                    </button>
-                    <button onclick="startCycle()" id="btn-start-cycle" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg font-semibold">
-                        ⏰ Iniciar Ciclo 12h
-                    </button>
-                </div>
-            </div>
-            
-            <div id="stats" class="grid grid-cols-4 gap-4 mb-4"></div>
-            <div id="crypto-list" class="space-y-3"></div>
-        </div>
-        
-        <!-- Tab Config (simplificado de Iter 2) -->
-        <div id="content-config" class="tab-content" style="display:none">
-            <h2 class="text-2xl font-semibold mb-4">Configuración</h2>
-            <div class="bg-gray-800 rounded-lg p-6 mb-4">
-                <h3 class="text-lg font-semibold mb-3">Meta-Pesos</h3>
-                <div class="mb-3">
-                    <label class="block text-sm mb-2">
-                        Cuantitativo: <span id="meta-quant-val">60</span>%
-                    </label>
-                    <input type="range" id="meta-quant" min="0" max="100" step="5" value="60" 
-                           onchange="updateMetaWeights()" class="w-full"/>
-                </div>
-            </div>
-            
-            <div class="bg-gray-800 rounded-lg p-6 mb-4">
-                <h3 class="text-lg font-semibold mb-3">Pesos de Factores</h3>
-                <div class="grid grid-cols-2 gap-4">
-                    <div>
-                        <h4 class="text-green-400 mb-2">Cuantitativos</h4>
-                        <div id="quant-factors"></div>
-                    </div>
-                    <div>
-                        <h4 class="text-purple-400 mb-2">Cualitativos</h4>
-                        <div id="qual-factors"></div>
-                    </div>
-                </div>
-            </div>
-            
-            <button onclick="saveConfig()" class="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg">
-                💾 Guardar
-            </button>
-            <div id="config-message" class="mt-3"></div>
-        </div>
-        
+<body class="bg-gray-900 text-white min-h-screen">
+<div class="max-w-7xl mx-auto p-6">
 
-        <!-- Tab Estado -->
-        <div id="content-status" class="tab-content" style="display:none">
-            <div class="flex justify-between items-center mb-4">
-                <h2 class="text-2xl font-semibold">🔌 Estado de APIs y Fuentes de Datos</h2>
-                <button onclick="refreshAPIStatus()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg">
-                    🔄 Actualizar
-                </button>
-            </div>
-            
-            <!-- Summary -->
-            <div id="api-summary" class="grid grid-cols-4 gap-4 mb-6"></div>
-            
-            <!-- APIs por Tier -->
-            <div class="space-y-6">
-                <!-- Free Tier -->
-                <div>
-                    <h3 class="text-xl font-semibold mb-3 text-green-400">🟢 Tier FREE (Sin configuración)</h3>
-                    <div id="apis-free" class="space-y-3"></div>
-                </div>
-                
-                <!-- Freemium Tier -->
-                <div>
-                    <h3 class="text-xl font-semibold mb-3 text-yellow-400">🟡 Tier FREEMIUM (Con API key)</h3>
-                    <div id="apis-freemium" class="space-y-3"></div>
-                </div>
-                
-                <!-- Paid Tier -->
-                <div>
-                    <h3 class="text-xl font-semibold mb-3 text-orange-400">🟠 Tier PAID</h3>
-                    <div id="apis-paid" class="space-y-3"></div>
-                </div>
-                
-                <!-- Premium Tier -->
-                <div>
-                    <h3 class="text-xl font-semibold mb-3 text-red-400">🔴 Tier PREMIUM</h3>
-                    <div id="apis-premium" class="space-y-3"></div>
-                </div>
-            </div>
-        </div>
-        
-        <!-- Tab Validación -->
-        <div id="content-validation" class="tab-content" style="display:none">
-            <h2 class="text-2xl font-semibold mb-4">Validación de Ciclos</h2>
-            
-            <!-- Ciclos Activos -->
-            <div class="mb-6">
-                <h3 class="text-xl font-semibold mb-3">🔄 Ciclos Activos</h3>
-                <div id="active-cycles"></div>
-            </div>
-            
-            <!-- Ciclos Completados -->
-            <div>
-                <h3 class="text-xl font-semibold mb-3">✅ Historial de Ciclos</h3>
-                <div id="completed-cycles"></div>
-            </div>
-            
-            <!-- Estadísticas Globales -->
-            <div class="mt-6">
-                <h3 class="text-xl font-semibold mb-3">📊 Estadísticas Globales</h3>
-                <div id="global-stats"></div>
-            </div>
-        </div>
+  <!-- Header -->
+  <div class="flex justify-between items-start mb-6">
+    <div>
+      <h1 class="text-4xl font-bold">🚀 Crypto Detector v3.2</h1>
+      <p class="text-gray-400 text-sm mt-1">Datos Reales · Ciclos · Validación · Estado APIs</p>
+    </div>
+    <div id="fgi-badge" class="text-right text-sm"></div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="flex gap-2 mb-6 border-b border-gray-700 pb-0">
+    <button onclick="setTab('monitor')"    id="tab-monitor"    class="tab-btn px-4 py-2 rounded-t-lg bg-gray-700 tab-active">📊 Monitor</button>
+    <button onclick="setTab('config')"     id="tab-config"     class="tab-btn px-4 py-2 rounded-t-lg bg-gray-700">⚙️ Config</button>
+    <button onclick="setTab('validation')" id="tab-validation" class="tab-btn px-4 py-2 rounded-t-lg bg-gray-700">✅ Validación</button>
+    <button onclick="setTab('status')"     id="tab-status"     class="tab-btn px-4 py-2 rounded-t-lg bg-gray-700">🔌 Estado APIs</button>
+  </div>
+
+  <!-- ====== MONITOR ====== -->
+  <div id="content-monitor" class="tab-content" style="display:block">
+    <div class="flex flex-wrap gap-3 items-center mb-4">
+      <h2 class="text-2xl font-semibold flex-1">Monitor en Tiempo Real</h2>
+      <button onclick="loadCryptos()" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg">🔄 Cargar</button>
+      <button onclick="openCycleModal()" id="btn-start-cycle" disabled class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded-lg font-semibold disabled:opacity-50 disabled:cursor-not-allowed">⏰ Iniciar Ciclo</button>
+    </div>
+    <div id="stats" class="grid grid-cols-4 gap-4 mb-4"></div>
+    <div id="crypto-list" class="space-y-2"></div>
+  </div>
+
+  <!-- ====== CONFIG ====== -->
+  <div id="content-config" class="tab-content">
+    <h2 class="text-2xl font-semibold mb-4">⚙️ Configuración del Algoritmo</h2>
+    <div class="bg-gray-800 rounded-lg p-5 mb-4">
+      <h3 class="font-semibold mb-3">Meta-Pesos</h3>
+      <label class="block text-sm mb-2">Cuantitativo: <span id="meta-quant-val">60</span>% · Cualitativo: <span id="meta-qual-val">40</span>%</label>
+      <input type="range" id="meta-quant" min="0" max="100" step="5" value="60" onchange="updateMetaWeights()" class="w-full"/>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-5 mb-4">
+      <h3 class="font-semibold mb-3">Pesos de Factores</h3>
+      <div class="grid grid-cols-2 gap-6">
+        <div><p class="text-green-400 text-sm mb-2">Cuantitativos</p><div id="quant-factors"></div></div>
+        <div><p class="text-purple-400 text-sm mb-2">Cualitativos</p><div id="qual-factors"></div></div>
+      </div>
+    </div>
+    <div class="bg-gray-800 rounded-lg p-5 mb-4">
+      <h3 class="font-semibold mb-3">Umbral INVERTIBLE</h3>
+      <label class="block text-sm mb-2">Umbral: <span id="thr-boost-val">40</span>%</label>
+      <input type="range" id="thr-boost" min="30" max="50" value="40" onchange="updateBoostThreshold()" class="w-full"/>
+    </div>
+    <div class="flex gap-3">
+      <button onclick="saveConfig()" class="bg-green-600 hover:bg-green-700 px-6 py-2 rounded-lg">💾 Guardar</button>
+      <button onclick="resetConfig()" class="bg-yellow-600 hover:bg-yellow-700 px-6 py-2 rounded-lg">🔄 Resetear</button>
+    </div>
+    <div id="config-message" class="mt-3"></div>
+  </div>
+
+  <!-- ====== VALIDACIÓN ====== -->
+  <div id="content-validation" class="tab-content">
+    <h2 class="text-2xl font-semibold mb-4">✅ Validación de Ciclos</h2>
+
+    <!-- Ciclos activos -->
+    <div class="mb-6">
+      <h3 class="text-lg font-semibold mb-3 text-blue-400">🔄 Ciclos Activos</h3>
+      <div id="active-cycles"><p class="text-gray-500 text-sm">No hay ciclos activos</p></div>
     </div>
 
-    <script>
-        let config = null;
-        let metadata = null;
-        let currentCryptos = [];
-        
-        // Init
-        async function init() {
-            await loadMetadata();
-            await loadConfig();
-            renderFactorControls();
-            await loadValidation();
-        }
-        
-        async function loadMetadata() {
-            try {
-                const res = await fetch('/api/config/metadata');
-                const data = await res.json();
-                if (data.success) metadata = data.metadata;
-            } catch (err) {}
-        }
-        
-        async function loadConfig() {
-            try {
-                const res = await fetch('/api/config');
-                const data = await res.json();
-                if (data.success) {
-                    config = data.config;
-                    updateUIFromConfig();
-                }
-            } catch (err) {}
-        }
-        
-        function updateUIFromConfig() {
-            if (!config) return;
-            const quantPercent = Math.round(config.metaWeights.quantitative * 100);
-            document.getElementById('meta-quant').value = quantPercent;
-            document.getElementById('meta-quant-val').textContent = quantPercent;
-        }
-        
-        function renderFactorControls() {
-            if (!metadata || !config) return;
-            
-            const quantDiv = document.getElementById('quant-factors');
-            quantDiv.innerHTML = '';
-            metadata.quantitative.forEach(factor => {
-                const weight = Math.round((config.factorWeights[factor.id] || 0) * 100);
-                quantDiv.innerHTML += `
-                    <div class="mb-2">
-                        <label class="block text-xs">${factor.name}: <span id="fw-${factor.id}">${weight}</span>%</label>
-                        <input type="range" id="factor-${factor.id}" min="0" max="30" value="${weight}" 
-                               onchange="updateFactorWeight('${factor.id}')" class="w-full"/>
-                    </div>
-                `;
-            });
-            
-            const qualDiv = document.getElementById('qual-factors');
-            qualDiv.innerHTML = '';
-            metadata.qualitative.forEach(factor => {
-                const weight = Math.round((config.factorWeights[factor.id] || 0) * 100);
-                qualDiv.innerHTML += `
-                    <div class="mb-2">
-                        <label class="block text-xs">${factor.name}: <span id="fw-${factor.id}">${weight}</span>%</label>
-                        <input type="range" id="factor-${factor.id}" min="0" max="30" value="${weight}" 
-                               onchange="updateFactorWeight('${factor.id}')" class="w-full"/>
-                    </div>
-                `;
-            });
-        }
-        
-        function updateMetaWeights() {
-            const quant = parseInt(document.getElementById('meta-quant').value);
-            document.getElementById('meta-quant-val').textContent = quant;
-            config.metaWeights.quantitative = quant / 100;
-            config.metaWeights.qualitative = (100 - quant) / 100;
-        }
-        
-        function updateFactorWeight(factorId) {
-            const value = parseInt(document.getElementById(`factor-${factorId}`).value);
-            document.getElementById(`fw-${factorId}`).textContent = value;
-            config.factorWeights[factorId] = value / 100;
-        }
-        
-        async function saveConfig() {
-            const msgDiv = document.getElementById('config-message');
-            msgDiv.innerHTML = '<div class="text-gray-400">💾 Guardando...</div>';
-            
-            try {
-                const res = await fetch('/api/config', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ config })
-                });
-                
-                const data = await res.json();
-                
-                if (data.success) {
-                    msgDiv.innerHTML = '<div class="text-green-400 p-3 bg-green-900/30 rounded">✅ Guardado</div>';
-                } else {
-                    msgDiv.innerHTML = '<div class="text-red-400 p-3 bg-red-900/30 rounded">❌ Error</div>';
-                }
-                
-                setTimeout(() => msgDiv.innerHTML = '', 3000);
-            } catch (error) {
-                msgDiv.innerHTML = '<div class="text-red-400">❌ ' + error.message + '</div>';
-            }
-        }
-        
-        async function loadCryptos() {
-            const listDiv = document.getElementById('crypto-list');
-            const statsDiv = document.getElementById('stats');
-            const externalDiv = document.getElementById('external-data');
-            listDiv.innerHTML = '<div class="text-gray-400">⏳ Cargando datos reales...</div>';
-            
-            try {
-                const res = await fetch('/api/crypto');
-                const data = await res.json();
-                
-                if (data.success) {
-                    currentCryptos = data.data;
-                    
-                    // Mostrar datos externos
-                    if (data.externalData.fearGreed) {
-                        externalDiv.innerHTML = `
-                            <div class="text-xs">
-                                <div>Fear & Greed: <span class="font-bold">${data.externalData.fearGreed.value}</span></div>
-                                <div>${data.externalData.fearGreed.classification}</div>
-                            </div>
-                        `;
-                    }
-                    
-                    // Stats
-                    const invertible = data.data.filter(c => c.classification === 'INVERTIBLE').length;
-                    const apalancado = data.data.filter(c => c.classification === 'APALANCADO').length;
-                    const ruidoso = data.data.filter(c => c.classification === 'RUIDOSO').length;
-                    
-                    statsDiv.innerHTML = `
-                        <div class="bg-green-900/30 p-4 rounded">
-                            <div class="text-green-400 text-2xl font-bold">${invertible}</div>
-                            <div class="text-sm">INVERTIBLES</div>
-                        </div>
-                        <div class="bg-yellow-900/30 p-4 rounded">
-                            <div class="text-yellow-400 text-2xl font-bold">${apalancado}</div>
-                            <div class="text-sm">APALANCADOS</div>
-                        </div>
-                        <div class="bg-gray-800 p-4 rounded">
-                            <div class="text-gray-400 text-2xl font-bold">${ruidoso}</div>
-                            <div class="text-sm">RUIDOSOS</div>
-                        </div>
-                        <div class="bg-blue-900/30 p-4 rounded">
-                            <div class="text-blue-400 text-2xl font-bold">${data.data.length}</div>
-                            <div class="text-sm">TOTAL</div>
-                        </div>
-                    `;
-                    
-                    // List
-                    listDiv.innerHTML = '';
-                    data.data.forEach(crypto => {
-                        const colorClass = crypto.color === 'green' ? 'border-green-500' : 
-                                         crypto.color === 'yellow' ? 'border-yellow-500' : 'border-gray-600';
-                        
-                        const card = document.createElement('div');
-                        card.className = `bg-gray-800 p-4 rounded-lg border-l-4 ${colorClass}`;
-                        card.innerHTML = `
-                            <div class="flex justify-between items-start">
-                                <div>
-                                    <div class="font-bold text-lg">${crypto.name} <span class="text-gray-500 text-sm">${crypto.symbol.toUpperCase()}</span></div>
-                                    <div class="text-xl text-blue-400">$${crypto.current_price.toLocaleString()}</div>
-                                    <div class="${crypto.price_change_percentage_24h >= 0 ? 'text-green-400' : 'text-red-400'} text-sm">
-                                        ${crypto.price_change_percentage_24h >= 0 ? '↑' : '↓'} 
-                                        ${Math.abs(crypto.price_change_percentage_24h).toFixed(2)}%
-                                    </div>
-                                </div>
-                                <div class="text-right">
-                                    <div class="text-sm font-medium mb-1">${crypto.classification}</div>
-                                    <div class="text-2xl font-bold">${crypto.boostPowerPercent}%</div>
-                                    <div class="text-xs text-gray-400">BoostPower</div>
-                                    <div class="text-xs text-gray-500 mt-1">Pred: ${crypto.predictedChange.toFixed(1)}%</div>
-                                </div>
-                            </div>
-                        `;
-                        listDiv.appendChild(card);
-                    });
-                    
-                    // Habilitar botón de ciclo
-                    document.getElementById('btn-start-cycle').disabled = false;
-                }
-            } catch (error) {
-                listDiv.innerHTML = '<div class="text-red-400">❌ Error: ' + error.message + '</div>';
-            }
-        }
-        
-        async function startCycle() {
-            if (currentCryptos.length === 0) {
-                alert('Primero carga los datos con el botón Cargar');
-                return;
-            }
-            
-            if (!confirm('¿Iniciar ciclo de predicción de 12 horas con los top 20 activos?')) return;
-            
-            try {
-                const snapshot = currentCryptos.slice(0, 20);
-                
-                const res = await fetch('/api/cycles/start', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ snapshot })
-                });
-                
-                const data = await res.json();
-                
-                if (data.success) {
-                    alert(`✅ Ciclo iniciado!\nID: ${data.cycle.id}\nFinaliza en 12 horas`);
-                    setTab('validation');
-                    await loadValidation();
-                } else {
-                    alert('❌ Error: ' + data.error);
-                }
-            } catch (error) {
-                alert('❌ Error: ' + error.message);
-            }
-        }
-        
-        async function loadValidation() {
-            await loadActiveCycles();
-            await loadCompletedCycles();
-            await loadGlobalStats();
-        }
-        
-        async function loadActiveCycles() {
-            const div = document.getElementById('active-cycles');
-            div.innerHTML = '<div class="text-gray-400">Cargando...</div>';
-            
-            try {
-                const res = await fetch('/api/cycles/active');
-                const data = await res.json();
-                
-                if (data.success && data.cycles.length > 0) {
-                    div.innerHTML = '';
-                    data.cycles.forEach(cycle => {
-                        const card = document.createElement('div');
-                        card.className = 'bg-gray-800 p-4 rounded-lg mb-3';
-                        card.innerHTML = `
-                            <div class="flex justify-between items-center">
-                                <div>
-                                    <div class="font-bold">Ciclo activo</div>
-                                    <div class="text-sm text-gray-400">${cycle.snapshot.length} activos</div>
-                                </div>
-                                <div class="text-right">
-                                    <div class="text-2xl font-bold text-blue-400">${cycle.hoursRemaining}h</div>
-                                    <div class="text-xs text-gray-400">restantes</div>
-                                </div>
-                            </div>
-                        `;
-                        div.appendChild(card);
-                    });
-                } else {
-                    div.innerHTML = '<div class="text-gray-500">No hay ciclos activos</div>';
-                }
-            } catch (error) {
-                div.innerHTML = '<div class="text-red-400">Error al cargar</div>';
-            }
-        }
-        
-        async function loadCompletedCycles() {
-            const div = document.getElementById('completed-cycles');
-            div.innerHTML = '<div class="text-gray-400">Cargando...</div>';
-            
-            try {
-                const res = await fetch('/api/cycles/history');
-                const data = await res.json();
-                
-                if (data.success && data.cycles.length > 0) {
-                    div.innerHTML = '';
-                    data.cycles.slice(0, 5).forEach(cycle => {
-                        const card = document.createElement('div');
-                        card.className = 'bg-gray-800 p-4 rounded-lg mb-3';
-                        card.innerHTML = `
-                            <div class="flex justify-between items-center">
-                                <div class="flex-1">
-                                    <div class="font-bold">Ciclo ${new Date(cycle.completedAt).toLocaleDateString()}</div>
-                                    <div class="text-sm text-gray-400">
-                                        ${cycle.metrics.correct}/${cycle.metrics.total} correctas
-                                    </div>
-                                </div>
-                                <div class="text-right mr-4">
-                                    <div class="text-2xl font-bold text-green-400">${cycle.metrics.successRate}%</div>
-                                    <div class="text-xs text-gray-400">Tasa acierto</div>
-                                </div>
-                                <button onclick="downloadReport('${cycle.id}')" class="bg-blue-600 hover:bg-blue-700 px-3 py-1 rounded text-sm">
-                                    📄 Informe
-                                </button>
-                            </div>
-                        `;
-                        div.appendChild(card);
-                    });
-                } else {
-                    div.innerHTML = '<div class="text-gray-500">No hay ciclos completados. Inicia tu primer ciclo!</div>';
-                }
-            } catch (error) {
-                div.innerHTML = '<div class="text-red-400">Error al cargar</div>';
-            }
-        }
-        
-        async function loadGlobalStats() {
-            const div = document.getElementById('global-stats');
-            
-            try {
-                const res = await fetch('/api/cycles/stats/global');
-                const data = await res.json();
-                
-                if (data.success) {
-                    const stats = data.stats;
-                    div.innerHTML = `
-                        <div class="grid grid-cols-3 gap-4">
-                            <div class="bg-gray-800 p-4 rounded">
-                                <div class="text-2xl font-bold text-blue-400">${stats.totalCycles}</div>
-                                <div class="text-sm text-gray-400">Total Ciclos</div>
-                            </div>
-                            <div class="bg-gray-800 p-4 rounded">
-                                <div class="text-2xl font-bold text-green-400">${stats.avgSuccessRate}%</div>
-                                <div class="text-sm text-gray-400">Accuracy Promedio</div>
-                            </div>
-                            <div class="bg-gray-800 p-4 rounded">
-                                <div class="text-2xl font-bold text-purple-400">${stats.totalPredictions}</div>
-                                <div class="text-sm text-gray-400">Total Predicciones</div>
-                            </div>
-                        </div>
-                    `;
-                }
-            } catch (error) {}
-        }
-        
-        async function downloadReport(cycleId) {
-            try {
-                window.location.href = `/api/cycles/${cycleId}/report`;
-            } catch (error) {
-                alert('Error al descargar informe');
-            }
-        }
-        
-        function setTab(tab) {
-            document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-            document.querySelectorAll('[id^="tab-"]').forEach(el => {
-                el.classList.remove('bg-blue-600');
-                el.classList.add('bg-gray-700');
-            });
-            
-            document.getElementById('content-' + tab).style.display = 'block';
-            document.getElementById('tab-' + tab).classList.remove('bg-gray-700');
-            document.getElementById('tab-' + tab).classList.add('bg-blue-600');
-            
-            if (tab === 'validation') {
-                loadValidation();
-            }
-            
-            if (tab === 'status') {
-                loadAPIStatus();
-            }
-        }
-        
-        // Auto-check pending cycles
-        setInterval(async () => {
-            try {
-                const res = await fetch('/api/cycles/pending');
-                const data = await res.json();
-                if (data.success && data.cycles.length > 0) {
-                    for (const cycle of data.cycles) {
-                        await fetch(`/api/cycles/${cycle.id}/complete`, { method: 'POST' });
-                    }
-                    if (document.getElementById('content-validation').style.display !== 'none') {
-                        loadValidation();
-                    }
-                }
-            } catch (error) {}
-        }, 60000); // Cada minuto
-        
+    <!-- Historial -->
+    <div class="mb-6">
+      <h3 class="text-lg font-semibold mb-3 text-green-400">📋 Historial</h3>
+      <div id="completed-cycles"><p class="text-gray-500 text-sm">No hay ciclos completados aún</p></div>
+    </div>
 
-        // ============================================
-        // FUNCIONES DE ESTADO DE APIs
-        // ============================================
-        
-        async function loadAPIStatus() {
-            const summaryDiv = document.getElementById('api-summary');
-            summaryDiv.innerHTML = '<div class="col-span-4 text-gray-400">⏳ Verificando APIs...</div>';
-            
-            try {
-                const res = await fetch('/api/status/complete');
-                const data = await res.json();
-                
-                if (data.success) {
-                    renderAPISummary(data.summary);
-                    renderAPIsByTier(data.apis);
-                }
-            } catch (error) {
-                summaryDiv.innerHTML = '<div class="col-span-4 text-red-400">❌ Error al cargar estado</div>';
-            }
+    <!-- Estadísticas -->
+    <div>
+      <h3 class="text-lg font-semibold mb-3 text-purple-400">📊 Estadísticas Globales</h3>
+      <div id="global-stats"></div>
+    </div>
+  </div>
+
+  <!-- ====== ESTADO APIs ====== -->
+  <div id="content-status" class="tab-content">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-2xl font-semibold">🔌 Estado de APIs</h2>
+      <button onclick="loadAPIStatus()" id="btn-refresh-status" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg">🔄 Actualizar</button>
+    </div>
+    <div id="api-summary" class="grid grid-cols-4 gap-4 mb-6"></div>
+    <div class="space-y-6">
+      <div><h3 class="text-lg font-semibold text-green-400 mb-3">🟢 FREE — Sin configuración</h3><div id="apis-free" class="space-y-3"></div></div>
+      <div><h3 class="text-lg font-semibold text-yellow-400 mb-3">🟡 FREEMIUM — API key gratuita</h3><div id="apis-freemium" class="space-y-3"></div></div>
+      <div><h3 class="text-lg font-semibold text-orange-400 mb-3">🟠 PAID</h3><div id="apis-paid" class="space-y-3"></div></div>
+      <div><h3 class="text-lg font-semibold text-red-400 mb-3">🔴 PREMIUM</h3><div id="apis-premium" class="space-y-3"></div></div>
+    </div>
+  </div>
+
+</div><!-- /container -->
+
+<!-- ====== MODAL INICIAR CICLO ====== -->
+<div id="cycle-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+  <div class="bg-gray-800 rounded-xl p-6 w-full max-w-md mx-4 shadow-2xl">
+    <h3 class="text-xl font-bold mb-4">⏰ Configurar Ciclo de Predicción</h3>
+
+    <div class="mb-4">
+      <label class="block text-sm mb-2 text-gray-300">Duración del ciclo</label>
+      <div class="grid grid-cols-3 gap-2 mb-3">
+        <button onclick="setDuration(30*60*1000)"   class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded text-sm">30 min</button>
+        <button onclick="setDuration(60*60*1000)"   class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded text-sm">1 hora</button>
+        <button onclick="setDuration(4*60*60*1000)" class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded text-sm">4 horas</button>
+        <button onclick="setDuration(6*60*60*1000)" class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded text-sm">6 horas</button>
+        <button onclick="setDuration(12*60*60*1000)" class="dur-btn bg-blue-700 px-3 py-2 rounded text-sm font-bold">12 horas ⭐</button>
+        <button onclick="setDuration(24*60*60*1000)" class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded text-sm">24 horas</button>
+      </div>
+      <div class="flex items-center gap-2">
+        <label class="text-xs text-gray-400 whitespace-nowrap">Personalizado (min):</label>
+        <input type="number" id="custom-duration" min="1" max="10080" placeholder="ej: 180" class="bg-gray-700 rounded px-2 py-1 text-sm w-full" oninput="setDurationMin(this.value)"/>
+      </div>
+    </div>
+
+    <div class="bg-gray-700/50 rounded-lg p-3 mb-4 text-sm">
+      <p>Duración seleccionada: <span id="selected-duration-label" class="font-bold text-blue-400">12 horas</span></p>
+      <p class="text-gray-400 mt-1">Activos: <span id="modal-asset-count" class="text-white">—</span> criptos del top 20</p>
+    </div>
+
+    <div class="flex gap-3">
+      <button onclick="confirmStartCycle()" class="flex-1 bg-purple-600 hover:bg-purple-700 py-2 rounded-lg font-semibold">🚀 Iniciar Ciclo</button>
+      <button onclick="closeModal()" class="flex-1 bg-gray-600 hover:bg-gray-700 py-2 rounded-lg">Cancelar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// ESTADO GLOBAL
+// ─────────────────────────────────────────────
+let config = null;
+let metadata = null;
+let currentCryptos = [];
+let selectedDurationMs = 12 * 60 * 60 * 1000;
+let cycleProgressTimers = {};
+
+// ─────────────────────────────────────────────
+// INIT
+// ─────────────────────────────────────────────
+async function init() {
+  await loadMetadata();
+  await loadConfig();
+  renderFactorControls();
+}
+
+async function loadMetadata() {
+  try {
+    const r = await fetch('/api/config/metadata');
+    const d = await r.json();
+    if (d.success) metadata = d.metadata;
+  } catch(e){}
+}
+
+async function loadConfig() {
+  try {
+    const r = await fetch('/api/config');
+    const d = await r.json();
+    if (d.success) { config = d.config; applyConfigToUI(); }
+  } catch(e){}
+}
+
+function applyConfigToUI() {
+  if (!config) return;
+  const q = Math.round(config.metaWeights.quantitative * 100);
+  document.getElementById('meta-quant').value = q;
+  document.getElementById('meta-quant-val').textContent = q;
+  document.getElementById('meta-qual-val').textContent = 100 - q;
+  const bt = Math.round(config.boostPowerThreshold * 100);
+  document.getElementById('thr-boost').value = bt;
+  document.getElementById('thr-boost-val').textContent = bt;
+}
+
+function renderFactorControls() {
+  if (!metadata || !config) return;
+  const build = (factors, containerId) => {
+    const div = document.getElementById(containerId);
+    div.innerHTML = '';
+    factors.forEach(f => {
+      const w = Math.round((config.factorWeights[f.id] || 0) * 100);
+      div.innerHTML += `<div class="mb-2"><label class="text-xs text-gray-300">${f.name}: <span id="fw-${f.id}">${w}</span>%</label>
+        <input type="range" id="factor-${f.id}" min="0" max="30" value="${w}" onchange="updateFactorWeight('${f.id}')" class="w-full h-1"/></div>`;
+    });
+  };
+  build(metadata.quantitative, 'quant-factors');
+  build(metadata.qualitative,  'qual-factors');
+}
+
+function updateMetaWeights() {
+  const q = parseInt(document.getElementById('meta-quant').value);
+  document.getElementById('meta-quant-val').textContent = q;
+  document.getElementById('meta-qual-val').textContent = 100-q;
+  config.metaWeights.quantitative = q/100;
+  config.metaWeights.qualitative  = (100-q)/100;
+}
+
+function updateBoostThreshold() {
+  const v = parseInt(document.getElementById('thr-boost').value);
+  document.getElementById('thr-boost-val').textContent = v;
+  config.boostPowerThreshold = v/100;
+}
+
+function updateFactorWeight(id) {
+  const v = parseInt(document.getElementById(`factor-${id}`).value);
+  document.getElementById(`fw-${id}`).textContent = v;
+  config.factorWeights[id] = v/100;
+}
+
+async function saveConfig() {
+  const msg = document.getElementById('config-message');
+  msg.innerHTML = '<span class="text-gray-400">💾 Guardando...</span>';
+  try {
+    const r = await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({config}) });
+    const d = await r.json();
+    msg.innerHTML = d.success
+      ? '<span class="text-green-400">✅ Guardado</span>'
+      : `<span class="text-red-400">❌ ${d.error||d.errors?.join(', ')}</span>`;
+    setTimeout(()=>msg.innerHTML='', 3000);
+  } catch(e){ msg.innerHTML=`<span class="text-red-400">❌ ${e.message}</span>`; }
+}
+
+async function resetConfig() {
+  if (!confirm('¿Resetear configuración a valores por defecto?')) return;
+  try {
+    const r = await fetch('/api/config/reset', {method:'POST'});
+    const d = await r.json();
+    if (d.success) { config=d.config; applyConfigToUI(); renderFactorControls(); }
+  } catch(e){}
+}
+
+// ─────────────────────────────────────────────
+// MONITOR
+// ─────────────────────────────────────────────
+async function loadCryptos() {
+  const list  = document.getElementById('crypto-list');
+  const stats = document.getElementById('stats');
+  list.innerHTML  = '<p class="text-gray-400">⏳ Cargando datos...</p>';
+  stats.innerHTML = '';
+
+  try {
+    const r = await fetch('/api/crypto');
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error);
+
+    currentCryptos = d.data;
+    document.getElementById('btn-start-cycle').disabled = false;
+
+    // Fear & Greed badge
+    if (d.externalData?.fearGreed) {
+      const fg = d.externalData.fearGreed;
+      const fgColor = fg.value < 30 ? 'text-red-400' : fg.value < 50 ? 'text-orange-400' : fg.value < 70 ? 'text-yellow-400' : 'text-green-400';
+      document.getElementById('fgi-badge').innerHTML =
+        `<p class="text-xs text-gray-500">Fear & Greed</p><p class="font-bold ${fgColor}">${fg.value} · ${fg.classification}</p>`;
+    }
+
+    // Summary stats
+    const inv = d.data.filter(c=>c.classification==='INVERTIBLE').length;
+    const apl = d.data.filter(c=>c.classification==='APALANCADO').length;
+    const rui = d.data.filter(c=>c.classification==='RUIDOSO').length;
+    stats.innerHTML = `
+      <div class="bg-green-900/30 rounded p-4"><div class="text-2xl font-bold text-green-400">${inv}</div><div class="text-xs mt-1">INVERTIBLES</div></div>
+      <div class="bg-yellow-900/30 rounded p-4"><div class="text-2xl font-bold text-yellow-400">${apl}</div><div class="text-xs mt-1">APALANCADOS</div></div>
+      <div class="bg-gray-800 rounded p-4"><div class="text-2xl font-bold text-gray-400">${rui}</div><div class="text-xs mt-1">RUIDOSOS</div></div>
+      <div class="bg-blue-900/30 rounded p-4"><div class="text-2xl font-bold text-blue-400">${d.data.length}</div><div class="text-xs mt-1">TOTAL</div></div>`;
+
+    // Cards
+    list.innerHTML = '';
+    d.data.forEach(crypto => {
+      const border = crypto.color==='green' ? 'border-green-500' : crypto.color==='yellow' ? 'border-yellow-500' : 'border-gray-600';
+      const chg    = crypto.price_change_percentage_24h;
+      const card   = document.createElement('div');
+      card.className = `bg-gray-800 rounded-lg p-4 border-l-4 ${border}`;
+      card.innerHTML = `
+        <div class="flex justify-between items-center">
+          <div>
+            <span class="font-bold text-lg">${crypto.name}</span>
+            <span class="text-gray-500 text-sm ml-2">${crypto.symbol.toUpperCase()}</span>
+            <div class="text-blue-400 font-semibold">$${crypto.current_price.toLocaleString()}</div>
+            <div class="${chg>=0?'text-green-400':'text-red-400'} text-sm">${chg>=0?'↑':'↓'} ${Math.abs(chg).toFixed(2)}%</div>
+          </div>
+          <div class="text-right">
+            <div class="text-xs text-gray-400">${crypto.classification}</div>
+            <div class="text-3xl font-bold">${crypto.boostPowerPercent}%</div>
+            <div class="text-xs text-gray-500">BoostPower</div>
+            <div class="text-xs text-gray-500">Pred: ${(crypto.predictedChange||0).toFixed(1)}%</div>
+          </div>
+        </div>`;
+      list.appendChild(card);
+    });
+  } catch(e) {
+    list.innerHTML = `<p class="text-red-400">❌ ${e.message}</p>`;
+  }
+}
+
+// ─────────────────────────────────────────────
+// MODAL DE CICLO
+// ─────────────────────────────────────────────
+function openCycleModal() {
+  if (currentCryptos.length === 0) { alert('Primero carga los datos.'); return; }
+  document.getElementById('modal-asset-count').textContent = Math.min(currentCryptos.length, 20);
+  document.getElementById('cycle-modal').classList.remove('hidden');
+}
+
+function closeModal() {
+  document.getElementById('cycle-modal').classList.add('hidden');
+}
+
+function setDuration(ms) {
+  selectedDurationMs = ms;
+  document.getElementById('selected-duration-label').textContent = formatDuration(ms);
+  document.getElementById('custom-duration').value = '';
+  document.querySelectorAll('.dur-btn').forEach(b => b.classList.replace('bg-blue-700','bg-gray-700'));
+  event.currentTarget.classList.replace('bg-gray-700','bg-blue-700');
+}
+
+function setDurationMin(val) {
+  const min = parseInt(val);
+  if (!isNaN(min) && min >= 1) {
+    selectedDurationMs = min * 60 * 1000;
+    document.getElementById('selected-duration-label').textContent = formatDuration(selectedDurationMs);
+    document.querySelectorAll('.dur-btn').forEach(b => b.classList.replace('bg-blue-700','bg-gray-700'));
+  }
+}
+
+function formatDuration(ms) {
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}min`;
+}
+
+async function confirmStartCycle() {
+  closeModal();
+  const snapshot = currentCryptos.slice(0, 20);
+
+  try {
+    const r = await fetch('/api/cycles/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ snapshot, durationMs: selectedDurationMs })
+    });
+    const d = await r.json();
+
+    if (d.success) {
+      setTab('validation');
+      await loadValidation();
+    } else {
+      alert('❌ Error al iniciar ciclo: ' + (d.error || JSON.stringify(d)));
+    }
+  } catch(e) {
+    alert('❌ Error de red: ' + e.message);
+  }
+}
+
+// ─────────────────────────────────────────────
+// VALIDACIÓN
+// ─────────────────────────────────────────────
+async function loadValidation() {
+  await loadActiveCycles();
+  await loadCompletedCycles();
+  await loadGlobalStats();
+}
+
+async function loadActiveCycles() {
+  const div = document.getElementById('active-cycles');
+  div.innerHTML = '<p class="text-gray-400 text-sm">Cargando...</p>';
+  try {
+    const r = await fetch('/api/cycles/active');
+    const d = await r.json();
+
+    if (!d.success || d.cycles.length === 0) {
+      div.innerHTML = '<p class="text-gray-500 text-sm">No hay ciclos activos</p>';
+      return;
+    }
+
+    div.innerHTML = '';
+    d.cycles.forEach(cycle => {
+      const card = document.createElement('div');
+      card.id = `active-card-${cycle.id}`;
+      card.className = 'bg-gray-800 rounded-lg p-4 mb-3';
+      div.appendChild(card);
+      renderActiveCycleCard(cycle);
+      startCycleProgressTimer(cycle);
+    });
+  } catch(e) {
+    div.innerHTML = '<p class="text-red-400 text-sm">Error al cargar ciclos</p>';
+  }
+}
+
+function renderActiveCycleCard(cycle) {
+  const card = document.getElementById(`active-card-${cycle.id}`);
+  if (!card) return;
+
+  const now      = Date.now();
+  const elapsed  = now - cycle.startTime;
+  const total    = cycle.durationMs || (cycle.endTime - cycle.startTime);
+  const remaining = Math.max(0, cycle.endTime - now);
+  const pct      = Math.min(100, Math.round(elapsed / total * 100));
+  const isReady  = remaining === 0;
+
+  card.innerHTML = `
+    <div class="flex justify-between items-center mb-3">
+      <div>
+        <p class="font-bold">${isReady ? '✅ Listo para completar' : '🔄 Ciclo activo'}</p>
+        <p class="text-xs text-gray-400">${cycle.snapshot.length} activos · ${formatDuration(total)}</p>
+        <p class="text-xs text-gray-500">ID: ${cycle.id}</p>
+      </div>
+      <div class="text-right">
+        ${isReady
+          ? `<button onclick="completeCycle('${cycle.id}')" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded-lg text-sm font-bold">Validar ahora</button>`
+          : `<div class="text-2xl font-bold text-blue-400" id="countdown-${cycle.id}">${formatCountdown(remaining)}</div>
+             <div class="text-xs text-gray-400">restantes</div>`
         }
-        
-        function renderAPISummary(summary) {
-            const summaryDiv = document.getElementById('api-summary');
-            summaryDiv.innerHTML = `
-                <div class="bg-gray-800 p-4 rounded">
-                    <div class="text-2xl font-bold text-blue-400">${summary.total}</div>
-                    <div class="text-sm">Total APIs</div>
-                </div>
-                <div class="bg-green-900/30 p-4 rounded">
-                    <div class="text-2xl font-bold text-green-400">${summary.available}</div>
-                    <div class="text-sm">Operacionales</div>
-                </div>
-                <div class="bg-yellow-900/30 p-4 rounded">
-                    <div class="text-2xl font-bold text-yellow-400">${summary.configured}</div>
-                    <div class="text-sm">Configuradas</div>
-                </div>
-                <div class="bg-red-900/30 p-4 rounded">
-                    <div class="text-2xl font-bold text-red-400">${summary.errors}</div>
-                    <div class="text-sm">Con Errores</div>
-                </div>
-            `;
-        }
-        
-        function renderAPIsByTier(apis) {
-            const tiers = {
-                free: document.getElementById('apis-free'),
-                freemium: document.getElementById('apis-freemium'),
-                paid: document.getElementById('apis-paid'),
-                premium: document.getElementById('apis-premium')
-            };
-            
-            // Limpiar
-            Object.values(tiers).forEach(div => div.innerHTML = '');
-            
-            // Renderizar cada API
-            Object.entries(apis).forEach(([key, api]) => {
-                const card = createAPICard(api);
-                tiers[api.tier].appendChild(card);
-            });
-        }
-        
-        function createAPICard(api) {
-            const card = document.createElement('div');
-            card.className = 'bg-gray-800 p-4 rounded-lg border-l-4 ' + getStatusBorderColor(api.status);
-            
-            const statusIcon = getStatusIcon(api.status);
-            const statusColor = getStatusColor(api.status);
-            
-            card.innerHTML = `
-                <div class="flex justify-between items-start">
-                    <div class="flex-1">
-                        <div class="flex items-center gap-2 mb-2">
-                            <span class="text-2xl">${statusIcon}</span>
-                            <div>
-                                <div class="font-bold text-lg">${api.name}</div>
-                                <div class="text-xs text-gray-400">${api.factors.join(', ')}</div>
-                            </div>
-                        </div>
-                        
-                        <div class="flex items-center gap-2 mt-2">
-                            <span class="px-2 py-1 rounded text-xs font-semibold ${statusColor}">
-                                ${api.status.toUpperCase().replace('_', ' ')}
-                            </span>
-                            ${api.configured ? '<span class="text-green-400 text-xs">✓ Configurada</span>' : '<span class="text-gray-500 text-xs">○ No configurada</span>'}
-                            ${api.cost ? '<span class="text-yellow-400 text-xs">' + api.cost + '</span>' : ''}
-                        </div>
-                        
-                        <div class="mt-2 text-sm ${api.status === 'error' ? 'text-red-400' : 'text-gray-300'}">
-                            ${api.message}
-                        </div>
-                        
-                        ${api.currentValue ? '<div class="mt-1 text-xs text-blue-400">' + api.currentValue + '</div>' : ''}
-                        
-                        ${!api.configured && api.configInstructions ? 
-                            '<div class="mt-2"><a href="' + api.configInstructions + '" target="_blank" class="text-xs text-blue-400 hover:underline">→ Obtener API key</a></div>' 
-                            : ''}
-                    </div>
-                    
-                    ${api.responseTime > 0 ? 
-                        '<div class="text-right text-xs text-gray-500">' + api.responseTime + 'ms</div>' 
-                        : ''}
-                </div>
-            `;
-            
-            return card;
-        }
-        
-        function getStatusIcon(status) {
-            const icons = {
-                operational: '✅',
-                error: '❌',
-                not_configured: '⚪',
-                limited: '⚠️',
-                checking: '🔄',
-                unknown: '❓'
-            };
-            return icons[status] || '❓';
-        }
-        
-        function getStatusColor(status) {
-            const colors = {
-                operational: 'bg-green-900/50 text-green-300',
-                error: 'bg-red-900/50 text-red-300',
-                not_configured: 'bg-gray-700 text-gray-400',
-                limited: 'bg-yellow-900/50 text-yellow-300',
-                checking: 'bg-blue-900/50 text-blue-300',
-                unknown: 'bg-gray-700 text-gray-400'
-            };
-            return colors[status] || 'bg-gray-700 text-gray-400';
-        }
-        
-        function getStatusBorderColor(status) {
-            const colors = {
-                operational: 'border-green-500',
-                error: 'border-red-500',
-                not_configured: 'border-gray-600',
-                limited: 'border-yellow-500',
-                checking: 'border-blue-500',
-                unknown: 'border-gray-600'
-            };
-            return colors[status] || 'border-gray-600';
-        }
-        
-        async function refreshAPIStatus() {
-            await loadAPIStatus();
-        }
-        
-        window.onload = () => {
-            init();
-        };
-    </script>
+      </div>
+    </div>
+    <div class="w-full bg-gray-700 rounded-full h-2">
+      <div class="bg-blue-500 h-2 rounded-full progress-bar" style="width:${pct}%"></div>
+    </div>
+    <div class="flex justify-between text-xs text-gray-500 mt-1">
+      <span>${pct}% completado</span>
+      <span>Fin: ${new Date(cycle.endTime).toLocaleString()}</span>
+    </div>
+    ${isReady ? '' : `<div class="mt-2 text-right"><button onclick="completeCycle('${cycle.id}')" class="text-xs text-gray-500 hover:text-yellow-400">Completar ahora (manual)</button></div>`}
+  `;
+}
+
+function startCycleProgressTimer(cycle) {
+  if (cycleProgressTimers[cycle.id]) clearInterval(cycleProgressTimers[cycle.id]);
+  cycleProgressTimers[cycle.id] = setInterval(() => {
+    const remaining = Math.max(0, cycle.endTime - Date.now());
+    const el = document.getElementById(`countdown-${cycle.id}`);
+    if (el) el.textContent = formatCountdown(remaining);
+
+    if (remaining === 0) {
+      clearInterval(cycleProgressTimers[cycle.id]);
+      renderActiveCycleCard(cycle); // Re-render to show "Validar ahora"
+    }
+  }, 1000);
+}
+
+function formatCountdown(ms) {
+  if (ms <= 0) return '00:00:00';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
+}
+
+async function completeCycle(cycleId) {
+  try {
+    const r = await fetch(`/api/cycles/${cycleId}/complete`, { method: 'POST' });
+    const d = await r.json();
+    if (d.success) {
+      clearInterval(cycleProgressTimers[cycleId]);
+      await loadValidation();
+    } else {
+      alert('❌ ' + d.error);
+    }
+  } catch(e) { alert('❌ ' + e.message); }
+}
+
+async function loadCompletedCycles() {
+  const div = document.getElementById('completed-cycles');
+  div.innerHTML = '<p class="text-gray-400 text-sm">Cargando...</p>';
+  try {
+    const r = await fetch('/api/cycles/history');
+    const d = await r.json();
+
+    if (!d.success || d.cycles.length === 0) {
+      div.innerHTML = '<p class="text-gray-500 text-sm">No hay ciclos completados aún. Inicia tu primer ciclo.</p>';
+      return;
+    }
+
+    div.innerHTML = '';
+    d.cycles.slice(0, 10).forEach(cycle => {
+      const excluded = (cycle.excludedResults || []).length;
+      const card = document.createElement('div');
+      card.className = 'bg-gray-800 rounded-lg p-4 mb-3';
+      card.innerHTML = `
+        <div class="flex justify-between items-center mb-2">
+          <div>
+            <p class="font-bold">${new Date(cycle.completedAt).toLocaleString()}</p>
+            <p class="text-xs text-gray-400">${cycle.snapshot.length} activos · ${formatDuration(cycle.durationMs||43200000)}
+              ${excluded > 0 ? `<span class="text-yellow-400 ml-2">(${excluded} excluidos)</span>` : ''}
+            </p>
+          </div>
+          <div class="flex gap-2 items-center">
+            <div class="text-right mr-3">
+              <div class="text-2xl font-bold text-green-400">${cycle.metrics?.successRate ?? '?'}%</div>
+              <div class="text-xs text-gray-400">${cycle.metrics?.correct ?? '?'}/${cycle.metrics?.total ?? '?'} correctas</div>
+            </div>
+            <button onclick="toggleCycleDetail('${cycle.id}')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-sm">📋 Ver</button>
+            <button onclick="downloadReport('${cycle.id}')" class="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-sm">📄 Word</button>
+          </div>
+        </div>
+
+        <!-- Detalle expandible con resultados seleccionables -->
+        <div id="detail-${cycle.id}" class="hidden mt-3 border-t border-gray-700 pt-3">
+          <p class="text-xs text-gray-400 mb-2">💡 Haz click en un resultado para excluirlo/incluirlo de las estadísticas</p>
+          <div class="space-y-2">
+            ${(cycle.results || []).map(result => renderResultCard(result, cycle)).join('')}
+          </div>
+        </div>`;
+      div.appendChild(card);
+    });
+  } catch(e) {
+    div.innerHTML = '<p class="text-red-400 text-sm">Error al cargar historial</p>';
+  }
+}
+
+function renderResultCard(result, cycle) {
+  const excluded = (cycle.excludedResults || []).includes(result.id);
+  const correct  = result.correct;
+  const border   = excluded ? 'border-gray-600' : correct ? 'border-green-600' : 'border-red-600';
+  const opacity  = excluded ? 'opacity-50' : '';
+  const icon     = excluded ? '⊘' : correct ? '✓' : '✗';
+  const iconColor= excluded ? 'text-gray-400' : correct ? 'text-green-400' : 'text-red-400';
+
+  return `
+    <div class="result-card ${opacity} bg-gray-700/50 rounded p-3 border-l-4 ${border} flex justify-between items-center"
+         onclick="toggleExcludeResult('${cycle.id}', '${result.id}', this)"
+         title="${excluded ? 'Click para incluir en estadísticas' : 'Click para excluir de estadísticas'}">
+      <div>
+        <span class="font-semibold">${result.name}</span>
+        <span class="text-gray-400 text-xs ml-2">${result.symbol?.toUpperCase()}</span>
+        <span class="ml-2 text-xs px-1 rounded bg-gray-600">${result.classification}</span>
+      </div>
+      <div class="flex gap-4 items-center text-sm">
+        <span class="text-gray-400">Pred: <span class="text-white">${result.predictedChange}%</span></span>
+        <span class="text-gray-400">Real: <span class="${parseFloat(result.actualChange)>=0?'text-green-400':'text-red-400'}">${result.actualChange}%</span></span>
+        <span class="text-gray-400 text-xs">Δ${result.error}%</span>
+        <span class="${iconColor} font-bold text-lg">${icon}</span>
+      </div>
+    </div>`;
+}
+
+function toggleCycleDetail(cycleId) {
+  const detail = document.getElementById(`detail-${cycleId}`);
+  if (detail) detail.classList.toggle('hidden');
+}
+
+async function toggleExcludeResult(cycleId, assetId, el) {
+  try {
+    const r = await fetch(`/api/cycles/${cycleId}/results/${assetId}/toggle-exclude`, { method:'POST' });
+    const d = await r.json();
+    if (d.success) {
+      // Actualizar visual del card
+      if (d.isExcluded) {
+        el.classList.add('opacity-50');
+        el.querySelector('.font-bold.text-lg').textContent = '⊘';
+        el.querySelector('.font-bold.text-lg').className = 'text-gray-400 font-bold text-lg';
+        el.classList.remove('border-green-600','border-red-600');
+        el.classList.add('border-gray-600');
+      } else {
+        el.classList.remove('opacity-50');
+        el.classList.remove('border-gray-600');
+        const wasCorrect = el.querySelector('.text-white')?.textContent;
+        // Recargar el ciclo para reflejar estado correcto
+        await loadCompletedCycles();
+        // Restaurar el detalle abierto
+        const det = document.getElementById(`detail-${cycleId}`);
+        if (det) det.classList.remove('hidden');
+      }
+      // Actualizar métricas en la cabecera de la card
+      const metricEl = el.closest('.bg-gray-800')?.querySelector('.text-2xl.font-bold.text-green-400');
+      if (metricEl && d.metrics) {
+        metricEl.textContent = d.metrics.successRate + '%';
+        const sub = metricEl.nextElementSibling;
+        if (sub) sub.textContent = `${d.metrics.correct}/${d.metrics.total} correctas`;
+      }
+    }
+  } catch(e) { console.error(e); }
+}
+
+async function loadGlobalStats() {
+  const div = document.getElementById('global-stats');
+  try {
+    const r = await fetch('/api/cycles/stats/global');
+    const d = await r.json();
+    if (!d.success) return;
+    const s = d.stats;
+    div.innerHTML = `
+      <div class="grid grid-cols-3 gap-4">
+        <div class="bg-gray-800 rounded p-4 text-center"><div class="text-2xl font-bold text-blue-400">${s.totalCycles}</div><div class="text-xs text-gray-400 mt-1">Ciclos Ejecutados</div></div>
+        <div class="bg-gray-800 rounded p-4 text-center"><div class="text-2xl font-bold text-green-400">${s.avgSuccessRate}%</div><div class="text-xs text-gray-400 mt-1">Accuracy Promedio</div></div>
+        <div class="bg-gray-800 rounded p-4 text-center"><div class="text-2xl font-bold text-purple-400">${s.totalPredictions}</div><div class="text-xs text-gray-400 mt-1">Total Predicciones</div></div>
+      </div>
+      ${s.bestCycle ? `<p class="text-xs text-gray-500 mt-2">🏆 Mejor ciclo: ${s.bestCycle.successRate}% el ${s.bestCycle.date}</p>` : ''}`;
+  } catch(e){}
+}
+
+function downloadReport(cycleId) {
+  window.location.href = `/api/cycles/${cycleId}/report`;
+}
+
+// Auto-completar ciclos que ya cumplieron su duración
+setInterval(async () => {
+  try {
+    const r = await fetch('/api/cycles/pending');
+    const d = await r.json();
+    if (d.success && d.cycles.length > 0) {
+      for (const c of d.cycles) {
+        await fetch(`/api/cycles/${c.id}/complete`, { method:'POST' });
+        clearInterval(cycleProgressTimers[c.id]);
+      }
+      if (document.getElementById('content-validation').style.display !== 'none') await loadValidation();
+    }
+  } catch(e){}
+}, 30000); // cada 30s
+
+// ─────────────────────────────────────────────
+// ESTADO DE APIs
+// ─────────────────────────────────────────────
+async function loadAPIStatus() {
+  const btn = document.getElementById('btn-refresh-status');
+  btn.disabled = true;
+  btn.textContent = '⏳ Verificando...';
+
+  document.getElementById('api-summary').innerHTML = '<div class="col-span-4 text-gray-400 text-sm">⏳ Verificando 13 APIs en paralelo...</div>';
+  ['apis-free','apis-freemium','apis-paid','apis-premium'].forEach(id => {
+    document.getElementById(id).innerHTML = '<p class="text-gray-500 text-sm">Cargando...</p>';
+  });
+
+  try {
+    const r = await fetch('/api/status/complete');
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const d = await r.json();
+
+    if (!d.success) throw new Error(d.error || 'Error desconocido');
+
+    // Summary
+    const s = d.summary;
+    document.getElementById('api-summary').innerHTML = `
+      <div class="bg-gray-800 rounded p-4 text-center"><div class="text-2xl font-bold text-blue-400">${s.total}</div><div class="text-xs mt-1 text-gray-400">Total APIs</div></div>
+      <div class="bg-green-900/30 rounded p-4 text-center"><div class="text-2xl font-bold text-green-400">${s.available}</div><div class="text-xs mt-1 text-gray-400">Operacionales</div></div>
+      <div class="bg-yellow-900/30 rounded p-4 text-center"><div class="text-2xl font-bold text-yellow-400">${s.configured}</div><div class="text-xs mt-1 text-gray-400">Configuradas</div></div>
+      <div class="bg-red-900/30 rounded p-4 text-center"><div class="text-2xl font-bold text-red-400">${s.errors}</div><div class="text-xs mt-1 text-gray-400">Con Errores</div></div>`;
+
+    // Grupos por tier
+    const groups = { free:[], freemium:[], paid:[], premium:[] };
+    Object.values(d.apis).forEach(api => {
+      if (groups[api.tier]) groups[api.tier].push(api);
+    });
+
+    ['free','freemium','paid','premium'].forEach(tier => {
+      const div = document.getElementById(`apis-${tier}`);
+      if (groups[tier].length === 0) { div.innerHTML = '<p class="text-gray-600 text-sm">—</p>'; return; }
+      div.innerHTML = groups[tier].map(api => buildAPICard(api)).join('');
+    });
+
+  } catch(e) {
+    document.getElementById('api-summary').innerHTML =
+      `<div class="col-span-4 text-red-400">❌ Error al verificar APIs: ${e.message}</div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '🔄 Actualizar';
+  }
+}
+
+function buildAPICard(api) {
+  const icons = { operational:'✅', error:'❌', not_configured:'⚪', limited:'⚠️', checking:'🔄', unknown:'❓' };
+  const borders = { operational:'border-green-500', error:'border-red-500', not_configured:'border-gray-600', limited:'border-yellow-500', unknown:'border-gray-600' };
+  const badges  = { operational:'bg-green-900/50 text-green-300', error:'bg-red-900/50 text-red-300', not_configured:'bg-gray-700 text-gray-400', limited:'bg-yellow-900/50 text-yellow-300', unknown:'bg-gray-700 text-gray-400' };
+
+  const border = borders[api.status] || 'border-gray-600';
+  const badge  = badges[api.status]  || 'bg-gray-700 text-gray-400';
+  const icon   = icons[api.status]   || '❓';
+  const msText = api.responseTime > 0 ? `<span class="text-xs text-gray-500">${api.responseTime}ms</span>` : '';
+  const configLink = api.configInstructions ? `<a href="${api.configInstructions}" target="_blank" class="text-xs text-blue-400 hover:underline mt-1 block">→ Obtener API key</a>` : '';
+  const currentVal = api.currentValue ? `<p class="text-xs text-blue-300 mt-1">${api.currentValue}</p>` : '';
+  const cost = api.cost ? `<span class="text-xs text-orange-400 ml-2">${api.cost}</span>` : '';
+
+  return `
+    <div class="bg-gray-800 rounded-lg p-4 border-l-4 ${border}">
+      <div class="flex justify-between items-start">
+        <div class="flex gap-3 items-start flex-1">
+          <span class="text-2xl mt-0.5">${icon}</span>
+          <div class="flex-1">
+            <div class="flex flex-wrap items-center gap-2">
+              <span class="font-semibold">${api.name}</span>
+              <span class="px-2 py-0.5 rounded text-xs font-medium ${badge}">${api.status.replace('_',' ').toUpperCase()}</span>
+              ${api.configured ? '<span class="text-green-400 text-xs">✓ Configurada</span>' : '<span class="text-gray-500 text-xs">○ Sin configurar</span>'}
+              ${cost}
+            </div>
+            <p class="text-xs text-gray-400 mt-1">${api.factors.join(' · ')}</p>
+            <p class="text-sm mt-1 ${api.status==='error'?'text-red-300':'text-gray-300'}">${api.message}</p>
+            ${currentVal}
+            ${!api.configured ? configLink : ''}
+          </div>
+        </div>
+        ${msText}
+      </div>
+    </div>`;
+}
+
+// ─────────────────────────────────────────────
+// TABS
+// ─────────────────────────────────────────────
+function setTab(tab) {
+  document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tab-btn').forEach(el => { el.classList.remove('tab-active'); el.classList.add('bg-gray-700'); });
+  document.getElementById('content-' + tab).style.display = 'block';
+  const btn = document.getElementById('tab-' + tab);
+  btn.classList.add('tab-active');
+  btn.classList.remove('bg-gray-700');
+
+  if (tab === 'validation') loadValidation();
+  if (tab === 'status')     loadAPIStatus();
+}
+
+// ─────────────────────────────────────────────
+// ARRANQUE
+// ─────────────────────────────────────────────
+window.onload = () => init();
+</script>
 </body>
 </html>
