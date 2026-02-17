@@ -228,7 +228,20 @@
 
   <!-- ════ CONFIG ════ -->
   <div id="content-config" class="tab-content">
-    <h2 class="text-xl font-semibold mb-4">⚙️ Configuración del Algoritmo</h2>
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-xl font-semibold">⚙️ Configuración del Algoritmo</h2>
+      <div class="flex items-center gap-2">
+        <span class="text-xs text-gray-500">Editando modelo:</span>
+        <button onclick="switchConfigModel('normal')" id="cfgbtn-normal"
+          class="cfg-model-btn px-3 py-1.5 rounded-lg text-sm font-semibold bg-blue-700 text-white">📊 Generalista</button>
+        <button onclick="switchConfigModel('speculative')" id="cfgbtn-speculative"
+          class="cfg-model-btn px-3 py-1.5 rounded-lg text-sm font-semibold bg-gray-700 text-gray-300">🎯 Especulativo</button>
+      </div>
+    </div>
+    <div id="config-model-banner" class="bg-blue-950 border border-blue-800 rounded-xl p-3 mb-4">
+      <p class="text-sm text-blue-300 font-semibold" id="config-model-desc">📊 Modelo Generalista — activos de alta capitalización y liquidez</p>
+      <p class="text-xs text-gray-500 mt-0.5">Los cambios solo afectan a este modelo. Los ciclos de cada modo alimentan su propio modelo de forma independiente.</p>
+    </div>
     <div class="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-4">
       <h3 class="font-semibold mb-4 text-blue-400">🎯 Umbrales de Clasificación</h3>
       <div class="grid grid-cols-2 gap-4">
@@ -778,6 +791,7 @@ function setTab(tab) {
   if (tab === 'analysis')   loadAnalysis();
   if (tab === 'invest')     loadInvestData();
   if (tab === 'pump')       { loadPumpSettings(); loadPumpScan(); }
+  if (tab === 'config')     switchConfigModel(configEditMode || 'normal');
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -785,6 +799,10 @@ function setTab(tab) {
 // ═══════════════════════════════════════════════════════════
 function setMode(mode) {
   currentMode = mode;
+  // Actualizar badge de análisis
+  const ab = document.getElementById('analysis-mode-badge');
+  if (ab) { ab.textContent = mode==='speculative' ? '🎯 Modelo: Especulativo' : '📊 Modelo: Generalista';
+    ab.className = 'pill text-sm ' + (mode==='speculative' ? 'bg-yellow-900 text-yellow-300' : 'bg-blue-900 text-blue-300'); }
   document.querySelectorAll('.mode-btn').forEach(b => {
     b.classList.remove('bg-blue-700','text-white');
     b.classList.add('text-gray-400');
@@ -898,7 +916,7 @@ async function openDetail(id) {
   }
 
   try {
-    const r = await fetch(`/api/crypto/${id}/detail`);
+    const r = await fetch(`/api/crypto/${id}/detail?mode=${currentMode}`);
     const d = await r.json();
     if (!d.success) throw new Error(d.error);
     renderDetail(d.asset);
@@ -1134,21 +1152,69 @@ function buildConfigFromUI() {
     prediction:{ invertibleTarget:parseInt(document.getElementById('c-target').value), apalancadoTarget:parseInt(document.getElementById('c-apl-target').value),
       magnitudeTolerance:parseInt(document.getElementById('c-tol').value), directionOnly:false }};
 }
+// Modelo que se está editando en la pestaña config (puede ser distinto al modo de análisis)
+let configEditMode = 'normal';
+
+function switchConfigModel(mode) {
+  configEditMode = mode;
+  // Actualizar botones
+  ['normal','speculative'].forEach(m => {
+    const btn = document.getElementById('cfgbtn-' + m);
+    if (!btn) return;
+    const active = m === mode;
+    btn.className = 'cfg-model-btn px-3 py-1.5 rounded-lg text-sm font-semibold ' +
+      (active ? (m==='normal' ? 'bg-blue-700 text-white' : 'bg-yellow-700 text-white') : 'bg-gray-700 text-gray-300');
+  });
+  // Actualizar banner
+  const banner = document.getElementById('config-model-banner');
+  const desc   = document.getElementById('config-model-desc');
+  if (banner) banner.className = 'border rounded-xl p-3 mb-4 ' + (mode==='speculative' ? 'bg-yellow-950 border-yellow-800' : 'bg-blue-950 border-blue-800');
+  if (desc)   desc.className   = 'text-sm font-semibold ' + (mode==='speculative' ? 'text-yellow-300' : 'text-blue-300');
+  if (desc)   desc.textContent = mode==='speculative'
+    ? '🎯 Modelo Especulativo — micro/small-caps con alto potencial y alta volatilidad'
+    : '📊 Modelo Generalista — activos de alta capitalización y liquidez';
+  // Cargar config del modelo seleccionado
+  loadConfigForModel(mode);
+}
+
+async function loadConfigForModel(mode) {
+  try {
+    const r = await fetch(`/api/config?mode=${mode}`);
+    const d = await r.json();
+    if (d.success) { config = d.config; applyConfigToUI(); buildFactorSliders(); }
+  } catch(e) { console.error('loadConfigForModel:', e); }
+}
+
 async function saveConfig() {
   const msg = document.getElementById('config-msg');
   msg.innerHTML = '<span class="text-gray-400">Guardando...</span>';
   try {
-    const r = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildConfigFromUI()})});
+    const builtCfg = { ...buildConfigFromUI(), modelType: configEditMode };
+    const r = await fetch(`/api/config?mode=${configEditMode}`, {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ config: builtCfg })
+    });
     const d = await r.json();
-    if (d.success) { config=d.config; msg.innerHTML='<span class="text-green-400">✅ Guardado</span>'; }
-    else msg.innerHTML=`<span class="text-red-400">❌ ${(d.errors||[d.error]).join(', ')}</span>`;
-    setTimeout(()=>msg.innerHTML='',3000);
-  } catch(e){ msg.innerHTML=`<span class="text-red-400">❌ ${e.message}</span>`; }
+    if (d.success) {
+      config = d.config;
+      msg.innerHTML = `<span class="text-green-400">✅ Modelo '${configEditMode}' guardado</span>`;
+    } else {
+      msg.innerHTML = `<span class="text-red-400">❌ ${(d.errors||[d.error]).join(', ')}</span>`;
+    }
+    setTimeout(()=>{ if(msg) msg.innerHTML=''; }, 3000);
+  } catch(e) { msg.innerHTML=`<span class="text-red-400">❌ ${e.message}</span>`; }
 }
+
 async function resetConfig() {
-  if(!confirm('¿Resetear?')) return;
-  const r = await fetch('/api/config/reset',{method:'POST'}); const d=await r.json();
-  if(d.success){config=d.config;applyConfigToUI();buildFactorSliders();}
+  if (!confirm(`¿Resetear el modelo '${configEditMode}' a sus valores por defecto?`)) return;
+  try {
+    const r = await fetch(`/api/config/reset?mode=${configEditMode}`, { method: 'POST' });
+    const d = await r.json();
+    if (d.success) { config=d.config; applyConfigToUI(); buildFactorSliders();
+      document.getElementById('config-msg').innerHTML = `<span class="text-yellow-400">🔄 Modelo '${configEditMode}' reseteado</span>`;
+      setTimeout(()=>{ document.getElementById('config-msg').innerHTML=''; }, 3000);
+    }
+  } catch(e) { console.error('resetConfig:', e); }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1196,7 +1262,7 @@ async function confirmCycle() {
     const r = await fetch('/api/cycles/start', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ snapshot, durationMs: selectedDuration })
+      body: JSON.stringify({ snapshot, durationMs: selectedDuration, mode: currentMode })
     });
     const d = await r.json();
     if (!d.success) {
@@ -1379,7 +1445,7 @@ async function loadAnalysis() {
   const div = document.getElementById('analysis-content');
   div.innerHTML = '<p class="text-gray-400 text-sm">⏳ Analizando simulaciones...</p>';
   try {
-    const r = await fetch('/api/simulations/analysis'); const d = await r.json();
+    const r = await fetch(`/api/simulations/analysis?mode=${currentMode}`); const d = await r.json();
     if (!d.success) throw new Error(d.error);
     renderAnalysis(d);
   } catch(e) { div.innerHTML = `<p class="text-red-400 text-sm">❌ ${e.message}</p>`; }

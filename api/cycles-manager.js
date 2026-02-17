@@ -65,7 +65,7 @@ async function loadCycle(redis, cycleId) {
 
 // ── API pública ──────────────────────────────────────────────────────────────
 
-async function createCycle(redis, snapshot, config, durationMs) {
+async function createCycle(redis, snapshot, config, durationMs, mode = 'normal') {
   if (!redis) throw new Error('Redis no disponible');
 
   // Solo campos esenciales — evitar objetos grandes que superen el límite de Upstash
@@ -109,10 +109,11 @@ async function createCycle(redis, snapshot, config, durationMs) {
     endTime:         startTime + dur,
     durationMs:      dur,
     isSignificant,   // ≥6h
+    mode:            mode === 'speculative' ? 'speculative' : 'normal',  // ← separación de modelos
     predictionScaleFactor: scaleFactor,
     status:          'active',
     snapshot:        cleanSnapshot,
-    config:          { boostPowerThreshold: config.boostPowerThreshold },
+    config:          { boostPowerThreshold: config.boostPowerThreshold, modelType: mode },
     results:         null,
     metrics:         null,
     completedAt:     null,

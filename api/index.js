@@ -36,7 +36,12 @@ const exchangeConnector = require('./exchange-connector');
 const pumpDetector      = require('./pump-detector');
 const alertService      = require('./alert-service');
 
-const DEFAULT_CONFIG = algorithmConfig.DEFAULT_CONFIG;
+const DEFAULT_CONFIG            = algorithmConfig.DEFAULT_CONFIG;
+const DEFAULT_CONFIG_NORMAL     = algorithmConfig.DEFAULT_CONFIG_NORMAL;
+const DEFAULT_CONFIG_SPECULATIVE = algorithmConfig.DEFAULT_CONFIG_SPECULATIVE;
+const getDefaultConfig          = algorithmConfig.getDefaultConfig;
+const getConfigKey              = algorithmConfig.getConfigKey;
+const validateConfig            = algorithmConfig.validateConfig;
 
 // ── Redis helpers ─────────────────────────────────────────────────────────────
 // Upstash deserializa automáticamente — nunca JSON.parse/stringify
@@ -50,19 +55,28 @@ async function redisSet(key, value) {
   try { await redis.set(key, value); return true; }
   catch (e) { console.error(`Redis SET ${key}:`, e.message); throw e; }
 }
-async function getConfig() {
-  const stored = await redisGet('algorithm-config');
+// getConfig(mode) — devuelve la config del modelo correcto
+// mode: 'normal' | 'speculative'  (default: 'normal')
+async function getConfig(mode = 'normal') {
+  const key = getConfigKey(mode);
+  const defaultCfg = getDefaultConfig(mode);
+
+  const stored = await redisGet(key);
   let cfg = null;
   if (stored && typeof stored === 'object') cfg = stored;
   else if (stored && typeof stored === 'string') { try { cfg = JSON.parse(stored); } catch(_){} }
-  if (!cfg) return { ...DEFAULT_CONFIG };
+  if (!cfg) return { ...defaultCfg };
 
-  // Migrar configs v1 (factorWeights) a v2 (potentialWeights + resistanceWeights)
-  if (!cfg.potentialWeights || !cfg.resistanceWeights) {
-    console.log('Config v1 detectada en Redis — migrando a v2');
-    cfg = { ...DEFAULT_CONFIG, lastModified: new Date().toISOString() };
-    // Guardar la nueva config para evitar migraciones futuras
-    try { await redisSet('algorithm-config', cfg); } catch(_) {}
+  // Migrar si el modelo guardado no coincide con el modo pedido
+  if (cfg.modelType && cfg.modelType !== mode) {
+    console.log(`Config de modo '${cfg.modelType}' no coincide con modo '${mode}' — usando defaults`);
+    return { ...defaultCfg };
+  }
+  // Migrar configs v1/v2 antiguas (sin modelType)
+  if (!cfg.modelType || !cfg.potentialWeights || !cfg.resistanceWeights) {
+    console.log(`Config sin modelType detectada — migrando a v4.0-${mode}`);
+    cfg = { ...defaultCfg, lastModified: new Date().toISOString() };
+    try { await redisSet(key, cfg); } catch(_) {}
   }
   return cfg;
 }
@@ -448,7 +462,10 @@ app.get('/api/debug/cycles', async (_req, res) => {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 app.get('/api/config', async (_req, res) => {
-  try { res.json({ success: true, config: await getConfig() }); }
+  try {
+    const mode = _req.query?.mode || 'normal';
+    res.json({ success: true, config: await getConfig(mode), mode });
+  }
   catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -467,9 +484,10 @@ app.post('/api/config', async (req, res) => {
 
 app.post('/api/config/reset', async (_req, res) => {
   try {
-    const config = { ...DEFAULT_CONFIG, lastModified: new Date().toISOString() };
-    await redisSet('algorithm-config', config);
-    res.json({ success: true, config });
+    const mode = _req.query?.mode || 'normal';
+    const config = { ...getDefaultConfig(mode), lastModified: new Date().toISOString() };
+    await redisSet(getConfigKey(mode), config);
+    res.json({ success: true, config, mode, message: `Config ${mode} reseteada a defaults` });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -513,8 +531,8 @@ const SPECULATIVE_VOL_MAX = 50_000_000;   // $50M volumen máximo
 
 app.get('/api/crypto', async (req, res) => {
   try {
-    const config = await getConfig();
     const mode   = req.query.mode || 'normal'; // ?mode=speculative
+    const config = await getConfig(mode);
 
     // Especulativo: pedir 100 activos y filtrar; normal: top 20 por market cap
     const perPage = mode === 'speculative' ? 250 : 20;
@@ -604,7 +622,8 @@ app.get('/api/crypto', async (req, res) => {
 // ── Detalle de activo individual ──────────────────────────────────────────────
 app.get('/api/crypto/:id/detail', async (req, res) => {
   try {
-    const config = await getConfig();
+    const mode   = req.query.mode || 'normal';
+    const config = await getConfig(mode);
     const { id } = req.params;
 
     // Datos en paralelo: mercado + detail de CoinGecko + noticias + reddit + FGI
@@ -732,7 +751,7 @@ app.get('/api/status/complete', async (_req, res) => {
 const SIGNIFICANT_DURATION_MS = 6 * 3600000; // 6 horas = significativo
 
 // Analizar un conjunto de ciclos y emitir recomendaciones de ajuste
-function analyzeSimulations(cycles, config) {
+function analyzeSimulations(cycles, config, mode = 'normal') {
   const significant = cycles.filter(c => (c.durationMs || 0) >= SIGNIFICANT_DURATION_MS && c.status === 'completed');
   const testing     = cycles.filter(c => (c.durationMs || 0) < SIGNIFICANT_DURATION_MS  && c.status === 'completed');
 
@@ -813,18 +832,22 @@ function analyzeSimulations(cycles, config) {
     analysis,
     recommendations,
     suggestedConfig,
-    note: `Basado en ${significant.length} simulaciones significativas (≥6h) con ${significant.reduce((s,c) => s+(c.results?.length||0),0)} predicciones totales.`
+    mode,
+    note: `Basado en ${significant.length} ciclos significativos (≥6h) del modelo '${mode}' con ${significant.reduce((s,c) => s+(c.results?.length||0),0)} predicciones totales.`
   };
 }
 
-app.get('/api/simulations/analysis', async (_req, res) => {
+app.get('/api/simulations/analysis', async (req, res) => {
   if (!redis) return res.json({ success: false, error: 'Redis no disponible' });
   try {
-    const config  = await getConfig();
-    const ids     = await cyclesManager.getCompletedCycles(redis);
-    const cycles  = await cyclesManager.getCyclesDetails(redis, ids);
-    const result  = analyzeSimulations(cycles, config);
-    res.json({ success: true, ...result });
+    const mode   = _req.query?.mode || 'normal';
+    const config = await getConfig(mode);
+    const ids    = await cyclesManager.getCompletedCycles(redis);
+    const allCycles = await cyclesManager.getCyclesDetails(redis, ids);
+    // Solo ciclos del mismo modo alimentan este análisis
+    const cycles = allCycles.filter(cyc => (cyc.mode || 'normal') === mode);
+    const result = analyzeSimulations(cycles, config, mode);
+    res.json({ success: true, mode, cyclesTotal: allCycles.length, cyclesThisMode: cycles.length, ...result });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -832,14 +855,16 @@ app.get('/api/simulations/analysis', async (_req, res) => {
 app.post('/api/simulations/apply-suggestion', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
+    const mode   = req.body.mode || req.query.mode || 'normal';
     const ids    = await cyclesManager.getCompletedCycles(redis);
-    const cycles = await cyclesManager.getCyclesDetails(redis, ids);
-    const config = await getConfig();
-    const result = analyzeSimulations(cycles, config);
+    const allCycles = await cyclesManager.getCyclesDetails(redis, ids);
+    const cycles = allCycles.filter(cyc => (cyc.mode || 'normal') === mode);
+    const config = await getConfig(mode);
+    const result = analyzeSimulations(cycles, config, mode);
     if (!result.hasSignificant) return res.status(400).json({ success: false, error: result.message });
-    const newConfig = { ...result.suggestedConfig, lastModified: new Date().toISOString(), version: '2.0-autocal' };
-    await redisSet('algorithm-config', newConfig);
-    res.json({ success: true, applied: newConfig, changes: result.recommendations });
+    const newConfig = { ...result.suggestedConfig, modelType: mode, lastModified: new Date().toISOString(), version: '4.0-autocal' };
+    await redisSet(getConfigKey(mode), newConfig);
+    res.json({ success: true, applied: newConfig, mode, changes: result.recommendations });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
@@ -856,8 +881,9 @@ app.post('/api/cycles/start', async (req, res) => {
   const finalDuration = (!isNaN(dur) && dur >= 60000 && dur <= 7 * 86400000) ? dur : 43200000;
 
   try {
-    const config = await getConfig();
-    const cycle  = await cyclesManager.createCycle(redis, snapshot, config, finalDuration);
+    const mode   = req.body.mode || 'normal';
+    const config = await getConfig(mode);
+    const cycle  = await cyclesManager.createCycle(redis, snapshot, config, finalDuration, mode);
     res.json({ success: true, cycle: { id: cycle.id, startTime: cycle.startTime, endTime: cycle.endTime, durationMs: cycle.durationMs, assetsCount: cycle.snapshot.length } });
   } catch(e) {
     console.error('cycles/start:', e);
@@ -888,7 +914,10 @@ app.get('/api/cycles/pending', async (_req, res) => {
 app.post('/api/cycles/:cycleId/complete', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
-    const config  = await getConfig();
+    // Recuperar el ciclo para saber su modo antes de usar la config correcta
+    const cycleData = await cyclesManager.getCycle(redis, req.params.cycleId);
+    const cycleMode = cycleData?.mode || req.body?.mode || 'normal';
+    const config    = await getConfig(cycleMode);
     const prices  = await axios.get(
       'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1',
       { timeout: 8000 }
