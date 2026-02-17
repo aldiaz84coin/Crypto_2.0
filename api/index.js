@@ -33,6 +33,8 @@ const reportGenerator   = require('./report-generator');
 const apiHealthCheck    = require('./api-health-check');
 const investManager     = require('./investment-manager');
 const exchangeConnector = require('./exchange-connector');
+const pumpDetector      = require('./pump-detector');
+const alertService      = require('./alert-service');
 
 const DEFAULT_CONFIG = algorithmConfig.DEFAULT_CONFIG;
 
@@ -1368,6 +1370,195 @@ app.post('/api/invest/api-key', async (req, res) => {
   try {
     await redisSet(`apikey:${keyName}`, keyValue.trim());
     res.json({ success: true, saved: keyName });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// DETECTOR DE PUMP COORDINADO
+// ════════════════════════════════════════════════════════════════════════════
+
+const PUMP_SCAN_KEY       = 'pump:last-scan';
+const PUMP_HISTORY_KEY    = 'pump:history';
+const PUMP_EMAIL_CFG_KEY  = 'pump:email-config';
+const PUMP_SETTINGS_KEY   = 'pump:settings';
+
+const DEFAULT_PUMP_SETTINGS = {
+  enabled:        true,
+  intervalHours:  6,             // escaneo cada N horas
+  minScoreAlert:  4,             // score mínimo para enviar email
+  emailEnabled:   false,
+  lastScanAt:     null
+};
+
+async function getPumpSettings() {
+  const stored = await redisGet(PUMP_SETTINGS_KEY);
+  if (stored && typeof stored === 'object') return { ...DEFAULT_PUMP_SETTINGS, ...stored };
+  return { ...DEFAULT_PUMP_SETTINGS };
+}
+
+async function getPumpEmailCfg() {
+  const stored = await redisGet(PUMP_EMAIL_CFG_KEY);
+  if (stored && typeof stored === 'object') return stored;
+  return {};
+}
+
+// Helper: pasar getRedisKey al pump-detector
+async function _getRedisKey(name) { return getRedisKey(name); }
+
+// ── Ejecutar escaneo y guardar resultados ─────────────────────────────────
+async function executePumpScan() {
+  const result = await pumpDetector.runPumpScan(redis, _getRedisKey);
+  if (!result.success) return result;
+
+  // Guardar último escaneo
+  await redisSet(PUMP_SCAN_KEY, result);
+
+  // Añadir al historial (max 50 entradas con detecciones relevantes)
+  if (result.detections.length > 0) {
+    let history = [];
+    try { const h = await redisGet(PUMP_HISTORY_KEY); history = Array.isArray(h) ? h : []; } catch(_) {}
+    history.unshift({ scannedAt: result.scannedAt, detections: result.detections.slice(0, 5) });
+    await redisSet(PUMP_HISTORY_KEY, history.slice(0, 50));
+  }
+
+  // Enviar alertas por email si hay detecciones con score suficiente
+  const settings  = await getPumpSettings();
+  const emailCfg  = await getPumpEmailCfg();
+  if (settings.emailEnabled && emailCfg.user && emailCfg.to) {
+    const toAlert = result.detections.filter(d => d.totalScore >= settings.minScoreAlert);
+    for (const det of toAlert) {
+      await alertService.sendPumpAlert(det, emailCfg);
+      await new Promise(r => setTimeout(r, 500)); // throttle
+    }
+  }
+
+  // Actualizar lastScanAt
+  await redisSet(PUMP_SETTINGS_KEY, { ...settings, lastScanAt: result.scannedAt });
+
+  return result;
+}
+
+// ── Scheduler en memoria (para desarrollo local) ───────────────────────────
+let pumpSchedulerTimer = null;
+async function startPumpScheduler() {
+  if (pumpSchedulerTimer) clearInterval(pumpSchedulerTimer);
+  const settings = await getPumpSettings();
+  if (!settings.enabled) return;
+  const ms = (settings.intervalHours || 6) * 3600000;
+  pumpSchedulerTimer = setInterval(async () => {
+    try { await executePumpScan(); } catch(e) { console.error('[PumpDetector] Error:', e.message); }
+  }, ms);
+  console.log(`[PumpDetector] Scheduler activo — cada ${settings.intervalHours}h`);
+}
+
+// Arrancar scheduler al iniciar si Redis disponible
+if (redis) { setTimeout(() => startPumpScheduler().catch(()=>{}), 5000); }
+
+// ── GET /api/pump/scan ─────────────────────────────────────────────────────
+// Último resultado guardado (sin re-escanear)
+app.get('/api/pump/scan', async (_req, res) => {
+  try {
+    const last = await redisGet(PUMP_SCAN_KEY);
+    if (last) return res.json({ success: true, cached: true, ...last });
+    res.json({ success: true, cached: false, detections: [], message: 'Sin escaneos previos. Ejecuta /api/pump/run-scan para escanear.' });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/pump/run-scan ───────────────────────────────────────────────
+// Forzar escaneo ahora (puede tardar 20-40s)
+app.post('/api/pump/run-scan', async (_req, res) => {
+  try {
+    res.json({ success: true, message: 'Escaneo iniciado en background. Consulta /api/pump/scan en ~30s.' });
+    // Ejecutar de forma asíncrona sin bloquear la respuesta
+    setImmediate(() => executePumpScan().catch(e => console.error('[PumpScan] Error:', e.message)));
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/pump/scan-sync ──────────────────────────────────────────────
+// Escaneo síncrono para UI con feedback directo (timeout 60s)
+app.post('/api/pump/scan-sync', async (_req, res) => {
+  try {
+    const result = await executePumpScan();
+    res.json(result);
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── GET /api/pump/history ─────────────────────────────────────────────────
+app.get('/api/pump/history', async (_req, res) => {
+  try {
+    let history = [];
+    try { const h = await redisGet(PUMP_HISTORY_KEY); history = Array.isArray(h) ? h : []; } catch(_) {}
+    res.json({ success: true, history });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── GET /api/pump/settings ────────────────────────────────────────────────
+app.get('/api/pump/settings', async (_req, res) => {
+  try {
+    const settings = await getPumpSettings();
+    const emailCfg = await getPumpEmailCfg();
+    res.json({ success: true, settings, emailConfigured: !!(emailCfg.user && emailCfg.to) });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/pump/settings ───────────────────────────────────────────────
+app.post('/api/pump/settings', async (req, res) => {
+  try {
+    const current  = await getPumpSettings();
+    const updated  = { ...current, ...req.body, lastScanAt: current.lastScanAt };
+    await redisSet(PUMP_SETTINGS_KEY, updated);
+    // Reiniciar scheduler si cambió el intervalo
+    if (req.body.intervalHours || req.body.enabled !== undefined) {
+      if (pumpSchedulerTimer) clearInterval(pumpSchedulerTimer);
+      if (updated.enabled) startPumpScheduler().catch(()=>{});
+    }
+    res.json({ success: true, settings: updated });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/pump/email-config ───────────────────────────────────────────
+app.post('/api/pump/email-config', async (req, res) => {
+  try {
+    const { host, port, user, pass, to } = req.body;
+    if (!user || !to) return res.status(400).json({ success: false, error: 'user y to son requeridos' });
+    const cfg = { host: host || 'smtp.gmail.com', port: port || 587, user, pass, to };
+    await redisSet(PUMP_EMAIL_CFG_KEY, cfg);
+    res.json({ success: true, configured: true, to, user });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/pump/test-email ─────────────────────────────────────────────
+app.post('/api/pump/test-email', async (_req, res) => {
+  try {
+    const emailCfg = await getPumpEmailCfg();
+    if (!emailCfg.user || !emailCfg.to) return res.status(400).json({ success: false, error: 'Email no configurado' });
+    // Crear detección de prueba
+    const testDet = {
+      name: 'TEST COIN', symbol: 'TEST', market_cap: 50_000_000, total_volume: 5_000_000,
+      totalScore: 5, riskLevel: 'SOSPECHOSO', riskColor: 'orange', riskEmoji: '⚠️',
+      detectedAt: new Date().toISOString(),
+      breakdown: { socialSpike:{score:2,max:4}, volumeAnomaly:{score:2,max:2}, vacuousNews:{score:1,max:2}, whaleActivity:{score:0,max:2}, lunarCrush:{score:0,max:2}, timingSync:{score:0,max:1} },
+      evidence: ['Este es un email de prueba del sistema CryptoDetector', 'Confirma que las alertas funcionan correctamente'],
+      flaggedNews: [], clonedSignals: []
+    };
+    const result = await alertService.sendPumpAlert(testDet, emailCfg);
+    res.json({ success: result.success, ...result });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── GET /api/pump/cron ────────────────────────────────────────────────────
+// Endpoint para cron externo (Vercel Cron, cron-job.org, etc.)
+// Llamar cada 6h desde vercel.json: { "crons": [{ "path": "/api/pump/cron", "schedule": "0 */6 * * *" }] }
+app.get('/api/pump/cron', async (req, res) => {
+  // Autenticación básica por header para cron externo
+  const authHeader = req.headers['x-cron-secret'];
+  const cronSecret = await getRedisKey('CRON_SECRET');
+  if (cronSecret && authHeader !== cronSecret) {
+    return res.status(401).json({ success: false, error: 'Unauthorized' });
+  }
+  try {
+    res.json({ success: true, message: 'Cron iniciado' });
+    setImmediate(() => executePumpScan().catch(e => console.error('[Cron] Error:', e.message)));
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
