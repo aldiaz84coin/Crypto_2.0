@@ -1100,6 +1100,57 @@ app.get('/api/invest/positions', async (_req, res) => {
       } catch(_) {}
     }
 
+    // Enriquecer posiciones abiertas con datos temporales de su ciclo
+    if (open.length > 0) {
+      try {
+        const activeIds  = await cyclesManager.getActiveCycles(redis);
+        const allIds     = [...activeIds];
+        // También buscar ciclos históricos recientes por si el ciclo ya completó
+        const allCycles  = await cyclesManager.getAllCycles(redis);
+        const cycleMap   = {};
+        allCycles.forEach(cyc => { cycleMap[cyc.id] = cyc; });
+
+        const now = Date.now();
+        open.forEach(p => {
+          const cyc = cycleMap[p.cycleId];
+          if (cyc) {
+            const elapsed   = now - cyc.startTime;
+            const total     = cyc.durationMs || (cyc.endTime - cyc.startTime);
+            const remaining = Math.max(0, cyc.endTime - now);
+            const pct       = Math.min(100, Math.round(elapsed / total * 100));
+            p.cycleInfo = {
+              cycleId:          cyc.id,
+              startTime:        cyc.startTime,
+              endTime:          cyc.endTime,
+              durationMs:       total,
+              elapsedMs:        elapsed,
+              remainingMs:      remaining,
+              progressPct:      pct,
+              isCompleted:      cyc.status === 'completed',
+              // Iteración actual y restantes (ciclos hold)
+              currentIteration: p.holdCycles + 1,           // ciclo en el que está
+              totalIterations:  p.maxHoldCycles,             // máx ciclos permitidos
+              iterationsLeft:   p.maxHoldCycles - p.holdCycles  // ciclos restantes
+            };
+          } else {
+            // Ciclo no encontrado — calcular desde openedAt
+            const openedMs  = new Date(p.openedAt).getTime();
+            const elapsed   = now - openedMs;
+            p.cycleInfo = {
+              cycleId:          p.cycleId,
+              elapsedMs:        elapsed,
+              remainingMs:      null,
+              progressPct:      null,
+              isCompleted:      false,
+              currentIteration: p.holdCycles + 1,
+              totalIterations:  p.maxHoldCycles,
+              iterationsLeft:   p.maxHoldCycles - p.holdCycles
+            };
+          }
+        });
+      } catch(_) {}
+    }
+
     res.json({
       success: true,
       summary: {

@@ -1760,7 +1760,9 @@ async function loadInvestOverview() {
     if (d.open.length === 0) {
       openDiv.innerHTML = '<p class="text-gray-500 text-sm">Sin posiciones abiertas.</p>';
     } else {
-      openDiv.innerHTML = d.open.map(p => renderPositionCard(p, true)).join('');
+      // Limpiar timers anteriores antes de re-renderizar
+    Object.keys(positionCycleTimers).forEach(id => { clearInterval(positionCycleTimers[id]); delete positionCycleTimers[id]; });
+    openDiv.innerHTML = d.open.map(p => renderPositionCard(p, true)).join('');
     }
   } catch(e) { console.error(e); }
 }
@@ -1864,35 +1866,158 @@ async function loadInvestPositions() {
   } catch(e) {}
 }
 
+// Timers live de ciclo por posición
+const positionCycleTimers = {};
+
+function fmtDuration(ms) {
+  if (!ms || ms <= 0) return '00:00:00';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  const s = Math.floor((ms % 60000) / 1000);
+  return h > 0
+    ? `${h}h ${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`
+    : `${String(m).padStart(2,'0')}m ${String(s).padStart(2,'0')}s`;
+}
+
+function fmtDurationShort(ms) {
+  if (!ms || ms <= 0) return '—';
+  const h = Math.floor(ms / 3600000);
+  const m = Math.floor((ms % 3600000) / 60000);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}m`;
+}
+
+function startPositionCycleTimer(posId, cycleInfo) {
+  if (positionCycleTimers[posId]) clearInterval(positionCycleTimers[posId]);
+  if (!cycleInfo || !cycleInfo.endTime) return;
+  positionCycleTimers[posId] = setInterval(() => {
+    const now       = Date.now();
+    const remaining = Math.max(0, cycleInfo.endTime - now);
+    const elapsed   = now - cycleInfo.startTime;
+    const total     = cycleInfo.durationMs;
+    const pct       = Math.min(100, Math.round(elapsed / total * 100));
+
+    const elEl  = document.getElementById('pos-elapsed-'  + posId);
+    const remEl = document.getElementById('pos-remaining-' + posId);
+    const barEl = document.getElementById('pos-bar-'      + posId);
+    const pctEl = document.getElementById('pos-pct-'      + posId);
+
+    if (elEl)  elEl.textContent  = fmtDuration(elapsed);
+    if (remEl) remEl.textContent = remaining > 0 ? fmtDuration(remaining) : '✅ Completado';
+    if (pctEl) pctEl.textContent = pct + '%';
+    if (barEl) {
+      barEl.style.width = pct + '%';
+      barEl.className = 'h-full rounded-full transition-all ' +
+        (pct >= 100 ? 'bg-green-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-blue-500');
+    }
+    if (remaining === 0) clearInterval(positionCycleTimers[posId]);
+  }, 1000);
+}
+
 function renderPositionCard(p, isOpen) {
   const pnl    = isOpen ? p.unrealizedPnL : p.realizedPnL;
   const pnlPct = isOpen ? p.unrealizedPnLPct : p.realizedPnLPct;
   const pnlPos = (pnl||0) >= 0;
-  const border = pnlPos ? 'border-green-800' : 'border-red-800';
-  const pnlColor = pnlPos ? 'text-green-400' : 'text-red-400';
-  const modeBadge = p.mode==='simulated' ? '<span class="pill bg-blue-950 text-blue-400 text-xs">⚗️ SIM</span>' : p.mode==='testnet' ? '<span class="pill bg-yellow-950 text-yellow-400 text-xs">🧪 TEST</span>' : '<span class="pill bg-red-950 text-red-400 text-xs">💵 REAL</span>';
-  return `
-    <div class="bg-gray-900 rounded-xl border ${border} border p-4 mb-2">
-      <div class="flex justify-between items-start">
-        <div>
-          <div class="flex items-center gap-2 mb-1">
-            <span class="font-bold">${p.name}</span>
-            <span class="text-gray-500 mono text-xs">${(p.symbol||'').toUpperCase()}</span>
-            ${modeBadge}
-            ${isOpen ? '<span class="pill bg-green-900 text-green-300 text-xs">ABIERTA</span>' : `<span class="pill bg-gray-800 text-gray-400 text-xs">${p.closeReason||'cerrada'}</span>`}
+  const border    = isOpen ? (pnlPos ? 'border-green-800' : 'border-red-800') : 'border-gray-800';
+  const pnlColor  = pnlPos ? 'text-green-400' : 'text-red-400';
+  const modeBadge = p.mode==='simulated'
+    ? '<span class="pill bg-blue-950 text-blue-400 text-xs">⚗️ SIM</span>'
+    : p.mode==='testnet'
+      ? '<span class="pill bg-yellow-950 text-yellow-400 text-xs">🧪 TEST</span>'
+      : '<span class="pill bg-red-950 text-red-400 text-xs">💵 REAL</span>';
+
+  const ci = p.cycleInfo;
+
+  // ── Bloque de progreso del ciclo (solo posiciones abiertas) ───────────────
+  const cycleBlock = isOpen && ci ? (() => {
+    const pct         = ci.progressPct ?? 0;
+    const elapsedStr  = fmtDuration(ci.elapsedMs);
+    const remainStr   = ci.remainingMs !== null ? fmtDuration(ci.remainingMs) : '—';
+    const barColor    = pct >= 100 ? 'bg-green-500' : pct >= 60 ? 'bg-yellow-500' : 'bg-blue-500';
+    const iterColor   = ci.iterationsLeft <= 1 ? 'text-red-400' : ci.iterationsLeft <= 2 ? 'text-yellow-400' : 'text-gray-300';
+    const totalHuman  = fmtDurationShort(ci.durationMs);
+
+    return `
+    <div class="mt-3 pt-3 border-t border-gray-800">
+      <!-- Iteraciones -->
+      <div class="flex justify-between items-center mb-2">
+        <div class="flex items-center gap-3">
+          <div class="text-center">
+            <p class="text-xs text-gray-500">Iteración</p>
+            <p class="text-lg font-bold mono text-white">${ci.currentIteration}<span class="text-gray-600 text-sm">/${ci.totalIterations}</span></p>
           </div>
-          <div class="text-xs text-gray-500 space-y-0.5">
-            <p>Entrada: <span class="mono text-white">$${fmt(p.entryPrice)}</span> · ${isOpen ? `Actual: <span class="mono text-white">$${fmt(p.currentPrice)}</span>` : `Cierre: <span class="mono text-white">$${fmt(p.currentPrice)}</span>`}</p>
-            <p>Capital: <span class="mono text-white">$${p.capitalUSD}</span> · Fees: <span class="mono text-yellow-400">$${(p.totalFeesUSD||p.entryFeeUSD||0).toFixed(4)}</span> · ${p.exchange}</p>
-            <p>TP: <span class="mono text-green-400">$${fmt(p.takeProfitPrice)}</span> · SL: <span class="mono text-red-400">$${fmt(p.stopLossPrice)}</span>${isOpen ? ` · Hold: ${p.holdCycles}/${p.maxHoldCycles}` : ''}</p>
+          <div class="text-center">
+            <p class="text-xs text-gray-500">Restantes</p>
+            <p class="text-lg font-bold mono ${iterColor}">${ci.iterationsLeft}</p>
+          </div>
+          <div class="text-center">
+            <p class="text-xs text-gray-500">Duración ciclo</p>
+            <p class="text-sm font-semibold text-gray-300">${totalHuman}</p>
           </div>
         </div>
+        <!-- Pct completado -->
         <div class="text-right">
-          <p class="${pnlColor} text-xl font-bold mono">${pnlPos?'+':''}${(pnlPct||0).toFixed(2)}%</p>
-          <p class="${pnlColor} text-sm mono">${pnlPos?'+':''}$${(pnl||0).toFixed(4)}</p>
-          ${isOpen ? `<button onclick="closePosition('${p.id}')" class="mt-2 bg-red-900 hover:bg-red-800 px-3 py-1 rounded text-xs text-red-300">Cerrar</button>` : ''}
+          <p class="text-2xl font-bold mono text-blue-400" id="pos-pct-${p.id}">${pct}%</p>
+          <p class="text-xs text-gray-500">completado</p>
         </div>
       </div>
+
+      <!-- Barra de progreso -->
+      <div class="w-full bg-gray-800 rounded-full h-2 mb-2">
+        <div id="pos-bar-${p.id}" class="h-full rounded-full transition-all ${barColor}" style="width:${pct}%"></div>
+      </div>
+
+      <!-- Tiempos -->
+      <div class="grid grid-cols-2 gap-2">
+        <div class="bg-gray-800/60 rounded-lg px-3 py-2">
+          <p class="text-xs text-gray-500 mb-0.5">⏱ Transcurrido</p>
+          <p class="text-sm font-bold mono text-white" id="pos-elapsed-${p.id}">${elapsedStr}</p>
+        </div>
+        <div class="bg-gray-800/60 rounded-lg px-3 py-2">
+          <p class="text-xs text-gray-500 mb-0.5">⏳ Restante</p>
+          <p class="text-sm font-bold mono ${ci.remainingMs === 0 ? 'text-green-400' : 'text-blue-300'}" id="pos-remaining-${p.id}">${ci.remainingMs === 0 ? '✅ Completado' : remainStr}</p>
+        </div>
+      </div>
+    </div>`;
+  })() : '';
+
+  const html = `
+    <div class="bg-gray-900 rounded-xl border ${border} p-4 mb-3">
+      <!-- Header: nombre + P&L -->
+      <div class="flex justify-between items-start mb-3">
+        <div>
+          <div class="flex items-center gap-2 mb-1">
+            <span class="font-bold text-base">${p.name}</span>
+            <span class="text-gray-500 mono text-xs">${(p.symbol||'').toUpperCase()}</span>
+            ${modeBadge}
+            ${isOpen
+              ? '<span class="pill bg-green-900 text-green-300 text-xs">● ABIERTA</span>'
+              : `<span class="pill bg-gray-800 text-gray-400 text-xs">${p.closeReason||'cerrada'}</span>`}
+          </div>
+          <div class="text-xs text-gray-500 space-y-0.5">
+            <p>Entrada: <span class="mono text-white">$${fmt(p.entryPrice)}</span>
+              · ${isOpen ? `Actual: <span class="mono text-white">$${fmt(p.currentPrice)}</span>` : `Cierre: <span class="mono text-white">$${fmt(p.currentPrice)}</span>`}
+            </p>
+            <p>Capital: <span class="mono text-white">$${p.capitalUSD}</span>
+              · Fees: <span class="mono text-yellow-400">$${(p.totalFeesUSD||p.entryFeeUSD||0).toFixed(4)}</span>
+              · ${p.exchange}
+            </p>
+            <p>TP: <span class="mono text-green-400">$${fmt(p.takeProfitPrice)}</span>
+              · SL: <span class="mono text-red-400">$${fmt(p.stopLossPrice)}</span>
+            </p>
+          </div>
+        </div>
+        <div class="text-right flex-shrink-0 ml-3">
+          <p class="${pnlColor} text-2xl font-bold mono">${pnlPos?'+':''}${(pnlPct||0).toFixed(2)}%</p>
+          <p class="${pnlColor} text-sm mono">${pnlPos?'+':''}$${(pnl||0).toFixed(4)}</p>
+          ${isOpen ? `<button onclick="closePosition('${p.id}')" class="mt-2 bg-red-900 hover:bg-red-800 px-3 py-1 rounded text-xs text-red-300">✕ Cerrar</button>` : ''}
+        </div>
+      </div>
+
+      <!-- Bloque de progreso del ciclo -->
+      ${cycleBlock}
+
+      <!-- Feedback algoritmo -->
       ${p.algorithmFeedback && !p.algorithmFeedback.predictionCorrect ? `
         <div class="mt-3 pt-3 border-t border-gray-800 bg-red-950/30 rounded-lg p-2">
           <p class="text-xs text-red-400 font-semibold">⚠️ Predicción incorrecta — retroalimentación al algoritmo</p>
@@ -1900,6 +2025,13 @@ function renderPositionCard(p, isOpen) {
           ${p.algorithmFeedback.suggestion ? `<p class="text-xs text-yellow-400 mt-0.5">→ ${p.algorithmFeedback.suggestion}</p>` : ''}
         </div>` : ''}
     </div>`;
+
+  // Arrancar timer live si la posición está abierta y tiene ciclo
+  if (isOpen && ci && ci.endTime) {
+    setTimeout(() => startPositionCycleTimer(p.id, ci), 50);
+  }
+
+  return html;
 }
 
 async function closePosition(id) {
