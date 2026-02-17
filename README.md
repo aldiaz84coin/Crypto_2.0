@@ -416,3 +416,54 @@ Suficiente para: Institucional, fondos
 **Modos:** 4 (Básico/Mejorado/Completo/Profesional)
 
 🎉 **¡Sistema completo y listo para uso profesional!** 🎉
+
+---
+
+## 🆕 NUEVA FUNCIONALIDAD: Pestaña Estado APIs
+
+### **🔌 Visibilidad Completa de Conectividad**
+
+La nueva pestaña **Estado APIs** proporciona:
+
+✅ **Verificación en Tiempo Real:**
+- Estado operacional de las 13 APIs integradas
+- Tiempos de respuesta en milisegundos
+- Validación de API keys
+- Detección de errores de configuración
+
+✅ **Dashboard de Resumen:**
+- Total de APIs disponibles
+- APIs operacionales
+- APIs configuradas
+- APIs con errores
+
+✅ **Organización por Tiers:**
+- 🟢 FREE (4 APIs sin configuración)
+- 🟡 FREEMIUM (4 APIs con key gratuita)
+- 🟠 PAID (2 APIs de pago)
+- 🔴 PREMIUM (3 APIs profesionales)
+
+✅ **Información Detallada:**
+- Factores que proporciona cada API
+- Costo mensual (si aplica)
+- Links para obtener API keys
+- Mensajes de error específicos
+- Rate limits actuales
+
+### **Uso:**
+1. Abrir pestaña "🔌 Estado APIs"
+2. El sistema verifica todas las APIs automáticamente
+3. Revisar tarjetas con códigos de color:
+   - ✅ Verde: Operacional
+   - ❌ Rojo: Error (revisar mensaje)
+   - ⚪ Gris: No configurada
+4. Click "🔄 Actualizar" para refrescar
+
+### **Documentación Completa:**
+Ver `STATUS-TAB-GUIDE.md` para guía detallada con:
+- Interpretación de estados
+- Solución de problemas
+- Ejemplos visuales
+- FAQs
+
+---

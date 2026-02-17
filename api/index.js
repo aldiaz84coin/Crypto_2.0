@@ -49,10 +49,38 @@ const DEFAULT_CONFIG = algorithmConfig.DEFAULT_CONFIG;
 app.get('/api/health', (req, res) => {
   res.json({ 
     status: 'ok',
-    version: '3.1-iter3',
+    version: '3.2-final',
     timestamp: new Date().toISOString(),
     redis: redis ? 'connected' : 'not available'
   });
+});
+
+// ============================================
+// ENDPOINT DE STATUS COMPLETO (NUEVO)
+// ============================================
+
+const apiHealthCheck = require('./api-health-check');
+
+/**
+ * GET /api/status/complete
+ * Estado completo de todas las APIs y fuentes de datos
+ */
+app.get('/api/status/complete', async (req, res) => {
+  try {
+    const status = await apiHealthCheck.checkAllAPIs();
+    
+    res.json({
+      success: true,
+      ...status
+    });
+  } catch (error) {
+    console.error('Error checking APIs:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Error al verificar estado de APIs',
+      message: error.message
+    });
+  }
 });
 
 // ============================================

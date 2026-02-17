@@ -27,6 +27,9 @@
             <button onclick="setTab('validation')" id="tab-validation" class="px-4 py-2 rounded-t-lg bg-gray-700">
                 ✅ Validación
             </button>
+            <button onclick="setTab('status')" id="tab-status" class="px-4 py-2 rounded-t-lg bg-gray-700">
+                🔌 Estado APIs
+            </button>
         </div>
         
         <!-- Tab Monitor -->
@@ -79,6 +82,47 @@
                 💾 Guardar
             </button>
             <div id="config-message" class="mt-3"></div>
+        </div>
+        
+
+        <!-- Tab Estado -->
+        <div id="content-status" class="tab-content" style="display:none">
+            <div class="flex justify-between items-center mb-4">
+                <h2 class="text-2xl font-semibold">🔌 Estado de APIs y Fuentes de Datos</h2>
+                <button onclick="refreshAPIStatus()" class="bg-blue-600 hover:bg-blue-700 px-4 py-2 rounded-lg">
+                    🔄 Actualizar
+                </button>
+            </div>
+            
+            <!-- Summary -->
+            <div id="api-summary" class="grid grid-cols-4 gap-4 mb-6"></div>
+            
+            <!-- APIs por Tier -->
+            <div class="space-y-6">
+                <!-- Free Tier -->
+                <div>
+                    <h3 class="text-xl font-semibold mb-3 text-green-400">🟢 Tier FREE (Sin configuración)</h3>
+                    <div id="apis-free" class="space-y-3"></div>
+                </div>
+                
+                <!-- Freemium Tier -->
+                <div>
+                    <h3 class="text-xl font-semibold mb-3 text-yellow-400">🟡 Tier FREEMIUM (Con API key)</h3>
+                    <div id="apis-freemium" class="space-y-3"></div>
+                </div>
+                
+                <!-- Paid Tier -->
+                <div>
+                    <h3 class="text-xl font-semibold mb-3 text-orange-400">🟠 Tier PAID</h3>
+                    <div id="apis-paid" class="space-y-3"></div>
+                </div>
+                
+                <!-- Premium Tier -->
+                <div>
+                    <h3 class="text-xl font-semibold mb-3 text-red-400">🔴 Tier PREMIUM</h3>
+                    <div id="apis-premium" class="space-y-3"></div>
+                </div>
+            </div>
         </div>
         
         <!-- Tab Validación -->
@@ -459,6 +503,10 @@
             if (tab === 'validation') {
                 loadValidation();
             }
+            
+            if (tab === 'status') {
+                loadAPIStatus();
+            }
         }
         
         // Auto-check pending cycles
@@ -476,6 +524,154 @@
                 }
             } catch (error) {}
         }, 60000); // Cada minuto
+        
+
+        // ============================================
+        // FUNCIONES DE ESTADO DE APIs
+        // ============================================
+        
+        async function loadAPIStatus() {
+            const summaryDiv = document.getElementById('api-summary');
+            summaryDiv.innerHTML = '<div class="col-span-4 text-gray-400">⏳ Verificando APIs...</div>';
+            
+            try {
+                const res = await fetch('/api/status/complete');
+                const data = await res.json();
+                
+                if (data.success) {
+                    renderAPISummary(data.summary);
+                    renderAPIsByTier(data.apis);
+                }
+            } catch (error) {
+                summaryDiv.innerHTML = '<div class="col-span-4 text-red-400">❌ Error al cargar estado</div>';
+            }
+        }
+        
+        function renderAPISummary(summary) {
+            const summaryDiv = document.getElementById('api-summary');
+            summaryDiv.innerHTML = `
+                <div class="bg-gray-800 p-4 rounded">
+                    <div class="text-2xl font-bold text-blue-400">${summary.total}</div>
+                    <div class="text-sm">Total APIs</div>
+                </div>
+                <div class="bg-green-900/30 p-4 rounded">
+                    <div class="text-2xl font-bold text-green-400">${summary.available}</div>
+                    <div class="text-sm">Operacionales</div>
+                </div>
+                <div class="bg-yellow-900/30 p-4 rounded">
+                    <div class="text-2xl font-bold text-yellow-400">${summary.configured}</div>
+                    <div class="text-sm">Configuradas</div>
+                </div>
+                <div class="bg-red-900/30 p-4 rounded">
+                    <div class="text-2xl font-bold text-red-400">${summary.errors}</div>
+                    <div class="text-sm">Con Errores</div>
+                </div>
+            `;
+        }
+        
+        function renderAPIsByTier(apis) {
+            const tiers = {
+                free: document.getElementById('apis-free'),
+                freemium: document.getElementById('apis-freemium'),
+                paid: document.getElementById('apis-paid'),
+                premium: document.getElementById('apis-premium')
+            };
+            
+            // Limpiar
+            Object.values(tiers).forEach(div => div.innerHTML = '');
+            
+            // Renderizar cada API
+            Object.entries(apis).forEach(([key, api]) => {
+                const card = createAPICard(api);
+                tiers[api.tier].appendChild(card);
+            });
+        }
+        
+        function createAPICard(api) {
+            const card = document.createElement('div');
+            card.className = 'bg-gray-800 p-4 rounded-lg border-l-4 ' + getStatusBorderColor(api.status);
+            
+            const statusIcon = getStatusIcon(api.status);
+            const statusColor = getStatusColor(api.status);
+            
+            card.innerHTML = `
+                <div class="flex justify-between items-start">
+                    <div class="flex-1">
+                        <div class="flex items-center gap-2 mb-2">
+                            <span class="text-2xl">${statusIcon}</span>
+                            <div>
+                                <div class="font-bold text-lg">${api.name}</div>
+                                <div class="text-xs text-gray-400">${api.factors.join(', ')}</div>
+                            </div>
+                        </div>
+                        
+                        <div class="flex items-center gap-2 mt-2">
+                            <span class="px-2 py-1 rounded text-xs font-semibold ${statusColor}">
+                                ${api.status.toUpperCase().replace('_', ' ')}
+                            </span>
+                            ${api.configured ? '<span class="text-green-400 text-xs">✓ Configurada</span>' : '<span class="text-gray-500 text-xs">○ No configurada</span>'}
+                            ${api.cost ? '<span class="text-yellow-400 text-xs">' + api.cost + '</span>' : ''}
+                        </div>
+                        
+                        <div class="mt-2 text-sm ${api.status === 'error' ? 'text-red-400' : 'text-gray-300'}">
+                            ${api.message}
+                        </div>
+                        
+                        ${api.currentValue ? '<div class="mt-1 text-xs text-blue-400">' + api.currentValue + '</div>' : ''}
+                        
+                        ${!api.configured && api.configInstructions ? 
+                            '<div class="mt-2"><a href="' + api.configInstructions + '" target="_blank" class="text-xs text-blue-400 hover:underline">→ Obtener API key</a></div>' 
+                            : ''}
+                    </div>
+                    
+                    ${api.responseTime > 0 ? 
+                        '<div class="text-right text-xs text-gray-500">' + api.responseTime + 'ms</div>' 
+                        : ''}
+                </div>
+            `;
+            
+            return card;
+        }
+        
+        function getStatusIcon(status) {
+            const icons = {
+                operational: '✅',
+                error: '❌',
+                not_configured: '⚪',
+                limited: '⚠️',
+                checking: '🔄',
+                unknown: '❓'
+            };
+            return icons[status] || '❓';
+        }
+        
+        function getStatusColor(status) {
+            const colors = {
+                operational: 'bg-green-900/50 text-green-300',
+                error: 'bg-red-900/50 text-red-300',
+                not_configured: 'bg-gray-700 text-gray-400',
+                limited: 'bg-yellow-900/50 text-yellow-300',
+                checking: 'bg-blue-900/50 text-blue-300',
+                unknown: 'bg-gray-700 text-gray-400'
+            };
+            return colors[status] || 'bg-gray-700 text-gray-400';
+        }
+        
+        function getStatusBorderColor(status) {
+            const colors = {
+                operational: 'border-green-500',
+                error: 'border-red-500',
+                not_configured: 'border-gray-600',
+                limited: 'border-yellow-500',
+                checking: 'border-blue-500',
+                unknown: 'border-gray-600'
+            };
+            return colors[status] || 'border-gray-600';
+        }
+        
+        async function refreshAPIStatus() {
+            await loadAPIStatus();
+        }
         
         window.onload = () => {
             init();
