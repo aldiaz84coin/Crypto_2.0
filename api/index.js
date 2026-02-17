@@ -90,20 +90,59 @@ async function getRedisKey(envName) {
   } catch(_) { return null; }
 }
 
-// ── Sentiment helper ──────────────────────────────────────────────────────────
-function analyzeSentiment(text) {
+// ── Relevancia: el texto menciona el activo por símbolo o nombre ─────────────
+function isRelevantToAsset(text, symbol, name) {
+  if (!text) return false;
+  const t   = text.toLowerCase();
+  const sym = symbol.toLowerCase();
+  // Nombres alternativos comunes
+  const nameWords = name.toLowerCase().split(/\s+/).filter(w => w.length > 3);
+  return t.includes(sym) || nameWords.some(w => t.includes(w));
+}
+
+// ── Recencia: solo artículos de las últimas N horas ───────────────────────────
+function isRecent(publishedAt, maxHours = 72) {
+  if (!publishedAt) return true; // sin fecha → aceptar por defecto
+  const age = (Date.now() - new Date(publishedAt).getTime()) / 3600000;
+  return age <= maxHours;
+}
+
+// ── Sentiment: diccionario cripto-específico + ponderación por relevancia ──────
+function analyzeSentiment(text, symbol = '', name = '') {
   const t = (text || '').toLowerCase();
-  const pos = ['surge','gain','rise','bullish','adoption','partnership','upgrade','success',
-               'growth','rally','recovery','innovation','launch','profit','momentum','soar',
-               'pump','ath','milestone','integration','buy'];
-  const neg = ['crash','drop','decline','bearish','hack','scam','ban','lawsuit','loss',
-               'collapse','warning','fear','correction','fraud','exploit','plunge','dump',
-               'sell','warning','risk','concern','investigation'];
+  // Positivos específicos a cripto (excluir "pump" — es ambiguo/manipulación)
+  const pos = [
+    'surge','rally','breakout','bullish','adoption','partnership','upgrade',
+    'integration','launch','milestone','growth','recovery','soar','outperform',
+    'listing','mainnet','staking','yield','accumulate','institutional','etf',
+    'approval','record','all-time high'
+  ];
+  // Negativos específicos a cripto
+  const neg = [
+    'crash','plunge','collapse','bearish','hack','exploit','scam','rug pull',
+    'ban','lawsuit','sec','investigation','fraud','liquidation','dump',
+    'delist','fork','vulnerability','breach','ponzi','bubble','correction',
+    'suspended','halt','insolvent','bankruptcy'
+  ];
+  // Palabras que solo pesan si el activo está mencionado (contextuales)
+  const contextualPos = ['buy','accumulate','undervalued','breakout','bottom'];
+  const contextualNeg = ['sell','overvalued','overbought','warning','risk'];
+
+  const relevant = isRelevantToAsset(text, symbol, name);
   let score = 0;
-  pos.forEach(w => { if (t.includes(w)) score++; });
-  neg.forEach(w => { if (t.includes(w)) score--; });
+  pos.forEach(w          => { if (t.includes(w)) score++; });
+  neg.forEach(w          => { if (t.includes(w)) score--; });
+  // Solo sumar contextuales si el artículo menciona el activo
+  if (relevant) {
+    contextualPos.forEach(w => { if (t.includes(w)) score += 0.5; });
+    contextualNeg.forEach(w => { if (t.includes(w)) score -= 0.5; });
+  }
   const normalized = Math.max(-1, Math.min(1, score / 3));
-  return { score: normalized, label: normalized > 0.2 ? 'positive' : normalized < -0.2 ? 'negative' : 'neutral' };
+  return {
+    score:    normalized,
+    label:    normalized > 0.2 ? 'positive' : normalized < -0.2 ? 'negative' : 'neutral',
+    relevant  // si el texto menciona el activo explícitamente
+  };
 }
 
 // ── Fear & Greed ──────────────────────────────────────────────────────────────
@@ -129,27 +168,24 @@ async function getCoinDeskNews(symbol, name) {
     const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
     const sym = symbol.toUpperCase();
     const nameLower = name.toLowerCase();
-    itemMatches.slice(0, 30).forEach(item => {
-      const title = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
-                     item.match(/<title>(.*?)<\/title>/))?.[1] || '';
-      const link  = (item.match(/<link>(.*?)<\/link>/))?.[1] || '';
+    itemMatches.slice(0, 40).forEach(item => {
+      const title   = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
+                       item.match(/<title>(.*?)<\/title>/))?.[1] || '';
+      const link    = (item.match(/<link>(.*?)<\/link>/))?.[1] || '';
       const pubDate = (item.match(/<pubDate>(.*?)<\/pubDate>/))?.[1] || '';
-      const titleL = title.toLowerCase();
-      if (titleL.includes(sym.toLowerCase()) || titleL.includes(nameLower) ||
-          titleL.includes('crypto') || titleL.includes('bitcoin') || titleL.includes('ethereum')) {
-        items.push({ title, url: link, publishedAt: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
-          source: 'CoinDesk', sentiment: analyzeSentiment(title) });
+      const desc    = (item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) ||
+                       item.match(/<description>(.*?)<\/description>/))?.[1] || '';
+      const publishedAt = pubDate ? new Date(pubDate).toISOString() : null;
+      const text = title + ' ' + desc;
+      // FILTRO ESTRICTO: el artículo DEBE mencionar el activo y ser reciente
+      if (isRelevantToAsset(text, sym, nameLower) && isRecent(publishedAt, NEWS_MAX_HOURS)) {
+        items.push({ title, url: link, publishedAt: publishedAt || new Date().toISOString(),
+          source: 'CoinDesk', sentiment: analyzeSentiment(text, sym, nameLower) });
       }
     });
     if (items.length > 0) {
-      // Filtrar los específicos del activo
-      const specific = items.filter(i => {
-        const t = i.title.toLowerCase();
-        return t.includes(sym.toLowerCase()) || t.includes(nameLower);
-      });
-      const use = specific.length > 0 ? specific : items.slice(0, 5);
-      const avg = use.reduce((s, i) => s + i.sentiment.score, 0) / use.length;
-      return { success: true, count: use.length, articles: use, avgSentiment: avg, source: 'coindesk' };
+      const avg = items.reduce((s, i) => s + i.sentiment.score, 0) / items.length;
+      return { success: true, count: items.length, articles: items.slice(0, 5), avgSentiment: avg, source: 'coindesk' };
     }
   } catch(_) {}
   return { success: false, count: 0, articles: [], avgSentiment: 0 };
@@ -166,16 +202,20 @@ async function getCoinTelegraphNews(symbol, name) {
     const sym = symbol.toUpperCase();
     const nameLower = name.toLowerCase();
     const items = [];
-    itemMatches.slice(0, 30).forEach(item => {
-      const title = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
-                     item.match(/<title>(.*?)<\/title>/))?.[1] || '';
-      const link  = (item.match(/<link>(.*?)<\/link>/))?.[1] ||
-                    (item.match(/<guid[^>]*>(.*?)<\/guid>/))?.[1] || '';
+    itemMatches.slice(0, 40).forEach(item => {
+      const title   = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
+                       item.match(/<title>(.*?)<\/title>/))?.[1] || '';
+      const link    = (item.match(/<link>(.*?)<\/link>/))?.[1] ||
+                      (item.match(/<guid[^>]*>(.*?)<\/guid>/))?.[1] || '';
       const pubDate = (item.match(/<pubDate>(.*?)<\/pubDate>/))?.[1] || '';
-      const titleL = title.toLowerCase();
-      if (titleL.includes(sym.toLowerCase()) || titleL.includes(nameLower)) {
-        items.push({ title, url: link, publishedAt: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
-          source: 'CoinTelegraph', sentiment: analyzeSentiment(title) });
+      const desc    = (item.match(/<description><!\[CDATA\[(.*?)\]\]><\/description>/) ||
+                       item.match(/<description>(.*?)<\/description>/))?.[1] || '';
+      const publishedAt = pubDate ? new Date(pubDate).toISOString() : null;
+      const text = title + ' ' + desc;
+      // FILTRO ESTRICTO: menciona el activo + reciente
+      if (isRelevantToAsset(text, sym, nameLower) && isRecent(publishedAt, NEWS_MAX_HOURS)) {
+        items.push({ title, url: link, publishedAt: publishedAt || new Date().toISOString(),
+          source: 'CoinTelegraph', sentiment: analyzeSentiment(text, sym, nameLower) });
       }
     });
     if (items.length > 0) {
@@ -270,49 +310,73 @@ async function getMarketNews(limit = 10) {
   return { success: false, count: 0, articles: [], avgSentiment: 0 };
 }
 
-// ── Noticias filtradas por activo ─────────────────────────────────────────────
+// ── Noticias filtradas por activo — con validación de relevancia y recencia ───
+const NEWS_MAX_HOURS = 72; // solo noticias de las últimas 72h
+
 async function getAssetNews(symbol, name) {
+  const sym      = symbol.toUpperCase();
+  const nameLow  = name.toLowerCase();
+  const allRaw   = [];
+
+  // ── Fuente 1: NewsAPI (más precisa — búsqueda por término exacto) ──────────
   try {
-    // Primero intentar NewsAPI si está configurada (más relevante por símbolo)
     const newsApiKey = await getRedisKey('NEWSAPI_KEY');
     if (newsApiKey) {
-      const query = `${name} OR ${symbol.toUpperCase()} crypto`;
+      // Búsqueda estricta: nombre del activo entre comillas para mayor precisión
+      const query = `"${name}" OR "${sym}" cryptocurrency`;
       const r = await axios.get('https://newsapi.org/v2/everything', {
         timeout: 5000,
-        params: { q: query, pageSize: 5, sortBy: 'publishedAt', language: 'en', apiKey: newsApiKey }
+        params: { q: query, pageSize: 10, sortBy: 'publishedAt', language: 'en',
+                  from: new Date(Date.now() - NEWS_MAX_HOURS * 3600000).toISOString(),
+                  apiKey: newsApiKey }
       });
-      if (r.data?.status === 'ok' && r.data.articles?.length > 0) {
-        const articles = r.data.articles.map(a => ({
-          title:       a.title,
-          url:         a.url,
-          source:      a.source?.name,
-          publishedAt: a.publishedAt,
-          sentiment:   analyzeSentiment(a.title + ' ' + (a.description || ''))
-        }));
-        const avgSentiment = articles.reduce((s, a) => s + a.sentiment.score, 0) / articles.length;
-        return { success: true, count: articles.length, articles, avgSentiment };
+      if (r.data?.status === 'ok') {
+        r.data.articles.forEach(a => {
+          const text = (a.title || '') + ' ' + (a.description || '');
+          if (isRelevantToAsset(text, sym, name) && isRecent(a.publishedAt, NEWS_MAX_HOURS)) {
+            allRaw.push({ title: a.title, url: a.url, source: a.source?.name || 'NewsAPI',
+              publishedAt: a.publishedAt, body: a.description || '',
+              sentiment: analyzeSentiment(text, sym, name) });
+          }
+        });
       }
     }
+  } catch(_) {}
 
-    // Fallback: filtrar noticias de CryptoCompare por el símbolo en el título
-    const key = await getRedisKey('CRYPTOCOMPARE_API_KEY');
+  // ── Fuente 2: CryptoCompare — verificar que el artículo menciona el activo ─
+  try {
+    const key     = await getRedisKey('CRYPTOCOMPARE_API_KEY');
     const headers = key ? { authorization: `Apikey ${key}` } : {};
-    const r = await axios.get(`https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=${symbol.toUpperCase()}`, {
-      headers, timeout: 5000
-    });
+    const r = await axios.get(
+      `https://min-api.cryptocompare.com/data/v2/news/?lang=EN&categories=${sym}&lTs=0`,
+      { headers, timeout: 5000 }
+    );
     if (r.data?.Data?.length > 0) {
-      const articles = r.data.Data.slice(0, 5).map(a => ({
-        title:       a.title,
-        url:         a.url,
-        source:      a.source_info?.name || a.source,
-        publishedAt: new Date(a.published_on * 1000).toISOString(),
-        sentiment:   analyzeSentiment(a.title + ' ' + (a.body || ''))
-      }));
-      const avgSentiment = articles.reduce((s, a) => s + a.sentiment.score, 0) / articles.length;
-      return { success: true, count: articles.length, articles, avgSentiment };
+      r.data.Data.slice(0, 15).forEach(a => {
+        const publishedAt = new Date(a.published_on * 1000).toISOString();
+        const text        = (a.title || '') + ' ' + (a.body || '').slice(0, 500);
+        // DOBLE FILTRO: recencia + mención explícita del activo en título o cuerpo
+        if (isRecent(publishedAt, NEWS_MAX_HOURS) && isRelevantToAsset(text, sym, name)) {
+          allRaw.push({ title: a.title, url: a.url, source: a.source_info?.name || a.source || 'CryptoCompare',
+            publishedAt, body: (a.body || '').slice(0, 300),
+            sentiment: analyzeSentiment(text, sym, name) });
+        }
+      });
     }
   } catch(_) {}
-  return { success: false, count: 0, articles: [], avgSentiment: 0 };
+
+  // Deduplicar por título y ordenar por fecha desc
+  const seen = new Set();
+  const articles = allRaw
+    .filter(a => { const k = a.title.slice(0, 60); if (seen.has(k)) return false; seen.add(k); return true; })
+    .sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt))
+    .slice(0, 8);
+
+  if (articles.length === 0) return { success: false, count: 0, articles: [], avgSentiment: 0 };
+
+  const avgSentiment = articles.reduce((s, a) => s + a.sentiment.score, 0) / articles.length;
+  return { success: true, count: articles.length, articles, avgSentiment,
+           relevantCount: articles.filter(a => a.sentiment.relevant).length };
 }
 
 // ── Reddit por activo — multi-subreddit ───────────────────────────────────────
@@ -409,7 +473,22 @@ async function getAssetReddit(symbol, name, marketCap) {
       return { success: false, postCount: 0, totalScore: 0, avgSentiment: 0, posts: [] };
     }
 
-    const posts = unique.map(p => ({
+    // Filtrar posts: deben mencionar el activo y ser de las últimas 72h
+    const REDDIT_MAX_HOURS = 96; // Reddit tiene menos frecuencia que news → 96h
+    const validPosts = unique.filter(p => {
+      const created = new Date(p.created_utc * 1000).toISOString();
+      const text    = (p.title || '') + ' ' + (p.selftext || '').slice(0, 300);
+      // Posts del subreddit propio del activo siempre son relevantes
+      if (p.relevance === 'own') return isRecent(created, REDDIT_MAX_HOURS);
+      // Posts de búsqueda: verificar que mencionan el activo
+      return isRecent(created, REDDIT_MAX_HOURS) && isRelevantToAsset(text, sym, name);
+    });
+
+    if (validPosts.length === 0) {
+      return { success: false, postCount: 0, totalScore: 0, avgSentiment: 0, posts: [] };
+    }
+
+    const posts = validPosts.map(p => ({
       title:     p.title,
       score:     p.ups || 0,
       comments:  p.num_comments || 0,
@@ -417,7 +496,7 @@ async function getAssetReddit(symbol, name, marketCap) {
       relevance: p.relevance,
       url:       `https://reddit.com${p.permalink}`,
       created:   new Date(p.created_utc * 1000).toISOString(),
-      sentiment: analyzeSentiment(p.title + ' ' + (p.selftext || ''))
+      sentiment: analyzeSentiment(p.title + ' ' + (p.selftext || '').slice(0, 300), sym, name)
     }));
 
     const postCount    = posts.length;
@@ -670,19 +749,40 @@ app.get('/api/crypto/:id/detail', async (req, res) => {
     const lunarCrush   = lunarRes.status     === 'fulfilled' ? lunarRes.value     : { success: false };
     const santiment    = santRes.status      === 'fulfilled' ? santRes.value      : { success: false };
 
-    // Merge de artículos de todas las fuentes de noticias
+    // Merge de artículos de todas las fuentes — ya filtrados por relevancia y recencia
     const allArticles = [
-      ...(assetNews.articles    || []),
-      ...(coinDesk.articles     || []),
-      ...(coinTel.articles      || [])
+      ...(assetNews.articles || []),
+      ...(coinDesk.articles  || []),
+      ...(coinTel.articles   || [])
     ].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
-    const mergedNews = allArticles.length > 0 ? {
-      success: true,
-      count: allArticles.length,
-      articles: allArticles.slice(0, 10),
-      avgSentiment: allArticles.reduce((s, a) => s + (a.sentiment?.score || 0), 0) / allArticles.length,
-      sources: [assetNews.success && 'NewsAPI/CC', coinDesk.success && 'CoinDesk', coinTel.success && 'CoinTelegraph'].filter(Boolean)
-    } : assetNews;
+
+    // Deduplicar por título
+    const seenTitles = new Set();
+    const dedupedArticles = allArticles.filter(a => {
+      const k = (a.title || '').slice(0, 50);
+      if (seenTitles.has(k)) return false; seenTitles.add(k); return true;
+    });
+
+    // Scoring ponderado: artículos que mencionan el activo valen 2x
+    const mergedNews = dedupedArticles.length > 0 ? (() => {
+      let weightedSum = 0, totalWeight = 0;
+      dedupedArticles.forEach(a => {
+        const w = a.sentiment?.relevant ? 2 : 1;  // doble peso si menciona el activo
+        weightedSum += (a.sentiment?.score || 0) * w;
+        totalWeight += w;
+      });
+      const specificCount = dedupedArticles.filter(a => a.sentiment?.relevant).length;
+      return {
+        success:        true,
+        count:          dedupedArticles.length,
+        specificCount,  // artículos que mencionan explícitamente el activo
+        genericCount:   dedupedArticles.length - specificCount,
+        articles:       dedupedArticles.slice(0, 10),
+        avgSentiment:   totalWeight > 0 ? weightedSum / totalWeight : 0,
+        rawAvgSentiment: dedupedArticles.reduce((s, a) => s + (a.sentiment?.score || 0), 0) / dedupedArticles.length,
+        sources:        [assetNews.success && 'NewsAPI/CC', coinDesk.success && 'CoinDesk', coinTel.success && 'CoinTelegraph'].filter(Boolean)
+      };
+    })() : { success: false, count: 0, specificCount: 0, genericCount: 0, articles: [], avgSentiment: 0 };
 
     const externalData = {
       fearGreed:   fg.success            ? fg          : null,
@@ -724,7 +824,15 @@ app.get('/api/crypto/:id/detail', async (req, res) => {
         breakdown:          result.breakdown,
         summary,
         // Datos cualitativos del activo
-        news:       mergedNews.success  ? { count: mergedNews.count, avgSentiment: mergedNews.avgSentiment, articles: mergedNews.articles, sources: mergedNews.sources } : null,
+        news:       mergedNews.success  ? {
+                      count:          mergedNews.count,
+                      specificCount:  mergedNews.specificCount,   // mencionan el activo explícitamente
+                      genericCount:   mergedNews.genericCount,    // no lo mencionan directamente
+                      avgSentiment:   mergedNews.avgSentiment,    // ponderado por relevancia
+                      rawAvgSentiment: mergedNews.rawAvgSentiment, // sin ponderar
+                      articles:       mergedNews.articles,
+                      sources:        mergedNews.sources
+                    } : null,
         reddit:     assetReddit.success ? { postCount: assetReddit.postCount, avgSentiment: assetReddit.avgSentiment, posts: assetReddit.posts, subredditsSearched: assetReddit.subredditsSearched } : null,
         lunarCrush: lunarCrush.success  ? lunarCrush : null,
         santiment:  santiment.success   ? santiment  : null,

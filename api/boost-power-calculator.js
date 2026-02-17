@@ -109,44 +109,65 @@ function calcVolumeSurge(crypto, thresholds) {
   return 0.20;
 }
 
-// Social Momentum: Reddit + noticias del activo
+// Social Momentum: Reddit + noticias — solo señales relevantes al activo
 function calcSocialMomentum(crypto, externalData) {
   let score = 0.3; // base neutral
 
-  // Noticias del activo específico
+  // Noticias: solo contar las que mencionan el activo explícitamente
   const assetNews = externalData.assetNews;
   if (assetNews && assetNews.count > 0) {
-    const countBonus = normalize(assetNews.count, 0, 10) * 0.3;
+    const specificCount = assetNews.specificCount ?? assetNews.count;
+    const countBonus    = normalize(specificCount, 0, 8) * 0.3; // hasta +0.30 con 8 noticias específicas
     score += countBonus;
+
+    // Sentimiento ponderado por relevancia
+    const sentiment = assetNews.avgSentiment ?? 0;
+    const ratio     = assetNews.count > 0 ? specificCount / assetNews.count : 0;
+    const dampened  = sentiment * Math.min(1, ratio * 1.5); // atenuar si pocas son relevantes
+    if (dampened > 0.3)       score += 0.25;
+    else if (dampened > 0.1)  score += 0.10;
+    else if (dampened < -0.3) score -= 0.15;
+    else if (dampened < -0.1) score -= 0.08;
   }
 
-  // Sentimiento positivo en noticias
-  const sentiment = externalData.assetNews?.avgSentiment ?? 0;
-  if (sentiment > 0.3)       score += 0.25;
-  else if (sentiment > 0)    score += 0.10;
-  else if (sentiment < -0.3) score -= 0.15;
-
-  // Reddit del activo
+  // Reddit: posts en subreddits cripto que mencionan el activo (ya filtrado en getAssetReddit)
   const reddit = externalData.assetReddit;
-  if (reddit) {
-    if (reddit.postCount > 5)  score += 0.15;
-    if (reddit.sentiment > 0)  score += 0.10;
+  if (reddit && reddit.success) {
+    if (reddit.postCount >= 10) score += 0.20;
+    else if (reddit.postCount >= 5)  score += 0.12;
+    else if (reddit.postCount >= 2)  score += 0.06;
+    const redditSent = reddit.avgSentiment ?? 0;
+    if (redditSent > 0.2)       score += 0.10;
+    else if (redditSent < -0.2) score -= 0.08;
   }
 
   return Math.min(1, Math.max(0, score));
 }
 
-// News Sentiment: tono de las noticias del activo
+// News Sentiment: tono de noticias — ponderado por relevancia del activo
 function calcNewsSentiment(crypto, externalData) {
   const assetNews = externalData.assetNews;
+
+  // Sin noticias: valor neutral basado en FGI (no influye en el activo concreto)
   if (!assetNews || assetNews.count === 0) {
-    // Sin noticias: usar índice general muy suavizado
     const fgi = externalData.fearGreed?.value ?? 50;
-    return fgi < 40 ? 0.55 : fgi < 60 ? 0.45 : 0.35;
+    return fgi < 40 ? 0.50 : fgi < 60 ? 0.45 : 0.40; // rango más estrecho → menos influencia
   }
 
-  const s = assetNews.avgSentiment ?? 0; // -1 a +1
-  return Math.min(1, Math.max(0, (s + 1) / 2)); // normalizar a 0-1
+  const total    = assetNews.count;
+  const specific = assetNews.specificCount ?? total; // artículos que mencionan el activo
+  const ratio    = total > 0 ? specific / total : 0; // % de artículos realmente relevantes
+
+  // Si menos del 30% de artículos mencionan el activo → el score se acerca al neutro
+  // Evita que noticias genéricas de mercado inflen o depriman el score del activo
+  const s = assetNews.avgSentiment ?? 0; // -1 a +1 (ya ponderado en el merge)
+  const base = (s + 1) / 2; // normalizar a 0-1
+
+  // Interpolación: con ratio=1 → base puro; con ratio=0 → 0.45 (neutro)
+  const NEUTRAL = 0.45;
+  const score = NEUTRAL + (base - NEUTRAL) * Math.min(1, ratio * 1.5);
+
+  return Math.min(1, Math.max(0, score));
 }
 
 // Rebound Recency: si el ATL fue reciente, rebote más probable
