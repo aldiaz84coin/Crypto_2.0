@@ -48,9 +48,19 @@ async function redisSet(key, value) {
 }
 async function getConfig() {
   const stored = await redisGet('algorithm-config');
-  if (stored && typeof stored === 'object') return stored;
-  if (stored && typeof stored === 'string') { try { return JSON.parse(stored); } catch(_){} }
-  return { ...DEFAULT_CONFIG };
+  let cfg = null;
+  if (stored && typeof stored === 'object') cfg = stored;
+  else if (stored && typeof stored === 'string') { try { cfg = JSON.parse(stored); } catch(_){} }
+  if (!cfg) return { ...DEFAULT_CONFIG };
+
+  // Migrar configs v1 (factorWeights) a v2 (potentialWeights + resistanceWeights)
+  if (!cfg.potentialWeights || !cfg.resistanceWeights) {
+    console.log('Config v1 detectada en Redis — migrando a v2');
+    cfg = { ...DEFAULT_CONFIG, lastModified: new Date().toISOString() };
+    // Guardar la nueva config para evitar migraciones futuras
+    try { await redisSet('algorithm-config', cfg); } catch(_) {}
+  }
+  return cfg;
 }
 async function getRedisKey(envName) {
   const env = process.env[envName];

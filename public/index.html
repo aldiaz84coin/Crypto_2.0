@@ -412,9 +412,11 @@ async function init() {
 
 function applyConfigToUI() {
   if (!config) return;
-  const cl = config.classification || {};
-  const pr = config.prediction     || {};
-  const mw = config.metaWeights    || {};
+  const cl = config.classification    || {};
+  const pr = config.prediction        || {};
+  const mw = config.metaWeights       || {};
+  // Si la config no tiene los nuevos campos (config v1), salir sin crashear
+  if (!config.potentialWeights) return;
 
   setSlider('c-inv-min',    Math.round((cl.invertibleMinBoost   ?? 0.65) * 100), 'c-inv-min-v', '%');
   setSlider('c-apl-min',    Math.round((cl.apalancadoMinBoost   ?? 0.40) * 100), 'c-apl-min-v', '%');
@@ -449,8 +451,14 @@ function updateMetaWeights() {
 
 function buildFactorSliders() {
   if (!metadata || !config) return;
+  // Asegurar estructura v2 — si hay config antigua sin potentialWeights, usar defaults
+  if (!config.potentialWeights || !config.resistanceWeights) {
+    console.warn('Config sin potentialWeights — usando defaults v2');
+    return; // Se rellenará tras el reset automático del backend
+  }
   const buildSliders = (factors, weightObj, containerId, color) => {
     const div = document.getElementById(containerId);
+    if (!div || !weightObj) return;
     div.innerHTML = '';
     factors.forEach(f => {
       const w = Math.round((weightObj?.[f.id] ?? 0) * 100);
@@ -657,7 +665,8 @@ function renderDetail(a) {
   document.getElementById('detail-name').textContent   = a.name;
   document.getElementById('detail-symbol').textContent = a.symbol.toUpperCase() + ' · #' + (a.market_cap_rank || '?');
   if (a.image) document.getElementById('detail-img').src = a.image;
-  setBadge(a.classification.category, a.classification.color);
+  const cls = typeof a.classification === 'object' ? a.classification : { category: a.classification, color: a.color || 'gray' };
+  setBadge(cls.category, cls.color);
 
   // Precio y cambios
   document.getElementById('d-price').textContent = '$' + fmt(a.current_price);
@@ -671,11 +680,12 @@ function renderDetail(a) {
   animateGauge(a.boostPower);
 
   // Clasificación
-  document.getElementById('d-classname').textContent  = a.classification.category;
-  document.getElementById('d-classname').className    = `text-lg font-bold ${a.classification.color === 'green' ? 'text-green-400' : a.classification.color === 'yellow' ? 'text-yellow-400' : 'text-gray-400'}`;
-  document.getElementById('d-confidence').textContent = 'Confianza: ' + (a.classification.confidence || '—');
+  const clsObj = typeof a.classification === 'object' ? a.classification : { category: a.classification, color: a.color || 'gray', confidence: '', reason: '' };
+  document.getElementById('d-classname').textContent  = clsObj.category || '—';
+  document.getElementById('d-classname').className    = `text-lg font-bold ${clsObj.color === 'green' ? 'text-green-400' : clsObj.color === 'yellow' ? 'text-yellow-400' : 'text-gray-400'}`;
+  document.getElementById('d-confidence').textContent = clsObj.confidence ? 'Confianza: ' + clsObj.confidence : '';
   document.getElementById('d-target').textContent     = a.predictedChange > 0 ? `Objetivo: +${a.predictedChange}%` : 'Sin predicción de subida';
-  document.getElementById('d-reason').textContent     = a.classification.reason || '—';
+  document.getElementById('d-reason').textContent     = clsObj.reason || '—';
   document.getElementById('d-summary').textContent    = a.summary || '—';
 
   // Fundamentales
