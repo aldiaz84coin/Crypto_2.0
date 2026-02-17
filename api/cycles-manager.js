@@ -69,21 +69,35 @@ async function createCycle(redis, snapshot, config, durationMs) {
   if (!redis) throw new Error('Redis no disponible');
 
   // Solo campos esenciales — evitar objetos grandes que superen el límite de Upstash
-  const cleanSnapshot = snapshot.map(a => ({
-    id:                          a.id,
-    symbol:                      a.symbol,
-    name:                        a.name,
-    current_price:               a.current_price,
-    market_cap:                  a.market_cap,
-    total_volume:                a.total_volume,
-    price_change_percentage_24h: a.price_change_percentage_24h,
-    ath:                         a.ath,
-    atl:                         a.atl,
-    boostPower:                  a.boostPower,
-    boostPowerPercent:           a.boostPowerPercent,
-    classification:              a.classification,
-    predictedChange:             a.predictedChange
-  }));
+  // Escalar la predicción a la ventana temporal del ciclo
+  // La predicción base del algoritmo asume 12h (43200000ms)
+  // Pro-rata: si el ciclo es de 6h, la predicción se ajusta x0.5
+  const BASE_DURATION_MS = 43200000; // 12h
+  const scaleFactor = Math.min(2.0, Math.max(0.1, (dur || BASE_DURATION_MS) / BASE_DURATION_MS));
+  const isSignificant = (dur || 0) >= 6 * 3600000; // ≥6h = significativo
+
+  const cleanSnapshot = snapshot.map(a => {
+    const basePred = typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0);
+    // Solo escalar si no es RUIDOSO (RUIDOSO siempre predice 0)
+    const scaledPred = (a.classification === 'RUIDOSO' || basePred === 0) ? 0 : parseFloat((basePred * scaleFactor).toFixed(2));
+    return {
+      id:                          a.id,
+      symbol:                      a.symbol,
+      name:                        a.name,
+      current_price:               a.current_price,
+      market_cap:                  a.market_cap,
+      total_volume:                a.total_volume,
+      price_change_percentage_24h: a.price_change_percentage_24h,
+      ath:                         a.ath,
+      atl:                         a.atl,
+      boostPower:                  a.boostPower,
+      boostPowerPercent:           a.boostPowerPercent,
+      classification:              a.classification,
+      predictedChange:             scaledPred,
+      basePrediction:              basePred,   // guardar predicción base (12h)
+      predictionScaleFactor:       scaleFactor
+    };
+  });
 
   const cycleId   = `cycle_${Date.now()}`;
   const startTime = Date.now();
@@ -94,6 +108,8 @@ async function createCycle(redis, snapshot, config, durationMs) {
     startTime,
     endTime:         startTime + dur,
     durationMs:      dur,
+    isSignificant,   // ≥6h
+    predictionScaleFactor: scaleFactor,
     status:          'active',
     snapshot:        cleanSnapshot,
     config:          { boostPowerThreshold: config.boostPowerThreshold },

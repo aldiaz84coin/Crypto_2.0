@@ -9,27 +9,24 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 *{font-family:'Space Grotesk',sans-serif}
 .mono{font-family:'JetBrains Mono',monospace}
-.tab-content{display:none}
 .tab-active{background:#1d4ed8!important;color:#fff!important}
 .gauge-ring{stroke-dasharray:251;stroke-dashoffset:251;transition:stroke-dashoffset 1s ease;stroke-linecap:round}
 .card-hover{transition:all .2s;cursor:pointer}
 .card-hover:hover{transform:translateY(-2px);box-shadow:0 8px 30px rgba(0,0,0,.4)}
-.result-card{cursor:pointer;transition:opacity .2s,border .2s}
-.excluded{opacity:.4;border-style:dashed!important}
 .bar{transition:width .8s ease}
 .pill{display:inline-block;padding:2px 8px;border-radius:9999px;font-size:11px;font-weight:600}
-.sentiment-pos{color:#4ade80}
-.sentiment-neg{color:#f87171}
-.sentiment-neu{color:#94a3b8}
+.sentiment-pos{color:#4ade80}.sentiment-neg{color:#f87171}.sentiment-neu{color:#94a3b8}
+.tab-content{display:none}
+.result-card{cursor:pointer;transition:opacity .2s}
+.excluded{opacity:.4;border-style:dashed!important}
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:#1e293b}::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
 </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
 
-<!-- ── MODAL DETALLE ACTIVO ───────────────────────────────────────────────── -->
+<!-- ══ MODAL DETALLE ══════════════════════════════════════════════════════════ -->
 <div id="modal-detail" class="hidden fixed inset-0 bg-black/80 backdrop-blur-sm z-50 overflow-y-auto p-4">
   <div class="max-w-4xl mx-auto bg-gray-900 rounded-2xl shadow-2xl my-4 overflow-hidden">
-    <!-- Header -->
     <div id="detail-header" class="p-6 pb-4 border-b border-gray-800 flex justify-between items-start">
       <div class="flex items-center gap-4">
         <img id="detail-img" src="" class="w-12 h-12 rounded-full bg-gray-800"/>
@@ -37,32 +34,27 @@
           <h2 id="detail-name" class="text-2xl font-bold"></h2>
           <p id="detail-symbol" class="text-gray-400 mono text-sm"></p>
         </div>
-        <span id="detail-badge" class="pill text-sm"></span>
+        <span id="detail-badge" class="pill"></span>
       </div>
-      <button onclick="closeDetail()" class="text-gray-500 hover:text-white text-2xl leading-none">✕</button>
+      <button onclick="closeModal('modal-detail')" class="text-gray-500 hover:text-white text-2xl leading-none">✕</button>
     </div>
-
-    <!-- Sub-tabs -->
     <div class="flex gap-1 px-6 pt-4 border-b border-gray-800">
       <button onclick="setDetailTab('overview')"    id="dtab-overview"    class="dtab px-4 py-2 rounded-t text-sm font-medium text-gray-400 hover:text-white">📊 Resumen</button>
       <button onclick="setDetailTab('indicators')"  id="dtab-indicators"  class="dtab px-4 py-2 rounded-t text-sm font-medium text-gray-400 hover:text-white">🎯 Indicadores</button>
       <button onclick="setDetailTab('qualitative')" id="dtab-qualitative" class="dtab px-4 py-2 rounded-t text-sm font-medium text-gray-400 hover:text-white">💬 Red Social</button>
     </div>
-
-    <!-- Tab: Resumen -->
-    <div id="dcontent-overview" class="detail-tab p-6 space-y-5">
-      <!-- Precio y cambios -->
+    <!-- Tab Resumen -->
+    <div id="dcontent-overview" class="detail-tab p-6 space-y-4">
       <div class="grid grid-cols-4 gap-3">
         <div class="bg-gray-800 rounded-xl p-4 col-span-2">
           <p class="text-xs text-gray-500 mb-1">Precio actual</p>
           <p id="d-price" class="text-3xl font-bold mono"></p>
           <div class="flex gap-3 mt-2">
             <span id="d-chg24" class="text-sm font-medium"></span>
-            <span id="d-chg7" class="text-sm text-gray-400"></span>
+            <span id="d-chg7"  class="text-sm text-gray-400"></span>
             <span id="d-chg30" class="text-sm text-gray-500"></span>
           </div>
         </div>
-        <!-- Gauge BoostPower -->
         <div class="bg-gray-800 rounded-xl p-4 flex flex-col items-center justify-center">
           <p class="text-xs text-gray-500 mb-2">BoostPower</p>
           <div class="relative w-20 h-20">
@@ -75,140 +67,93 @@
             </div>
           </div>
         </div>
-        <!-- Clasificación -->
-        <div id="d-classbox" class="bg-gray-800 rounded-xl p-4 flex flex-col justify-center">
+        <div class="bg-gray-800 rounded-xl p-4 flex flex-col justify-center">
           <p class="text-xs text-gray-500 mb-1">Clasificación</p>
           <p id="d-classname" class="text-lg font-bold"></p>
           <p id="d-confidence" class="text-xs text-gray-400 mt-1"></p>
           <p id="d-target" class="text-xs text-blue-400 mt-2 font-medium"></p>
         </div>
       </div>
-
-      <!-- Resumen textual -->
       <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
         <p class="text-xs text-gray-500 mb-2">📝 Resumen del algoritmo</p>
         <p id="d-summary" class="text-sm text-gray-300 leading-relaxed"></p>
       </div>
-
-      <!-- Razón de clasificación -->
-      <div id="d-reason-box" class="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
+      <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
         <p class="text-xs text-gray-500 mb-1">🔍 Razón de clasificación</p>
         <p id="d-reason" class="text-sm text-gray-300"></p>
       </div>
-
-      <!-- Datos fundamentales -->
       <div class="grid grid-cols-3 gap-3 text-sm">
-        <div class="bg-gray-800 rounded-xl p-3">
-          <p class="text-xs text-gray-500">Market Cap</p>
-          <p id="d-mcap" class="font-semibold mono"></p>
-        </div>
-        <div class="bg-gray-800 rounded-xl p-3">
-          <p class="text-xs text-gray-500">Volumen 24h</p>
-          <p id="d-vol" class="font-semibold mono"></p>
-        </div>
-        <div class="bg-gray-800 rounded-xl p-3">
-          <p class="text-xs text-gray-500">Supply circulante</p>
-          <p id="d-supply" class="font-semibold mono"></p>
-        </div>
-        <div class="bg-gray-800 rounded-xl p-3">
-          <p class="text-xs text-gray-500">ATH</p>
-          <p id="d-ath" class="font-semibold mono text-red-400"></p>
-        </div>
-        <div class="bg-gray-800 rounded-xl p-3">
-          <p class="text-xs text-gray-500">ATL</p>
-          <p id="d-atl" class="font-semibold mono text-green-400"></p>
-        </div>
-        <div class="bg-gray-800 rounded-xl p-3">
-          <p class="text-xs text-gray-500">ATL hace</p>
-          <p id="d-atldays" class="font-semibold"></p>
-        </div>
+        <div class="bg-gray-800 rounded-xl p-3"><p class="text-xs text-gray-500">Market Cap</p><p id="d-mcap" class="font-semibold mono"></p></div>
+        <div class="bg-gray-800 rounded-xl p-3"><p class="text-xs text-gray-500">Volumen 24h</p><p id="d-vol" class="font-semibold mono"></p></div>
+        <div class="bg-gray-800 rounded-xl p-3"><p class="text-xs text-gray-500">Supply circulante</p><p id="d-supply" class="font-semibold mono"></p></div>
+        <div class="bg-gray-800 rounded-xl p-3"><p class="text-xs text-gray-500">ATH</p><p id="d-ath" class="font-semibold mono text-red-400"></p></div>
+        <div class="bg-gray-800 rounded-xl p-3"><p class="text-xs text-gray-500">ATL</p><p id="d-atl" class="font-semibold mono text-green-400"></p></div>
+        <div class="bg-gray-800 rounded-xl p-3"><p class="text-xs text-gray-500">ATL hace</p><p id="d-atldays" class="font-semibold"></p></div>
       </div>
-
-      <!-- Posición en rango ATL-ATH -->
       <div class="bg-gray-800 rounded-xl p-4">
-        <div class="flex justify-between text-xs text-gray-500 mb-2">
-          <span>ATL</span>
-          <span id="d-atlpct" class="text-white font-medium"></span>
-          <span>ATH</span>
-        </div>
-        <div class="w-full bg-gray-700 rounded-full h-3 relative">
+        <div class="flex justify-between text-xs text-gray-500 mb-2"><span>ATL</span><span id="d-atlpct" class="text-white font-medium"></span><span>ATH</span></div>
+        <div class="w-full bg-gray-700 rounded-full h-3">
           <div id="d-atlbar" class="bar h-3 rounded-full bg-gradient-to-r from-green-500 to-blue-500" style="width:0%"></div>
         </div>
-        <p class="text-xs text-gray-500 mt-1">Posición en el rango histórico — cuanto más a la izquierda, mayor potencial</p>
+        <p class="text-xs text-gray-600 mt-1">Posición en el rango histórico — cuanto más a la izquierda, mayor potencial</p>
       </div>
     </div>
-
-    <!-- Tab: Indicadores -->
+    <!-- Tab Indicadores -->
     <div id="dcontent-indicators" class="detail-tab hidden p-6 space-y-4">
-      <div>
-        <p class="text-sm font-semibold text-green-400 mb-3">⬆️ Factores de Potencial</p>
-        <div id="d-potential-factors" class="space-y-2"></div>
-      </div>
-      <div>
-        <p class="text-sm font-semibold text-red-400 mb-3">⬇️ Factores de Resistencia</p>
-        <div id="d-resistance-factors" class="space-y-2"></div>
-      </div>
+      <div><p class="text-sm font-semibold text-green-400 mb-3">⬆️ Factores de Potencial</p><div id="d-potential-factors" class="space-y-2"></div></div>
+      <div><p class="text-sm font-semibold text-red-400 mb-3">⬇️ Factores de Resistencia</p><div id="d-resistance-factors" class="space-y-2"></div></div>
       <div class="bg-gray-800/50 border border-gray-700 rounded-xl p-4">
         <p class="text-xs text-gray-500 mb-3">📊 Indicadores derivados</p>
         <div id="d-derived-indicators" class="grid grid-cols-2 gap-2 text-sm"></div>
       </div>
     </div>
-
-    <!-- Tab: Red Social -->
+    <!-- Tab Red Social -->
     <div id="dcontent-qualitative" class="detail-tab hidden p-6 space-y-5">
-      <!-- FGI -->
-      <div id="d-fgi-section" class="bg-gray-800 rounded-xl p-4">
-        <p class="text-xs text-gray-500 mb-2">😨 Fear & Greed Index (mercado global)</p>
+      <div class="bg-gray-800 rounded-xl p-4">
+        <p class="text-xs text-gray-500 mb-2">😨 Fear & Greed Index</p>
         <div class="flex items-center gap-3">
           <span id="d-fgi-val" class="text-3xl font-bold mono"></span>
           <span id="d-fgi-label" class="text-sm text-gray-300"></span>
         </div>
       </div>
-
-      <!-- Noticias -->
+      <!-- LunarCrush y Santiment -->
+      <div id="d-social-extra" class="hidden grid grid-cols-2 gap-3"></div>
       <div>
-        <p class="text-sm font-semibold mb-3">📰 Noticias recientes del activo</p>
-        <div id="d-news" class="space-y-2">
-          <p class="text-gray-500 text-sm">Cargando noticias...</p>
-        </div>
+        <p class="text-sm font-semibold mb-3">📰 Noticias recientes</p>
+        <div id="d-news-sources" class="text-xs text-gray-500 mb-2"></div>
+        <div id="d-news" class="space-y-2"><p class="text-gray-500 text-sm">Cargando...</p></div>
       </div>
-
-      <!-- Reddit -->
       <div>
         <div class="flex justify-between items-center mb-3">
-          <p class="text-sm font-semibold">🔴 Reddit (últimas 24h)</p>
-          <span id="d-reddit-count" class="text-xs text-gray-400"></span>
+          <p class="text-sm font-semibold">🔴 Reddit</p>
+          <span id="d-reddit-meta" class="text-xs text-gray-400"></span>
         </div>
-        <div id="d-reddit" class="space-y-2">
-          <p class="text-gray-500 text-sm">Cargando posts...</p>
-        </div>
+        <div id="d-reddit" class="space-y-2"><p class="text-gray-500 text-sm">Cargando...</p></div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- ── MODAL CICLO ─────────────────────────────────────────────────────────── -->
+<!-- ══ MODAL CICLO ════════════════════════════════════════════════════════════ -->
 <div id="modal-cycle" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 rounded-2xl p-6 w-full max-w-md shadow-2xl">
-    <h3 class="text-xl font-bold mb-4">⏰ Configurar Ciclo</h3>
-    <p class="text-sm text-gray-400 mb-4">Selecciona la duración de la simulación</p>
+    <h3 class="text-xl font-bold mb-1">⏰ Configurar Ciclo</h3>
+    <p class="text-xs text-gray-500 mb-1">Modo actual: <span id="modal-mode-label" class="text-blue-400 font-semibold">Normal</span></p>
+    <p class="text-xs text-yellow-500 mb-4" id="modal-sig-note"></p>
     <div class="grid grid-cols-3 gap-2 mb-4">
-      <button onclick="setDur(30*60000)"    class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">30 min</button>
-      <button onclick="setDur(60*60000)"    class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">1 hora</button>
-      <button onclick="setDur(4*3600000)"   class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">4 horas</button>
-      <button onclick="setDur(6*3600000)"   class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">6 horas</button>
-      <button onclick="setDur(12*3600000)"  class="dur-btn bg-blue-700 px-3 py-2 rounded-lg text-sm font-bold">12h ⭐</button>
-      <button onclick="setDur(24*3600000)"  class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">24 horas</button>
+      <button onclick="setDur(30*60000)"   class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">30 min</button>
+      <button onclick="setDur(60*60000)"   class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">1 hora</button>
+      <button onclick="setDur(4*3600000)"  class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">4 horas</button>
+      <button onclick="setDur(6*3600000)"  class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">6h ⭐</button>
+      <button onclick="setDur(12*3600000)" class="dur-btn bg-blue-700 px-3 py-2 rounded-lg text-sm font-bold">12h ⭐⭐</button>
+      <button onclick="setDur(24*3600000)" class="dur-btn bg-gray-700 hover:bg-blue-700 px-3 py-2 rounded-lg text-sm">24 horas</button>
     </div>
-    <div class="flex gap-2 mb-4">
-      <input type="number" id="dur-custom" placeholder="Minutos personalizados" min="1" max="10080"
-        class="flex-1 bg-gray-800 rounded-lg px-3 py-2 text-sm" oninput="setDurMin(this.value)"/>
-    </div>
+    <input type="number" id="dur-custom" placeholder="Minutos personalizados" min="1" max="10080"
+      class="w-full bg-gray-800 rounded-lg px-3 py-2 text-sm mb-4" oninput="setDurMin(this.value)"/>
     <div class="bg-gray-800 rounded-lg p-3 mb-4 text-sm">
-      <span class="text-gray-400">Duración: </span>
-      <span id="dur-label" class="font-bold text-blue-400">12 horas</span>
-      <span class="text-gray-400 ml-3">Activos: </span>
-      <span id="dur-assets" class="font-bold">—</span>
+      <span class="text-gray-400">Duración: </span><span id="dur-label" class="font-bold text-blue-400">12 horas</span>
+      <span class="text-gray-400 ml-3">Activos: </span><span id="dur-assets" class="font-bold">—</span>
+      <span id="dur-sig-badge" class="ml-3 pill bg-green-900 text-green-300">✓ Significativo</span>
     </div>
     <div class="flex gap-3">
       <button onclick="confirmCycle()" class="flex-1 bg-blue-700 hover:bg-blue-600 py-2 rounded-lg font-semibold">🚀 Iniciar</button>
@@ -217,7 +162,7 @@
   </div>
 </div>
 
-<!-- ── MODAL API KEY ──────────────────────────────────────────────────────── -->
+<!-- ══ MODAL API KEY ══════════════════════════════════════════════════════════ -->
 <div id="modal-apikey" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
   <div class="bg-gray-900 rounded-2xl p-6 w-full max-w-sm shadow-2xl">
     <h3 class="text-lg font-bold mb-1">⚙️ Configurar API Key</h3>
@@ -232,10 +177,9 @@
   </div>
 </div>
 
-<!-- ── LAYOUT PRINCIPAL ──────────────────────────────────────────────────── -->
+<!-- ══ LAYOUT ════════════════════════════════════════════════════════════════ -->
 <div class="max-w-7xl mx-auto p-4">
 
-  <!-- Header -->
   <div class="flex justify-between items-center mb-5 pt-2">
     <div>
       <h1 class="text-3xl font-bold tracking-tight">Crypto<span class="text-blue-500">Detector</span></h1>
@@ -245,90 +189,67 @@
   </div>
 
   <!-- Tabs -->
-  <div class="flex gap-1 mb-5 bg-gray-900 p-1 rounded-xl border border-gray-800">
-    <button onclick="setTab('monitor')"    id="tab-monitor"    class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors tab-active">📊 Monitor</button>
-    <button onclick="setTab('config')"     id="tab-config"     class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">⚙️ Config</button>
-    <button onclick="setTab('validation')" id="tab-validation" class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">✅ Validación</button>
-    <button onclick="setTab('status')"     id="tab-status"     class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">🔌 APIs</button>
+  <div class="flex gap-1 mb-5 bg-gray-900 p-1 rounded-xl border border-gray-800 overflow-x-auto">
+    <button onclick="setTab('monitor')"    id="tab-monitor"    class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors tab-active whitespace-nowrap px-3">📊 Monitor</button>
+    <button onclick="setTab('config')"     id="tab-config"     class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors whitespace-nowrap px-3">⚙️ Config</button>
+    <button onclick="setTab('validation')" id="tab-validation" class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors whitespace-nowrap px-3">✅ Validación</button>
+    <button onclick="setTab('analysis')"   id="tab-analysis"   class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors whitespace-nowrap px-3">🔬 Análisis</button>
+    <button onclick="setTab('status')"     id="tab-status"     class="tab-btn flex-1 py-2 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors whitespace-nowrap px-3">🔌 APIs</button>
   </div>
 
   <!-- ════ MONITOR ════ -->
   <div id="content-monitor" class="tab-content" style="display:block">
     <div class="flex flex-wrap gap-3 items-center mb-4">
       <h2 class="text-xl font-semibold flex-1">Monitor en Tiempo Real</h2>
+      <!-- Selector de modo -->
+      <div class="flex bg-gray-900 border border-gray-700 rounded-lg p-1 gap-1">
+        <button onclick="setMode('normal')"      id="mode-normal"      class="mode-btn px-3 py-1.5 rounded text-xs font-semibold bg-blue-700 text-white transition-colors">📊 Normal</button>
+        <button onclick="setMode('speculative')" id="mode-speculative" class="mode-btn px-3 py-1.5 rounded text-xs font-semibold text-gray-400 hover:text-white transition-colors">🎯 Especulativo</button>
+      </div>
       <button onclick="loadCryptos()" class="bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-semibold">🔄 Cargar</button>
-      <button onclick="openModal('modal-cycle')" id="btn-cycle" disabled
+      <button onclick="openCycleModal()" id="btn-cycle" disabled
         class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold disabled:opacity-40 disabled:cursor-not-allowed">⏰ Iniciar Ciclo</button>
     </div>
-    <!-- Market Context -->
+    <!-- Descripción del modo -->
+    <div id="mode-desc" class="hidden bg-gray-900 border border-yellow-800 rounded-xl p-3 mb-4 text-sm">
+      <span class="text-yellow-400 font-semibold">🎯 Modo Especulativo:</span>
+      <span class="text-gray-300"> Filtra activos con Market Cap ≤$200M y Volumen ≤$50M. Mayor riesgo, mayor potencial de rebote explosivo desde mínimos.</span>
+    </div>
     <div id="market-context" class="hidden bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
       <p class="text-xs text-gray-500 mb-2">Contexto de mercado</p>
       <div id="market-headlines" class="space-y-1"></div>
     </div>
-    <!-- Stats -->
     <div id="stats" class="grid grid-cols-4 gap-3 mb-4"></div>
-    <!-- Lista -->
-    <p class="text-xs text-gray-500 mb-2">Haz click en cualquier activo para ver el análisis completo</p>
+    <p class="text-xs text-gray-600 mb-2">Haz click en un activo para ver análisis completo</p>
     <div id="crypto-list" class="space-y-2"></div>
   </div>
 
   <!-- ════ CONFIG ════ -->
   <div id="content-config" class="tab-content">
     <h2 class="text-xl font-semibold mb-4">⚙️ Configuración del Algoritmo</h2>
-
-    <!-- Clasificación -->
     <div class="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-4">
       <h3 class="font-semibold mb-4 text-blue-400">🎯 Umbrales de Clasificación</h3>
       <div class="grid grid-cols-2 gap-4">
-        <div>
-          <label class="text-xs text-gray-400">BoostPower mínimo INVERTIBLE: <span id="c-inv-min-v" class="text-white font-bold">65%</span></label>
-          <input type="range" id="c-inv-min" min="50" max="90" step="5" value="65" oninput="cfgUpdate('c-inv-min','c-inv-min-v','%')" class="w-full mt-1"/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-400">BoostPower mínimo APALANCADO: <span id="c-apl-min-v" class="text-white font-bold">40%</span></label>
-          <input type="range" id="c-apl-min" min="25" max="65" step="5" value="40" oninput="cfgUpdate('c-apl-min','c-apl-min-v','%')" class="w-full mt-1"/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-400">Market Cap máx. INVERTIBLE: <span id="c-mcap-v" class="text-white font-bold">$500M</span></label>
-          <input type="range" id="c-mcap" min="50" max="5000" step="50" value="500" oninput="cfgUpdateMcap()" class="w-full mt-1"/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-400">Objetivo de subida INVERTIBLE: <span id="c-target-v" class="text-white font-bold">30%</span></label>
-          <input type="range" id="c-target" min="10" max="100" step="5" value="30" oninput="cfgUpdate('c-target','c-target-v','%')" class="w-full mt-1"/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-400">Tolerancia magnitud predicción: <span id="c-tol-v" class="text-white font-bold">±5%</span></label>
-          <input type="range" id="c-tol" min="2" max="20" step="1" value="5" oninput="cfgUpdate('c-tol','c-tol-v','%','±')" class="w-full mt-1"/>
-        </div>
-        <div>
-          <label class="text-xs text-gray-400">Objetivo de subida APALANCADO: <span id="c-apl-target-v" class="text-white font-bold">10%</span></label>
-          <input type="range" id="c-apl-target" min="5" max="40" step="5" value="10" oninput="cfgUpdate('c-apl-target','c-apl-target-v','%')" class="w-full mt-1"/>
-        </div>
+        <div><label class="text-xs text-gray-400">BoostPower mínimo INVERTIBLE: <span id="c-inv-min-v" class="text-white font-bold">65%</span></label><input type="range" id="c-inv-min" min="50" max="90" step="5" value="65" oninput="cfgUpdate('c-inv-min','c-inv-min-v','%')" class="w-full mt-1"/></div>
+        <div><label class="text-xs text-gray-400">BoostPower mínimo APALANCADO: <span id="c-apl-min-v" class="text-white font-bold">40%</span></label><input type="range" id="c-apl-min" min="25" max="65" step="5" value="40" oninput="cfgUpdate('c-apl-min','c-apl-min-v','%')" class="w-full mt-1"/></div>
+        <div><label class="text-xs text-gray-400">Market Cap máx. INVERTIBLE: <span id="c-mcap-v" class="text-white font-bold">$500M</span></label><input type="range" id="c-mcap" min="50" max="5000" step="50" value="500" oninput="cfgUpdateMcap()" class="w-full mt-1"/></div>
+        <div><label class="text-xs text-gray-400">Objetivo de subida INVERTIBLE: <span id="c-target-v" class="text-white font-bold">30%</span></label><input type="range" id="c-target" min="10" max="100" step="5" value="30" oninput="cfgUpdate('c-target','c-target-v','%')" class="w-full mt-1"/></div>
+        <div><label class="text-xs text-gray-400">Tolerancia magnitud predicción: <span id="c-tol-v" class="text-white font-bold">±5%</span></label><input type="range" id="c-tol" min="2" max="20" step="1" value="5" oninput="cfgUpdate('c-tol','c-tol-v','%','±')" class="w-full mt-1"/></div>
+        <div><label class="text-xs text-gray-400">Objetivo subida APALANCADO: <span id="c-apl-target-v" class="text-white font-bold">10%</span></label><input type="range" id="c-apl-target" min="5" max="40" step="5" value="10" oninput="cfgUpdate('c-apl-target','c-apl-target-v','%')" class="w-full mt-1"/></div>
       </div>
     </div>
-
-    <!-- Meta-pesos -->
     <div class="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-4">
       <h3 class="font-semibold mb-4 text-blue-400">⚖️ Meta-pesos</h3>
       <label class="text-xs text-gray-400">Potencial: <span id="c-pot-v" class="text-green-400 font-bold">60%</span> · Resistencia: <span id="c-res-v" class="text-red-400 font-bold">40%</span></label>
       <input type="range" id="c-pot" min="30" max="80" step="5" value="60" oninput="updateMetaWeights()" class="w-full mt-2"/>
     </div>
-
-    <!-- Pesos factores -->
     <div class="bg-gray-900 rounded-xl border border-gray-800 p-5 mb-4">
       <h3 class="font-semibold mb-4 text-blue-400">🏋️ Pesos de Factores</h3>
       <div class="grid grid-cols-2 gap-5">
-        <div>
-          <p class="text-xs font-semibold text-green-400 mb-3">⬆️ Potencial</p>
-          <div id="potential-sliders" class="space-y-2"></div>
-        </div>
-        <div>
-          <p class="text-xs font-semibold text-red-400 mb-3">⬇️ Resistencia</p>
-          <div id="resistance-sliders" class="space-y-2"></div>
-        </div>
+        <div><p class="text-xs font-semibold text-green-400 mb-3">⬆️ Potencial</p><div id="potential-sliders" class="space-y-2"></div></div>
+        <div><p class="text-xs font-semibold text-red-400 mb-3">⬇️ Resistencia</p><div id="resistance-sliders" class="space-y-2"></div></div>
       </div>
     </div>
-
     <div class="flex gap-3">
       <button onclick="saveConfig()" class="bg-green-700 hover:bg-green-600 px-6 py-2 rounded-lg font-semibold">💾 Guardar</button>
       <button onclick="resetConfig()" class="bg-yellow-700 hover:bg-yellow-600 px-6 py-2 rounded-lg font-semibold">🔄 Resetear</button>
@@ -339,30 +260,48 @@
   <!-- ════ VALIDACIÓN ════ -->
   <div id="content-validation" class="tab-content">
     <h2 class="text-xl font-semibold mb-4">✅ Validación de Ciclos</h2>
-    <div class="mb-5">
-      <h3 class="text-sm font-semibold text-blue-400 mb-3">🔄 Ciclos Activos</h3>
-      <div id="active-cycles"><p class="text-gray-500 text-sm">Sin ciclos activos</p></div>
+    <!-- Leyenda de significatividad -->
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-5 text-sm">
+      <p class="text-xs font-semibold text-gray-400 mb-2">📌 Criterio de significatividad</p>
+      <div class="flex gap-4">
+        <span class="pill bg-green-900 text-green-300">⭐⭐ ≥6h — Significativo</span>
+        <span class="text-gray-500">Se usa para calibrar el algoritmo</span>
+      </div>
+      <div class="flex gap-4 mt-1">
+        <span class="pill bg-gray-800 text-gray-400">⚗️ &lt;6h — Testing</span>
+        <span class="text-gray-500">Valida tendencia, no corrige pesos</span>
+      </div>
     </div>
-    <div class="mb-5">
-      <h3 class="text-sm font-semibold text-green-400 mb-3">📋 Historial</h3>
-      <div id="completed-cycles"><p class="text-gray-500 text-sm">Sin ciclos completados</p></div>
+    <div class="mb-5"><h3 class="text-sm font-semibold text-blue-400 mb-3">🔄 Ciclos Activos</h3><div id="active-cycles"><p class="text-gray-500 text-sm">Sin ciclos activos</p></div></div>
+    <div class="mb-5"><h3 class="text-sm font-semibold text-green-400 mb-3">📋 Historial</h3><div id="completed-cycles"><p class="text-gray-500 text-sm">Sin ciclos completados</p></div></div>
+    <div><h3 class="text-sm font-semibold text-purple-400 mb-3">📊 Estadísticas Globales</h3><div id="global-stats"></div></div>
+  </div>
+
+  <!-- ════ ANÁLISIS ════ -->
+  <div id="content-analysis" class="tab-content">
+    <div class="flex justify-between items-center mb-4">
+      <h2 class="text-xl font-semibold">🔬 Análisis de Simulaciones</h2>
+      <button onclick="loadAnalysis()" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold">🔄 Analizar</button>
     </div>
-    <div>
-      <h3 class="text-sm font-semibold text-purple-400 mb-3">📊 Estadísticas Globales</h3>
-      <div id="global-stats"></div>
+    <div class="bg-gray-900 border border-blue-900 rounded-xl p-4 mb-5 text-sm">
+      <p class="text-blue-400 font-semibold mb-1">📌 Cómo funciona</p>
+      <p class="text-gray-400">Solo simulaciones <strong class="text-white">≥6 horas</strong> calibran el algoritmo. Las ejecuciones cortas (&lt;6h) validan la tendencia proporcionalmente pero <strong class="text-yellow-400">no corrigen los pesos</strong>. Las predicciones se escalan automáticamente a la ventana temporal del ciclo.</p>
+    </div>
+    <div id="analysis-content">
+      <p class="text-gray-500 text-sm">Haz click en "Analizar" para procesar los resultados.</p>
     </div>
   </div>
 
-  <!-- ════ ESTADO APIs ════ -->
+  <!-- ════ APIs ════ -->
   <div id="content-status" class="tab-content">
     <div class="flex justify-between items-center mb-4">
       <h2 class="text-xl font-semibold">🔌 Estado de APIs</h2>
       <div class="flex gap-2">
-        <button onclick="loadAPIStatus()" id="btn-refresh" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm">🔄 Actualizar</button>
+        <button onclick="loadAPIStatus()" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm">🔄 Actualizar</button>
         <button onclick="runDebug()" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm">🔧 Debug</button>
       </div>
     </div>
-    <div id="debug-panel" class="hidden bg-gray-900 border border-yellow-700 rounded-xl p-4 mb-5 text-sm"></div>
+    <div id="debug-panel" class="hidden bg-gray-900 border border-yellow-700 rounded-xl p-4 mb-5 text-sm mono"></div>
     <div id="api-summary" class="grid grid-cols-4 gap-3 mb-5"></div>
     <div class="space-y-5">
       <div><h3 class="text-sm font-semibold text-green-400 mb-2">🟢 FREE</h3><div id="apis-free" class="space-y-2"></div></div>
@@ -375,32 +314,41 @@
 </div><!-- /container -->
 
 <script>
-// ═══════════════════════════════════════════════════════════════════════════
-// ESTADO
-// ═══════════════════════════════════════════════════════════════════════════
+'use strict';
+// ═══════════════════════════════════════════════════════════
+// ESTADO GLOBAL
+// ═══════════════════════════════════════════════════════════
 let cryptos = [], config = null, metadata = null;
-let selectedDuration = 12 * 3600000, cycleTimers = {};
-let currentApiKey = null;
+let currentMode = 'normal';
+let selectedDuration = 12 * 3600000;
+let cycleTimers = {};
+let currentApiKeyName = null;
 
+const SIGNIFICANT_MS = 6 * 3600000;
+
+// Info de APIs para la tarjeta de estado
 const API_INFO = {
-  coingecko:     { extract:'precio, market cap, ATH/ATL, volumen 24h, supply circulante', indicators:'ATL Proximity, Leverage Ratio, Volume Surge, Rebound Recency, Cap Efficiency', weight:'45% del score cuantitativo' },
-  alternative:   { extract:'Fear & Greed Index (0-100) y clasificación textual', indicators:'Fear Overlap (resistencia), Oportunidad contrarian', weight:'10% del score de resistencia' },
-  reddit:        { extract:'Posts últimas 24h por activo, score Reddit, comentarios', indicators:'Social Momentum, Reddit Sentiment por activo', weight:'20% del score de potencial social' },
-  blockchain:    { extract:'Número de transacciones BTC en 24h', indicators:'On-chain Activity (proxy de actividad de red)', weight:'Indicador auxiliar sin peso directo' },
-  cryptocompare: { extract:'Noticias recientes del mercado con título y cuerpo', indicators:'News Sentiment, News Volume (mercado general)', weight:'15% del score de potencial' },
-  newsapi:       { extract:'Noticias filtradas por nombre/símbolo del activo', indicators:'Asset News Sentiment, News Velocity por activo', weight:'15% del score de potencial (mayor precisión)' },
-  github:        { extract:'Rate limits y actividad de repos (proxy)', indicators:'Developer Activity (indicador de salud del proyecto)', weight:'Factor auxiliar sin peso directo aún' },
-  telegram:      { extract:'Actividad del bot en canales configurados', indicators:'Telegram Community Heat', weight:'Factor en desarrollo' },
-  serpapi:       { extract:'Volumen de búsquedas Google Trends por símbolo', indicators:'Search Trend Score (interés público real)', weight:'Factor premium: sustituye proxy de rank' },
-  twitter:       { extract:'Tweets recientes con menciones del activo', indicators:'Twitter Sentiment Score, Tweet Velocity', weight:'Factor premium: 20% score social' },
-  glassnode:     { extract:'Direcciones activas únicas, crecimiento de red', indicators:'Unique Address Score, Network Growth', weight:'Factor premium: enriquece resistencia/potencial' },
-  cryptoquant:   { extract:'Flujo neto de exchanges (compra/venta institucional)', indicators:'Exchange Net Flow (presión vendedora real)', weight:'Factor premium: refinamiento de resistencia' },
-  whaleAlert:    { extract:'Movimientos grandes (>$1M) de wallets', indicators:'Whale Activity Score (presión de grandes holders)', weight:'Factor premium: señal de movimiento institucional' }
+  coingecko:     { extract:'precio, market cap, ATH/ATL, volumen 24h, supply', indicators:'ATL Proximity, Leverage Ratio, Volume Surge, Rebound Recency', weight:'45% score cuantitativo' },
+  alternative:   { extract:'Fear & Greed Index (0-100)', indicators:'Fear Overlap (resistencia)', weight:'10% score resistencia' },
+  reddit:        { extract:'Posts 24h en CryptoCurrency, CryptoMarkets, CryptoMoonShots, SatoshiStreetBets + sub propio', indicators:'Social Momentum, Reddit Sentiment', weight:'20% score potencial social' },
+  blockchain:    { extract:'Transacciones BTC on-chain 24h', indicators:'On-chain Activity proxy', weight:'Indicador auxiliar' },
+  cryptocompare: { extract:'Noticias crypto recientes con cuerpo', indicators:'News Sentiment (mercado general)', weight:'15% score potencial' },
+  newsapi:       { extract:'Noticias filtradas por símbolo del activo', indicators:'Asset News Sentiment (mayor precisión)', weight:'15% score potencial' },
+  coindesk:      { extract:'RSS CoinDesk filtrado por activo', indicators:'Asset News Sentiment (fuente premium)', weight:'Fusionado en score de noticias' },
+  cointelegraph: { extract:'RSS CoinTelegraph filtrado por activo', indicators:'Asset News Sentiment (fuente premium)', weight:'Fusionado en score de noticias' },
+  lunarcrush:    { extract:'Social Score, Galaxy Score, Tweet Volume, Alt Rank', indicators:'Social Momentum enriquecido', weight:'Factor premium: refina score social' },
+  santiment:     { extract:'Social Volume, Social Dominance, Dev Activity (GraphQL)', indicators:'Dev Activity, Social Dominance', weight:'Factor premium: enriquece potencial' },
+  github:        { extract:'Rate limits y actividad de repos', indicators:'Developer Activity proxy', weight:'Factor auxiliar' },
+  serpapi:       { extract:'Volumen búsquedas Google Trends', indicators:'Search Trend Score (interés real)', weight:'Factor premium: sustituye proxy' },
+  twitter:       { extract:'Tweets con menciones del activo', indicators:'Twitter Sentiment Score', weight:'Factor premium: 20% score social' },
+  glassnode:     { extract:'Direcciones activas únicas', indicators:'Network Growth Score', weight:'Factor premium: enriquece resistencia' },
+  cryptoquant:   { extract:'Flujo neto de exchanges', indicators:'Exchange Net Flow (presión vendedora)', weight:'Factor premium: refinamiento resistencia' },
+  whaleAlert:    { extract:'Movimientos >$1M de wallets', indicators:'Whale Activity Score', weight:'Factor premium: movimiento institucional' }
 };
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 // INIT
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 async function init() {
   const [cfgRes, metaRes] = await Promise.allSettled([
     fetch('/api/config').then(r => r.json()),
@@ -410,217 +358,108 @@ async function init() {
   if (metaRes.status === 'fulfilled' && metaRes.value.success) { metadata = metaRes.value.metadata; buildFactorSliders(); }
 }
 
-function applyConfigToUI() {
-  if (!config) return;
-  const cl = config.classification    || {};
-  const pr = config.prediction        || {};
-  const mw = config.metaWeights       || {};
-  // Si la config no tiene los nuevos campos (config v1), salir sin crashear
-  if (!config.potentialWeights) return;
-
-  setSlider('c-inv-min',    Math.round((cl.invertibleMinBoost   ?? 0.65) * 100), 'c-inv-min-v', '%');
-  setSlider('c-apl-min',    Math.round((cl.apalancadoMinBoost   ?? 0.40) * 100), 'c-apl-min-v', '%');
-  setSlider('c-mcap',       Math.round((cl.invertibleMaxMarketCap ?? 500e6) / 1e6), 'c-mcap-v', '', '$', 'M');
-  setSlider('c-target',     pr.invertibleTarget   ?? 30,  'c-target-v',     '%');
-  setSlider('c-apl-target', pr.apalancadoTarget   ?? 10,  'c-apl-target-v', '%');
-  setSlider('c-tol',        pr.magnitudeTolerance ?? 5,   'c-tol-v',        '%', '±');
-  setSlider('c-pot',        Math.round((mw.potential ?? 0.6) * 100), 'c-pot-v', '%');
-  document.getElementById('c-res-v').textContent = (100 - Math.round((mw.potential ?? 0.6)*100)) + '%';
+// ═══════════════════════════════════════════════════════════
+// TABS
+// ═══════════════════════════════════════════════════════════
+function setTab(tab) {
+  document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
+  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('tab-active','text-white'));
+  document.getElementById('content-' + tab).style.display = 'block';
+  document.getElementById('tab-' + tab).classList.add('tab-active','text-white');
+  if (tab === 'validation') loadValidation();
+  if (tab === 'status')     loadAPIStatus();
+  if (tab === 'analysis')   loadAnalysis();
 }
 
-function setSlider(id, val, labelId, unit='', prefix='', suffix='') {
-  const el = document.getElementById(id);
-  const lb = document.getElementById(labelId);
-  if (el) el.value = val;
-  if (lb) lb.textContent = prefix + val + unit + suffix;
-}
-
-function cfgUpdate(sliderId, labelId, unit='', prefix='') {
-  const v = document.getElementById(sliderId).value;
-  document.getElementById(labelId).textContent = prefix + v + unit;
-}
-function cfgUpdateMcap() {
-  const v = document.getElementById('c-mcap').value;
-  document.getElementById('c-mcap-v').textContent = '$' + v + 'M';
-}
-function updateMetaWeights() {
-  const v = parseInt(document.getElementById('c-pot').value);
-  document.getElementById('c-pot-v').textContent = v + '%';
-  document.getElementById('c-res-v').textContent = (100-v) + '%';
-}
-
-function buildFactorSliders() {
-  if (!metadata || !config) return;
-  // Asegurar estructura v2 — si hay config antigua sin potentialWeights, usar defaults
-  if (!config.potentialWeights || !config.resistanceWeights) {
-    console.warn('Config sin potentialWeights — usando defaults v2');
-    return; // Se rellenará tras el reset automático del backend
-  }
-  const buildSliders = (factors, weightObj, containerId, color) => {
-    const div = document.getElementById(containerId);
-    if (!div || !weightObj) return;
-    div.innerHTML = '';
-    factors.forEach(f => {
-      const w = Math.round((weightObj?.[f.id] ?? 0) * 100);
-      div.innerHTML += `
-        <div class="mb-1">
-          <div class="flex justify-between text-xs mb-0.5">
-            <span class="text-gray-300">${f.name}</span>
-            <span id="fw-${f.id}" class="${color} font-mono">${w}%</span>
-          </div>
-          <input type="range" id="fslider-${f.id}" min="0" max="50" step="5" value="${w}"
-            oninput="document.getElementById('fw-${f.id}').textContent=this.value+'%'"
-            class="w-full h-1 accent-blue-500"/>
-          <p class="text-gray-600 text-xs mt-0.5">${f.description}</p>
-        </div>`;
-    });
-  };
-  buildSliders(metadata.potential,   config.potentialWeights,  'potential-sliders',  'text-green-400');
-  buildSliders(metadata.resistance,  config.resistanceWeights, 'resistance-sliders', 'text-red-400');
-}
-
-function buildConfigFromUI() {
-  const pot = parseInt(document.getElementById('c-pot').value) / 100;
-  const pw = {}, rw = {};
-  metadata?.potential?.forEach(f => {
-    pw[f.id] = parseInt(document.getElementById(`fslider-${f.id}`)?.value || 0) / 100;
+// ═══════════════════════════════════════════════════════════
+// MODO ESPECULATIVO
+// ═══════════════════════════════════════════════════════════
+function setMode(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn').forEach(b => {
+    b.classList.remove('bg-blue-700','text-white');
+    b.classList.add('text-gray-400');
   });
-  metadata?.resistance?.forEach(f => {
-    rw[f.id] = parseInt(document.getElementById(`fslider-${f.id}`)?.value || 0) / 100;
-  });
-  return {
-    ...config,
-    metaWeights: { potential: pot, resistance: 1 - pot },
-    potentialWeights:  pw,
-    resistanceWeights: rw,
-    classification: {
-      invertibleMinBoost:    parseInt(document.getElementById('c-inv-min').value) / 100,
-      apalancadoMinBoost:    parseInt(document.getElementById('c-apl-min').value) / 100,
-      invertibleMaxMarketCap: parseInt(document.getElementById('c-mcap').value) * 1e6,
-      invertibleMinAtlProx:  0.60,
-      invertibleMinVolSurge: 1.20,
-      invertibleMinSocial:   0.50
-    },
-    prediction: {
-      invertibleTarget:    parseInt(document.getElementById('c-target').value),
-      apalancadoTarget:    parseInt(document.getElementById('c-apl-target').value),
-      magnitudeTolerance:  parseInt(document.getElementById('c-tol').value),
-      directionOnly:       false
-    }
-  };
+  const btn = document.getElementById('mode-' + mode);
+  btn.classList.add('bg-blue-700','text-white');
+  btn.classList.remove('text-gray-400');
+  document.getElementById('mode-desc').classList.toggle('hidden', mode === 'normal');
 }
 
-async function saveConfig() {
-  const msg = document.getElementById('config-msg');
-  msg.innerHTML = '<span class="text-gray-400">Guardando...</span>';
-  try {
-    const cfg = buildConfigFromUI();
-    const r = await fetch('/api/config', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ config: cfg }) });
-    const d = await r.json();
-    if (d.success) {
-      config = d.config;
-      msg.innerHTML = '<span class="text-green-400">✅ Guardado</span>';
-    } else {
-      msg.innerHTML = `<span class="text-red-400">❌ ${(d.errors||[d.error]).join(', ')}</span>`;
-    }
-    setTimeout(() => msg.innerHTML = '', 3000);
-  } catch(e) { msg.innerHTML = `<span class="text-red-400">❌ ${e.message}</span>`; }
-}
-
-async function resetConfig() {
-  if (!confirm('¿Resetear configuración a valores por defecto?')) return;
-  const r = await fetch('/api/config/reset', { method:'POST' });
-  const d = await r.json();
-  if (d.success) { config = d.config; applyConfigToUI(); buildFactorSliders(); }
-}
-
-// ═══════════════════════════════════════════════════════════════════════════
-// MONITOR
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// MONITOR — carga de activos
+// ═══════════════════════════════════════════════════════════
 async function loadCryptos() {
   document.getElementById('crypto-list').innerHTML = '<p class="text-gray-500 text-sm py-4">⏳ Cargando datos de mercado...</p>';
   document.getElementById('stats').innerHTML = '';
   try {
-    const r = await fetch('/api/crypto');
+    const r = await fetch(`/api/crypto?mode=${currentMode}`);
     const d = await r.json();
     if (!d.success) throw new Error(d.error);
-
     cryptos = d.data;
     document.getElementById('btn-cycle').disabled = false;
 
-    // FGI badge
+    // FGI
     if (d.marketContext?.fearGreed) {
       const fg = d.marketContext.fearGreed;
       const col = fg.value < 30 ? 'text-red-400' : fg.value < 50 ? 'text-orange-400' : fg.value < 70 ? 'text-yellow-400' : 'text-green-400';
-      document.getElementById('fgi-badge').innerHTML =
-        `<p class="text-xs text-gray-500">Fear & Greed</p><p class="text-xl font-bold ${col} mono">${fg.value}</p><p class="text-xs text-gray-400">${fg.classification}</p>`;
+      document.getElementById('fgi-badge').innerHTML = `<p class="text-xs text-gray-500">Fear & Greed</p><p class="text-xl font-bold ${col} mono">${fg.value}</p><p class="text-xs text-gray-400">${fg.classification}</p>`;
     }
 
     // Headlines
     if (d.marketContext?.topHeadlines?.length) {
       document.getElementById('market-context').classList.remove('hidden');
-      document.getElementById('market-headlines').innerHTML = d.marketContext.topHeadlines.map(h => `
-        <a href="${h.url}" target="_blank" class="flex items-center gap-2 text-xs text-gray-400 hover:text-white">
-          <span class="${h.sentiment?.score > 0.1 ? 'sentiment-pos' : h.sentiment?.score < -0.1 ? 'sentiment-neg' : 'sentiment-neu'}">●</span>
-          ${h.title}
-        </a>`).join('');
+      document.getElementById('market-headlines').innerHTML = d.marketContext.topHeadlines.map(h =>
+        `<a href="${h.url}" target="_blank" class="flex items-center gap-2 text-xs text-gray-400 hover:text-white">
+          <span class="${h.sentiment?.score > 0.1 ? 'sentiment-pos' : h.sentiment?.score < -0.1 ? 'sentiment-neg' : 'sentiment-neu'}">●</span>${h.title}</a>`
+      ).join('');
     }
 
     // Stats
     const inv = cryptos.filter(c => c.classification === 'INVERTIBLE').length;
     const apl = cryptos.filter(c => c.classification === 'APALANCADO').length;
     const rui = cryptos.filter(c => c.classification === 'RUIDOSO').length;
-    document.getElementById('stats').innerHTML = `
-      <div class="bg-green-950 border border-green-800 rounded-xl p-4 text-center">
-        <div class="text-3xl font-bold text-green-400">${inv}</div>
-        <div class="text-xs text-green-600 mt-1 font-semibold">INVERTIBLES</div>
-      </div>
-      <div class="bg-yellow-950 border border-yellow-800 rounded-xl p-4 text-center">
-        <div class="text-3xl font-bold text-yellow-400">${apl}</div>
-        <div class="text-xs text-yellow-600 mt-1 font-semibold">APALANCADOS</div>
-      </div>
-      <div class="bg-gray-900 border border-gray-700 rounded-xl p-4 text-center">
-        <div class="text-3xl font-bold text-gray-400">${rui}</div>
-        <div class="text-xs text-gray-600 mt-1 font-semibold">RUIDOSOS</div>
-      </div>
-      <div class="bg-blue-950 border border-blue-800 rounded-xl p-4 text-center">
-        <div class="text-3xl font-bold text-blue-400">${cryptos.length}</div>
-        <div class="text-xs text-blue-600 mt-1 font-semibold">TOTAL</div>
-      </div>`;
+    const modeBadge = currentMode === 'speculative'
+      ? `<div class="col-span-4 mb-1"><span class="pill bg-yellow-900 text-yellow-300">🎯 Modo Especulativo · Small-Cap ≤$200M · Vol ≤$50M</span></div>` : '';
+    document.getElementById('stats').innerHTML = modeBadge + `
+      <div class="bg-green-950 border border-green-800 rounded-xl p-4 text-center"><div class="text-3xl font-bold text-green-400">${inv}</div><div class="text-xs text-green-600 mt-1 font-semibold">INVERTIBLES</div></div>
+      <div class="bg-yellow-950 border border-yellow-800 rounded-xl p-4 text-center"><div class="text-3xl font-bold text-yellow-400">${apl}</div><div class="text-xs text-yellow-600 mt-1 font-semibold">APALANCADOS</div></div>
+      <div class="bg-gray-900 border border-gray-700 rounded-xl p-4 text-center"><div class="text-3xl font-bold text-gray-400">${rui}</div><div class="text-xs text-gray-600 mt-1 font-semibold">RUIDOSOS</div></div>
+      <div class="bg-blue-950 border border-blue-800 rounded-xl p-4 text-center"><div class="text-3xl font-bold text-blue-400">${cryptos.length}</div><div class="text-xs text-blue-600 mt-1 font-semibold">TOTAL</div></div>`;
 
-    // Lista de activos
+    // Lista
     const list = document.getElementById('crypto-list');
     list.innerHTML = '';
     cryptos.forEach(c => {
       const border = c.color === 'green' ? 'border-green-700' : c.color === 'yellow' ? 'border-yellow-700' : 'border-gray-700';
-      const badgeBg = c.color === 'green' ? 'bg-green-900 text-green-300' : c.color === 'yellow' ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-800 text-gray-400';
-      const chg = c.price_change_percentage_24h;
-      const chgColor = chg >= 0 ? 'text-green-400' : 'text-red-400';
+      const badge  = c.color === 'green' ? 'bg-green-900 text-green-300' : c.color === 'yellow' ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-800 text-gray-400';
+      const chg = c.price_change_percentage_24h || 0;
       const card = document.createElement('div');
       card.className = `card-hover bg-gray-900 rounded-xl p-4 border border-gray-800 border-l-4 ${border}`;
       card.onclick = () => openDetail(c.id);
       card.innerHTML = `
         <div class="flex justify-between items-center">
-          <div class="flex items-center gap-3">
-            ${c.image ? `<img src="${c.image}" class="w-8 h-8 rounded-full" onerror="this.style.display='none'"/>` : ''}
-            <div>
-              <div class="flex items-center gap-2">
+          <div class="flex items-center gap-3 min-w-0">
+            ${c.image ? `<img src="${c.image}" class="w-8 h-8 rounded-full flex-shrink-0" onerror="this.style.display='none'"/>` : ''}
+            <div class="min-w-0">
+              <div class="flex items-center gap-2 flex-wrap">
                 <span class="font-bold">${c.name}</span>
                 <span class="text-gray-500 mono text-xs">${c.symbol.toUpperCase()}</span>
-                <span class="pill ${badgeBg}">${c.classification}</span>
+                <span class="pill ${badge}">${c.classification}</span>
+                ${currentMode==='speculative' ? '<span class="pill bg-yellow-950 text-yellow-600 text-xs">small-cap</span>' : ''}
               </div>
               <div class="flex items-center gap-3 mt-0.5">
                 <span class="font-semibold mono text-sm">$${fmt(c.current_price)}</span>
-                <span class="${chgColor} text-xs">${chg >= 0 ? '↑' : '↓'}${Math.abs(chg).toFixed(2)}%</span>
-                ${c.price_change_percentage_7d_in_currency !== null ? `<span class="text-gray-500 text-xs">7d: ${(c.price_change_percentage_7d_in_currency||0).toFixed(1)}%</span>` : ''}
+                <span class="${chg>=0?'text-green-400':'text-red-400'} text-xs">${chg>=0?'↑':'↓'}${Math.abs(chg).toFixed(2)}%</span>
+                ${c.price_change_percentage_7d_in_currency!=null ? `<span class="text-gray-500 text-xs">7d: ${(c.price_change_percentage_7d_in_currency||0).toFixed(1)}%</span>` : ''}
               </div>
-              ${c.classificationDetail?.reason ? `<p class="text-xs text-gray-500 mt-1 truncate max-w-md">${c.classificationDetail.reason}</p>` : ''}
+              ${c.classificationDetail?.reason ? `<p class="text-xs text-gray-500 mt-1 truncate">${c.classificationDetail.reason}</p>` : ''}
             </div>
           </div>
           <div class="text-right ml-4 flex-shrink-0">
             <div class="text-2xl font-bold mono">${c.boostPowerPercent}%</div>
             <div class="text-xs text-gray-500">BoostPower</div>
-            ${c.predictedChange > 0 ? `<div class="text-xs text-green-400 mt-1">+${c.predictedChange}% previsto</div>` : c.predictedChange === 0 ? '<div class="text-xs text-gray-500 mt-1">Sin predicción</div>' : ''}
+            ${c.predictedChange > 0 ? `<div class="text-xs text-green-400 mt-1">+${c.predictedChange}% previsto</div>` : ''}
           </div>
         </div>`;
       list.appendChild(card);
@@ -630,14 +469,13 @@ async function loadCryptos() {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 // DETALLE DE ACTIVO
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 async function openDetail(id) {
   showModal('modal-detail');
   setDetailTab('overview');
 
-  // Mostrar datos básicos inmediatos desde la lista
   const base = cryptos.find(c => c.id === id);
   if (base) {
     document.getElementById('detail-name').textContent   = base.name;
@@ -647,221 +485,306 @@ async function openDetail(id) {
     if (base.image) document.getElementById('detail-img').src = base.image;
     setBadge(base.classification, base.color);
     animateGauge(base.boostPower);
+    document.getElementById('d-summary').textContent = base.summary || 'Cargando análisis completo...';
   }
 
-  // Cargar detalle completo
   try {
     const r = await fetch(`/api/crypto/${id}/detail`);
     const d = await r.json();
     if (!d.success) throw new Error(d.error);
     renderDetail(d.asset);
   } catch(e) {
-    document.getElementById('d-summary').textContent = '❌ Error cargando detalle: ' + e.message;
+    document.getElementById('d-summary').textContent = '❌ ' + e.message;
   }
 }
 
 function renderDetail(a) {
-  // Header
+  const clsObj = typeof a.classification === 'object' ? a.classification : { category: a.classification, color: a.color||'gray', confidence:'', reason:'' };
   document.getElementById('detail-name').textContent   = a.name;
-  document.getElementById('detail-symbol').textContent = a.symbol.toUpperCase() + ' · #' + (a.market_cap_rank || '?');
+  document.getElementById('detail-symbol').textContent = a.symbol.toUpperCase();
   if (a.image) document.getElementById('detail-img').src = a.image;
-  const cls = typeof a.classification === 'object' ? a.classification : { category: a.classification, color: a.color || 'gray' };
-  setBadge(cls.category, cls.color);
-
-  // Precio y cambios
-  document.getElementById('d-price').textContent = '$' + fmt(a.current_price);
-  const c24 = a.change24h, c7 = a.change7d, c30 = a.change30d;
-  document.getElementById('d-chg24').innerHTML = `<span class="${c24>=0?'text-green-400':'text-red-400'}">24h: ${c24>=0?'+':''}${(c24||0).toFixed(2)}%</span>`;
-  document.getElementById('d-chg7').textContent  = c7  !== null ? `7d: ${(c7||0).toFixed(1)}%`  : '';
-  document.getElementById('d-chg30').textContent = c30 !== null ? `30d: ${(c30||0).toFixed(1)}%` : '';
-
-  // BoostPower gauge
-  document.getElementById('d-bp').textContent = a.boostPowerPercent + '%';
+  setBadge(clsObj.category, clsObj.color);
   animateGauge(a.boostPower);
 
+  // Precio
+  document.getElementById('d-price').textContent  = '$' + fmt(a.current_price);
+  document.getElementById('d-bp').textContent     = a.boostPowerPercent + '%';
+  document.getElementById('d-chg24').innerHTML = `<span class="${(a.change24h||0)>=0?'text-green-400':'text-red-400'}">24h: ${(a.change24h||0)>=0?'+':''}${(a.change24h||0).toFixed(2)}%</span>`;
+  document.getElementById('d-chg7').textContent  = a.change7d  != null ? `7d: ${(a.change7d||0).toFixed(1)}%`  : '';
+  document.getElementById('d-chg30').textContent = a.change30d != null ? `30d: ${(a.change30d||0).toFixed(1)}%` : '';
+
   // Clasificación
-  const clsObj = typeof a.classification === 'object' ? a.classification : { category: a.classification, color: a.color || 'gray', confidence: '', reason: '' };
-  document.getElementById('d-classname').textContent  = clsObj.category || '—';
-  document.getElementById('d-classname').className    = `text-lg font-bold ${clsObj.color === 'green' ? 'text-green-400' : clsObj.color === 'yellow' ? 'text-yellow-400' : 'text-gray-400'}`;
-  document.getElementById('d-confidence').textContent = clsObj.confidence ? 'Confianza: ' + clsObj.confidence : '';
+  document.getElementById('d-classname').textContent  = clsObj.category;
+  document.getElementById('d-classname').className    = `text-lg font-bold ${clsObj.color==='green'?'text-green-400':clsObj.color==='yellow'?'text-yellow-400':'text-gray-400'}`;
+  document.getElementById('d-confidence').textContent = clsObj.confidence ? 'Confianza: '+clsObj.confidence : '';
   document.getElementById('d-target').textContent     = a.predictedChange > 0 ? `Objetivo: +${a.predictedChange}%` : 'Sin predicción de subida';
   document.getElementById('d-reason').textContent     = clsObj.reason || '—';
   document.getElementById('d-summary').textContent    = a.summary || '—';
 
   // Fundamentales
-  document.getElementById('d-mcap').textContent  = '$' + fmtLarge(a.market_cap);
-  document.getElementById('d-vol').textContent   = '$' + fmtLarge(a.total_volume);
+  document.getElementById('d-mcap').textContent   = '$' + fmtLarge(a.market_cap);
+  document.getElementById('d-vol').textContent    = '$' + fmtLarge(a.total_volume);
   document.getElementById('d-supply').textContent = fmtLarge(a.circulating_supply) + (a.max_supply ? ` / ${fmtLarge(a.max_supply)}` : '');
-  document.getElementById('d-ath').textContent   = '$' + fmt(a.ath) + (a.ath_date ? ' (' + new Date(a.ath_date).getFullYear() + ')' : '');
-  document.getElementById('d-atl').textContent   = '$' + fmt(a.atl);
+  document.getElementById('d-ath').textContent    = '$' + fmt(a.ath) + (a.ath_date ? ' (' + new Date(a.ath_date).getFullYear() + ')' : '');
+  document.getElementById('d-atl').textContent    = '$' + fmt(a.atl);
+
   const ind = a.breakdown?.indicators;
   if (ind) {
-    const daysAgo = ind.atlDaysAgo;
-    document.getElementById('d-atldays').textContent = daysAgo !== null ? `hace ${daysAgo} días` : '—';
+    document.getElementById('d-atldays').textContent = ind.atlDaysAgo != null ? `hace ${ind.atlDaysAgo} días` : '—';
     const pct = ind.atlProximityPct ?? 50;
-    document.getElementById('d-atlpct').textContent  = pct.toFixed(0) + '% del rango';
+    document.getElementById('d-atlpct').textContent = pct.toFixed(0) + '% del rango';
     setTimeout(() => { document.getElementById('d-atlbar').style.width = pct + '%'; }, 100);
+    renderDerivedIndicators(ind);
   }
 
-  // Factores de potencial
-  const pot = a.breakdown?.potential?.factors;
-  if (pot) renderFactorBars('d-potential-factors', pot, 'green');
-  const res = a.breakdown?.resistance?.factors;
-  if (res) renderFactorBars('d-resistance-factors', res, 'red');
+  if (a.breakdown?.potential?.factors)  renderFactorBars('d-potential-factors',  a.breakdown.potential.factors,  'green');
+  if (a.breakdown?.resistance?.factors) renderFactorBars('d-resistance-factors', a.breakdown.resistance.factors, 'red');
 
-  // Indicadores derivados
-  if (ind) renderDerivedIndicators(ind);
-
-  // Tab cualitativo: FGI
+  // FGI
   if (a.fearGreed) {
-    const fgi = a.fearGreed;
-    document.getElementById('d-fgi-val').textContent   = fgi.value;
-    document.getElementById('d-fgi-label').textContent = fgi.classification;
+    document.getElementById('d-fgi-val').textContent   = a.fearGreed.value;
+    document.getElementById('d-fgi-label').textContent = a.fearGreed.classification;
     const fg = a.fearGreed.value;
     document.getElementById('d-fgi-val').className = `text-3xl font-bold mono ${fg<30?'text-red-400':fg<50?'text-orange-400':fg<70?'text-yellow-400':'text-green-400'}`;
+  }
+
+  // LunarCrush + Santiment
+  const socialExtra = document.getElementById('d-social-extra');
+  const hasSocial = a.lunarCrush || a.santiment;
+  socialExtra.classList.toggle('hidden', !hasSocial);
+  if (hasSocial) {
+    socialExtra.innerHTML = '';
+    if (a.lunarCrush) {
+      socialExtra.innerHTML += `
+        <div class="bg-gray-800 rounded-xl p-3">
+          <p class="text-xs text-gray-500 mb-2">🌙 LunarCrush</p>
+          ${a.lunarCrush.galaxyScore   != null ? `<div class="text-sm"><span class="text-gray-400">Galaxy Score:</span> <span class="font-bold">${a.lunarCrush.galaxyScore}</span></div>` : ''}
+          ${a.lunarCrush.altRank       != null ? `<div class="text-sm"><span class="text-gray-400">Alt Rank:</span> <span class="font-bold">#${a.lunarCrush.altRank}</span></div>` : ''}
+          ${a.lunarCrush.socialScore   != null ? `<div class="text-sm"><span class="text-gray-400">Social Score:</span> <span class="font-bold">${a.lunarCrush.socialScore}</span></div>` : ''}
+          ${a.lunarCrush.tweetVolume   != null ? `<div class="text-sm"><span class="text-gray-400">Tweets 24h:</span> <span class="font-bold">${fmtLarge(a.lunarCrush.tweetVolume)}</span></div>` : ''}
+        </div>`;
+    }
+    if (a.santiment) {
+      socialExtra.innerHTML += `
+        <div class="bg-gray-800 rounded-xl p-3">
+          <p class="text-xs text-gray-500 mb-2">📈 Santiment</p>
+          ${a.santiment.socialVolume    != null ? `<div class="text-sm"><span class="text-gray-400">Social Volume:</span> <span class="font-bold">${a.santiment.socialVolume}</span></div>` : ''}
+          ${a.santiment.socialDominance != null ? `<div class="text-sm"><span class="text-gray-400">Dominancia Social:</span> <span class="font-bold">${(a.santiment.socialDominance*100).toFixed(1)}%</span></div>` : ''}
+          ${a.santiment.devActivity     != null ? `<div class="text-sm"><span class="text-gray-400">Dev Activity 7d:</span> <span class="font-bold">${a.santiment.devActivity}</span></div>` : ''}
+        </div>`;
+    }
   }
 
   // Noticias
   const newsDiv = document.getElementById('d-news');
   if (a.news?.articles?.length > 0) {
-    newsDiv.innerHTML = a.news.articles.map(n => `
+    document.getElementById('d-news-sources').textContent = a.news.sources ? 'Fuentes: ' + a.news.sources.join(', ') : '';
+    newsDiv.innerHTML = a.news.articles.slice(0, 8).map(n => `
       <a href="${n.url}" target="_blank" class="block bg-gray-800 rounded-lg p-3 hover:bg-gray-700">
         <div class="flex items-start gap-2">
-          <span class="${n.sentiment.score > 0.1 ? 'sentiment-pos' : n.sentiment.score < -0.1 ? 'sentiment-neg' : 'sentiment-neu'} mt-0.5 flex-shrink-0">●</span>
+          <span class="${n.sentiment?.score>0.1?'sentiment-pos':n.sentiment?.score<-0.1?'sentiment-neg':'sentiment-neu'} mt-0.5 flex-shrink-0">●</span>
           <div>
             <p class="text-sm text-gray-200 leading-snug">${n.title}</p>
-            <p class="text-xs text-gray-500 mt-1">${n.source} · ${timeAgo(n.publishedAt)} · <span class="${n.sentiment.score > 0.1 ? 'sentiment-pos' : n.sentiment.score < -0.1 ? 'sentiment-neg' : 'sentiment-neu'}">${n.sentiment.label}</span></p>
+            <p class="text-xs text-gray-500 mt-1">${n.source||'—'} · ${timeAgo(n.publishedAt)} · <span class="${n.sentiment?.score>0.1?'sentiment-pos':n.sentiment?.score<-0.1?'sentiment-neg':'sentiment-neu'}">${n.sentiment?.label||'neutral'}</span></p>
           </div>
         </div>
       </a>`).join('');
   } else {
-    newsDiv.innerHTML = '<p class="text-gray-500 text-sm">Sin noticias específicas encontradas para este activo.</p>';
+    document.getElementById('d-news-sources').textContent = '';
+    newsDiv.innerHTML = '<p class="text-gray-500 text-sm">Sin noticias específicas encontradas.</p>';
   }
 
   // Reddit
   const redditDiv = document.getElementById('d-reddit');
   if (a.reddit?.posts?.length > 0) {
-    document.getElementById('d-reddit-count').textContent = `${a.reddit.postCount} posts · sentimiento promedio: ${a.reddit.avgSentiment > 0.1 ? '🟢 positivo' : a.reddit.avgSentiment < -0.1 ? '🔴 negativo' : '⚪ neutro'}`;
-    redditDiv.innerHTML = a.reddit.posts.slice(0, 5).map(p => `
+    const sub = a.reddit.subredditsSearched?.join(', ') || 'CryptoCurrency';
+    document.getElementById('d-reddit-meta').textContent = `${a.reddit.postCount} posts · ${sub}`;
+    redditDiv.innerHTML = a.reddit.posts.slice(0, 6).map(p => `
       <a href="${p.url}" target="_blank" class="block bg-gray-800 rounded-lg p-3 hover:bg-gray-700">
         <div class="flex items-start gap-2">
-          <span class="${p.sentiment.score > 0.1 ? 'sentiment-pos' : p.sentiment.score < -0.1 ? 'sentiment-neg' : 'sentiment-neu'} mt-0.5 flex-shrink-0">●</span>
+          <span class="${p.sentiment?.score>0.1?'sentiment-pos':p.sentiment?.score<-0.1?'sentiment-neg':'sentiment-neu'} mt-0.5 flex-shrink-0">●</span>
           <div class="flex-1">
             <p class="text-sm text-gray-200 leading-snug">${p.title}</p>
-            <p class="text-xs text-gray-500 mt-1">⬆️ ${p.score} · 💬 ${p.comments} · ${timeAgo(p.created)}</p>
+            <p class="text-xs text-gray-500 mt-1">r/${p.subreddit} · ⬆️${p.score} · 💬${p.comments} · ${timeAgo(p.created)}</p>
           </div>
         </div>
       </a>`).join('');
   } else {
-    document.getElementById('d-reddit-count').textContent = '';
-    redditDiv.innerHTML = '<p class="text-gray-500 text-sm">Sin posts recientes encontrados en Reddit.</p>';
+    document.getElementById('d-reddit-meta').textContent = '';
+    redditDiv.innerHTML = '<p class="text-gray-500 text-sm">Sin posts recientes encontrados.</p>';
   }
 }
 
 function renderFactorBars(containerId, factors, color) {
-  const div = document.getElementById(containerId);
-  const names = { atlProximity:'Proximidad ATL', volumeSurge:'Surge de Volumen', socialMomentum:'Momentum Social', newsSentiment:'Sentimiento Noticias', reboundRecency:'Recencia ATL',
-                  leverageRatio:'Ratio Apalancamiento', marketCapSize:'Tamaño Cap', volatilityNoise:'Ruido Volatilidad', fearOverlap:'Solapamiento FGI' };
-  div.innerHTML = Object.entries(factors).map(([k, v]) => {
-    const pct = Math.round(v * 100);
-    const bg  = color === 'green' ? 'bg-green-600' : 'bg-red-600';
-    return `
-      <div>
-        <div class="flex justify-between text-xs mb-0.5">
-          <span class="text-gray-400">${names[k] || k}</span>
-          <span class="mono font-medium">${pct}%</span>
-        </div>
-        <div class="w-full bg-gray-800 rounded-full h-1.5">
-          <div class="bar ${bg} h-1.5 rounded-full" style="width:${pct}%"></div>
-        </div>
-      </div>`;
+  const names = { atlProximity:'Proximidad ATL', volumeSurge:'Surge Volumen', socialMomentum:'Momentum Social', newsSentiment:'Sentimiento Noticias', reboundRecency:'Recencia ATL',
+    leverageRatio:'Ratio Apalancamiento', marketCapSize:'Tamaño Cap', volatilityNoise:'Ruido Volatilidad', fearOverlap:'Solapamiento FGI' };
+  document.getElementById(containerId).innerHTML = Object.entries(factors).map(([k,v]) => {
+    const pct = Math.round(v*100);
+    return `<div>
+      <div class="flex justify-between text-xs mb-0.5"><span class="text-gray-400">${names[k]||k}</span><span class="mono font-medium">${pct}%</span></div>
+      <div class="w-full bg-gray-800 rounded-full h-1.5"><div class="bar bg-${color}-600 h-1.5 rounded-full" style="width:${pct}%"></div></div>
+    </div>`;
   }).join('');
 }
 
 function renderDerivedIndicators(ind) {
-  const div = document.getElementById('d-derived-indicators');
   const rows = [
-    ['Posición ATL-ATH', ind.atlProximityPct !== undefined ? ind.atlProximityPct.toFixed(0) + '%' : '—', 'cuanto menor = más potencial'],
-    ['Precio vs ATH', ind.priceVsAth !== undefined ? ind.priceVsAth.toFixed(0) + '%' : '—', 'del ATH'],
-    ['Vol/Cap ratio', ind.capEfficiency !== undefined ? ind.capEfficiency.toFixed(1) + '%' : '—', '>10% = muy activo'],
-    ['Market Cap', ind.marketCapM !== undefined ? '$' + fmtLarge(ind.marketCapM * 1e6) : '—', ''],
-    ['Noticias recientes', ind.newsCount !== null ? ind.newsCount : '—', 'últimas horas'],
-    ['Sent. noticias', ind.newsSentimentLabel || '—', ''],
-    ['FGI', ind.fearGreedIndex !== null ? ind.fearGreedIndex + ' · ' + (ind.fearGreedLabel || '') : '—', ''],
-    ['Posts Reddit', ind.redditPosts !== null ? ind.redditPosts : '—', '24h'],
-    ['ATL hace', ind.atlDaysAgo !== null ? ind.atlDaysAgo + ' días' : '—', ''],
-    ['Cambio 24h', ind.change24h !== undefined ? (ind.change24h >= 0 ? '+' : '') + ind.change24h.toFixed(2) + '%' : '—', '']
+    ['Posición ATL-ATH', ind.atlProximityPct != null ? ind.atlProximityPct.toFixed(0)+'%' : '—', '0%=ATL, 100%=ATH'],
+    ['Precio vs ATH',    ind.priceVsAth      != null ? ind.priceVsAth.toFixed(0)+'%'      : '—', 'del máximo histórico'],
+    ['Vol/Cap ratio',    ind.capEfficiency   != null ? ind.capEfficiency.toFixed(1)+'%'    : '—', '>10% = muy activo'],
+    ['Market Cap',       ind.marketCapM      != null ? '$'+fmtLarge(ind.marketCapM*1e6)   : '—', ''],
+    ['Noticias',         ind.newsCount       != null ? ind.newsCount                       : '—', 'recientes'],
+    ['Sentimiento news', ind.newsSentimentLabel || '—', ''],
+    ['FGI',              ind.fearGreedIndex  != null ? ind.fearGreedIndex+' · '+(ind.fearGreedLabel||'') : '—', ''],
+    ['Reddit posts',     ind.redditPosts     != null ? ind.redditPosts                     : '—', '24h'],
+    ['ATL hace',         ind.atlDaysAgo      != null ? ind.atlDaysAgo+' días'             : '—', ''],
+    ['Cambio 24h',       ind.change24h       != null ? (ind.change24h>=0?'+':'')+ind.change24h.toFixed(2)+'%' : '—', '']
   ];
-  div.innerHTML = rows.map(([label, val, hint]) => `
+  document.getElementById('d-derived-indicators').innerHTML = rows.map(([l,v,h]) => `
     <div class="bg-gray-800 rounded-lg p-2">
-      <p class="text-xs text-gray-500">${label}</p>
-      <p class="font-semibold mono text-sm">${val}</p>
-      ${hint ? `<p class="text-xs text-gray-600">${hint}</p>` : ''}
+      <p class="text-xs text-gray-500">${l}</p>
+      <p class="font-semibold mono text-sm">${v}</p>
+      ${h ? `<p class="text-xs text-gray-600">${h}</p>` : ''}
     </div>`).join('');
 }
 
 function setBadge(cat, color) {
-  const badge = document.getElementById('detail-badge');
-  badge.textContent = cat;
-  badge.className = 'pill ' + (color === 'green' ? 'bg-green-900 text-green-300' : color === 'yellow' ? 'bg-yellow-900 text-yellow-300' : 'bg-gray-800 text-gray-400');
+  const b = document.getElementById('detail-badge');
+  b.textContent = cat;
+  b.className = 'pill ' + (color==='green'?'bg-green-900 text-green-300':color==='yellow'?'bg-yellow-900 text-yellow-300':'bg-gray-800 text-gray-400');
 }
 
-function animateGauge(boostPower) {
-  const gauge = document.getElementById('d-gauge');
-  if (!gauge) return;
-  const circumference = 251;
-  const offset = circumference - (boostPower * circumference);
-  gauge.style.strokeDashoffset = offset;
-  const color = boostPower > 0.65 ? '#22c55e' : boostPower > 0.40 ? '#eab308' : '#6b7280';
-  gauge.style.stroke = color;
+function animateGauge(bp) {
+  const g = document.getElementById('d-gauge');
+  if (!g) return;
+  g.style.strokeDashoffset = 251 - (bp * 251);
+  g.style.stroke = bp > 0.65 ? '#22c55e' : bp > 0.40 ? '#eab308' : '#6b7280';
 }
 
 function setDetailTab(tab) {
   document.querySelectorAll('.detail-tab').forEach(el => el.classList.add('hidden'));
   document.querySelectorAll('.dtab').forEach(el => el.classList.remove('bg-gray-800','text-white'));
-  document.getElementById('dcontent-' + tab).classList.remove('hidden');
-  const btn = document.getElementById('dtab-' + tab);
-  btn.classList.add('bg-gray-800','text-white');
+  document.getElementById('dcontent-'+tab).classList.remove('hidden');
+  document.getElementById('dtab-'+tab).classList.add('bg-gray-800','text-white');
 }
 
-function closeDetail() { closeModal('modal-detail'); }
+// ═══════════════════════════════════════════════════════════
+// CONFIG
+// ═══════════════════════════════════════════════════════════
+function applyConfigToUI() {
+  if (!config || !config.potentialWeights) return;
+  const cl = config.classification || {}, pr = config.prediction || {}, mw = config.metaWeights || {};
+  setSlider('c-inv-min',    Math.round((cl.invertibleMinBoost    ?? 0.65)*100), 'c-inv-min-v',    '%');
+  setSlider('c-apl-min',    Math.round((cl.apalancadoMinBoost    ?? 0.40)*100), 'c-apl-min-v',    '%');
+  setSlider('c-mcap',       Math.round((cl.invertibleMaxMarketCap?? 500e6)/1e6),'c-mcap-v',       '', '$', 'M');
+  setSlider('c-target',     pr.invertibleTarget   ?? 30,  'c-target-v',     '%');
+  setSlider('c-apl-target', pr.apalancadoTarget   ?? 10,  'c-apl-target-v', '%');
+  setSlider('c-tol',        pr.magnitudeTolerance ?? 5,   'c-tol-v',        '%', '±');
+  setSlider('c-pot',        Math.round((mw.potential ?? 0.6)*100), 'c-pot-v', '%');
+  document.getElementById('c-res-v').textContent = (100-Math.round((mw.potential??0.6)*100))+'%';
+}
+function setSlider(id, val, lbId, unit='', prefix='', suffix='') {
+  const el = document.getElementById(id), lb = document.getElementById(lbId);
+  if (el) el.value = val;
+  if (lb) lb.textContent = prefix + val + unit + suffix;
+}
+function cfgUpdate(sid, lid, unit='', prefix='') {
+  document.getElementById(lid).textContent = prefix + document.getElementById(sid).value + unit;
+}
+function cfgUpdateMcap() { document.getElementById('c-mcap-v').textContent = '$' + document.getElementById('c-mcap').value + 'M'; }
+function updateMetaWeights() {
+  const v = parseInt(document.getElementById('c-pot').value);
+  document.getElementById('c-pot-v').textContent = v + '%';
+  document.getElementById('c-res-v').textContent = (100-v) + '%';
+}
+function buildFactorSliders() {
+  if (!metadata || !config?.potentialWeights) return;
+  const build = (factors, weightObj, cid, color) => {
+    const div = document.getElementById(cid);
+    if (!div || !weightObj) return;
+    div.innerHTML = '';
+    factors.forEach(f => {
+      const w = Math.round((weightObj[f.id]??0)*100);
+      div.innerHTML += `<div class="mb-1">
+        <div class="flex justify-between text-xs mb-0.5"><span class="text-gray-300">${f.name}</span><span id="fw-${f.id}" class="${color} mono">${w}%</span></div>
+        <input type="range" id="fslider-${f.id}" min="0" max="50" step="5" value="${w}" oninput="document.getElementById('fw-${f.id}').textContent=this.value+'%'" class="w-full h-1 accent-blue-500"/>
+        <p class="text-gray-600 text-xs">${f.description}</p></div>`;
+    });
+  };
+  build(metadata.potential,  config.potentialWeights,  'potential-sliders',  'text-green-400');
+  build(metadata.resistance, config.resistanceWeights, 'resistance-sliders', 'text-red-400');
+}
+function buildConfigFromUI() {
+  const pot = parseInt(document.getElementById('c-pot').value)/100;
+  const pw={}, rw={};
+  metadata?.potential?.forEach(f  => { pw[f.id] = parseInt(document.getElementById('fslider-'+f.id)?.value||0)/100; });
+  metadata?.resistance?.forEach(f => { rw[f.id] = parseInt(document.getElementById('fslider-'+f.id)?.value||0)/100; });
+  return { ...config, metaWeights:{potential:pot,resistance:1-pot}, potentialWeights:pw, resistanceWeights:rw,
+    classification:{ invertibleMinBoost:parseInt(document.getElementById('c-inv-min').value)/100, apalancadoMinBoost:parseInt(document.getElementById('c-apl-min').value)/100,
+      invertibleMaxMarketCap:parseInt(document.getElementById('c-mcap').value)*1e6, invertibleMinAtlProx:0.60, invertibleMinVolSurge:1.20, invertibleMinSocial:0.50 },
+    prediction:{ invertibleTarget:parseInt(document.getElementById('c-target').value), apalancadoTarget:parseInt(document.getElementById('c-apl-target').value),
+      magnitudeTolerance:parseInt(document.getElementById('c-tol').value), directionOnly:false }};
+}
+async function saveConfig() {
+  const msg = document.getElementById('config-msg');
+  msg.innerHTML = '<span class="text-gray-400">Guardando...</span>';
+  try {
+    const r = await fetch('/api/config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({config:buildConfigFromUI()})});
+    const d = await r.json();
+    if (d.success) { config=d.config; msg.innerHTML='<span class="text-green-400">✅ Guardado</span>'; }
+    else msg.innerHTML=`<span class="text-red-400">❌ ${(d.errors||[d.error]).join(', ')}</span>`;
+    setTimeout(()=>msg.innerHTML='',3000);
+  } catch(e){ msg.innerHTML=`<span class="text-red-400">❌ ${e.message}</span>`; }
+}
+async function resetConfig() {
+  if(!confirm('¿Resetear?')) return;
+  const r = await fetch('/api/config/reset',{method:'POST'}); const d=await r.json();
+  if(d.success){config=d.config;applyConfigToUI();buildFactorSliders();}
+}
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 // CICLOS
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+function openCycleModal() {
+  document.getElementById('dur-assets').textContent  = Math.min(cryptos.length,20);
+  document.getElementById('modal-mode-label').textContent = currentMode==='speculative'?'🎯 Especulativo':'📊 Normal';
+  updateDurBadge(selectedDuration);
+  showModal('modal-cycle');
+}
 function setDur(ms) {
   selectedDuration = ms;
-  document.getElementById('dur-label').textContent = fmtDur(ms);
-  document.getElementById('dur-custom').value = '';
   document.querySelectorAll('.dur-btn').forEach(b => b.classList.replace('bg-blue-700','bg-gray-700'));
   event.currentTarget.classList.replace('bg-gray-700','bg-blue-700');
+  document.getElementById('dur-custom').value = '';
+  document.getElementById('dur-label').textContent = fmtDur(ms);
+  updateDurBadge(ms);
 }
 function setDurMin(v) {
-  const min = parseInt(v);
-  if (!isNaN(min) && min >= 1) {
-    selectedDuration = min * 60000;
-    document.getElementById('dur-label').textContent = fmtDur(selectedDuration);
-    document.querySelectorAll('.dur-btn').forEach(b => b.classList.replace('bg-blue-700','bg-gray-700'));
-  }
+  const min = parseInt(v); if(isNaN(min)||min<1) return;
+  selectedDuration = min*60000;
+  document.getElementById('dur-label').textContent = fmtDur(selectedDuration);
+  updateDurBadge(selectedDuration);
 }
-function openCycleModal() {
-  document.getElementById('dur-assets').textContent = Math.min(cryptos.length, 20);
-  openModal('modal-cycle');
+function updateDurBadge(ms) {
+  const sig = ms >= SIGNIFICANT_MS;
+  const b = document.getElementById('dur-sig-badge');
+  b.textContent = sig ? '⭐⭐ Significativo' : '⚗️ Testing';
+  b.className = 'ml-3 pill ' + (sig ? 'bg-green-900 text-green-300' : 'bg-gray-800 text-gray-400');
+  document.getElementById('modal-sig-note').textContent = sig
+    ? '✓ Este ciclo calibrará el algoritmo al completarse.'
+    : '⚠️ Ciclo <6h — solo valida tendencia, no calibra pesos.';
 }
-
 async function confirmCycle() {
   closeModal('modal-cycle');
   setTab('validation');
   document.getElementById('active-cycles').innerHTML = '<p class="text-blue-400 text-sm">⏳ Iniciando ciclo...</p>';
   try {
-    const snapshot = cryptos.slice(0, 20);
-    const r = await fetch('/api/cycles/start', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ snapshot, durationMs: selectedDuration }) });
+    const snapshot = cryptos.slice(0,20);
+    const r = await fetch('/api/cycles/start',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({snapshot,durationMs:selectedDuration})});
     const d = await r.json();
-    if (d.success) await loadValidation();
-    else document.getElementById('active-cycles').innerHTML = `<p class="text-red-400 text-sm">❌ ${d.error||JSON.stringify(d)}</p>`;
-  } catch(e) {
-    document.getElementById('active-cycles').innerHTML = `<p class="text-red-400 text-sm">❌ ${e.message}</p>`;
-  }
+    if(d.success) await loadValidation();
+    else document.getElementById('active-cycles').innerHTML=`<p class="text-red-400 text-sm">❌ ${d.error}</p>`;
+  } catch(e){ document.getElementById('active-cycles').innerHTML=`<p class="text-red-400 text-sm">❌ ${e.message}</p>`; }
 }
 
 async function loadValidation() {
@@ -871,340 +794,363 @@ async function loadValidation() {
 async function loadActiveCycles() {
   const div = document.getElementById('active-cycles');
   try {
-    const r = await fetch('/api/cycles/active');
-    const d = await r.json();
-    if (!d.success || d.cycles.length === 0) { div.innerHTML = '<p class="text-gray-500 text-sm">Sin ciclos activos</p>'; return; }
-    div.innerHTML = '';
+    const r = await fetch('/api/cycles/active'); const d=await r.json();
+    if(!d.success||d.cycles.length===0){div.innerHTML='<p class="text-gray-500 text-sm">Sin ciclos activos</p>';return;}
+    div.innerHTML='';
     d.cycles.forEach(c => {
-      const card = document.createElement('div');
-      card.id = `acard-${c.id}`;
-      card.className = 'bg-gray-900 rounded-xl border border-gray-800 p-4 mb-2';
-      div.appendChild(card);
+      const el = document.createElement('div');
+      el.id = 'acard-'+c.id;
+      el.className = 'bg-gray-900 rounded-xl border border-gray-800 p-4 mb-2';
+      div.appendChild(el);
       renderActiveCycleCard(c);
-      if (cycleTimers[c.id]) clearInterval(cycleTimers[c.id]);
-      cycleTimers[c.id] = setInterval(() => tickCycle(c), 1000);
+      if(cycleTimers[c.id]) clearInterval(cycleTimers[c.id]);
+      cycleTimers[c.id] = setInterval(()=>tickCycle(c),1000);
     });
-  } catch(e) { div.innerHTML = `<p class="text-red-400 text-sm">Error: ${e.message}</p>`; }
+  } catch(e){ div.innerHTML=`<p class="text-red-400 text-sm">Error: ${e.message}</p>`; }
 }
 
 function renderActiveCycleCard(c) {
-  const card = document.getElementById(`acard-${c.id}`);
-  if (!card) return;
-  const now = Date.now(), total = c.durationMs || (c.endTime - c.startTime);
-  const elapsed = now - c.startTime, remaining = Math.max(0, c.endTime - now);
-  const pct = Math.min(100, Math.round(elapsed / total * 100));
-  const ready = remaining === 0;
+  const card = document.getElementById('acard-'+c.id); if(!card) return;
+  const now=Date.now(), total=c.durationMs||(c.endTime-c.startTime);
+  const remaining=Math.max(0,c.endTime-now), pct=Math.min(100,Math.round((now-c.startTime)/total*100));
+  const ready=remaining===0, sig=total>=SIGNIFICANT_MS;
   card.innerHTML = `
     <div class="flex justify-between items-center mb-3">
       <div>
-        <p class="font-semibold text-sm">${ready ? '✅ Listo para validar' : '🔄 Ciclo activo'} · ${c.snapshot.length} activos · ${fmtDur(total)}</p>
-        <p class="text-xs text-gray-500 mono">${c.id}</p>
+        <p class="font-semibold text-sm">${ready?'✅ Listo para validar':'🔄 Ciclo activo'} · ${c.snapshot?.length||0} activos · ${fmtDur(total)}</p>
+        <div class="flex items-center gap-2 mt-0.5">
+          <span class="pill ${sig?'bg-green-900 text-green-300':'bg-gray-800 text-gray-400'}">${sig?'⭐⭐ Significativo':'⚗️ Testing'}</span>
+          <span class="text-xs text-gray-500 mono">${c.id}</span>
+        </div>
       </div>
       <div class="text-right">
         ${ready
-          ? `<button onclick="completeCycle('${c.id}')" class="bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-bold">Validar ahora</button>`
+          ? `<button onclick="completeCycle('${c.id}')" class="bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-bold">Validar</button>`
           : `<div class="text-xl font-bold text-blue-400 mono" id="cd-${c.id}">${fmtCountdown(remaining)}</div><div class="text-xs text-gray-500">restante</div>`
         }
       </div>
     </div>
-    <div class="w-full bg-gray-800 rounded-full h-1.5">
-      <div class="bar bg-blue-600 h-1.5 rounded-full" style="width:${pct}%"></div>
-    </div>
-    <div class="flex justify-between text-xs text-gray-600 mt-1">
-      <span>${pct}% completado</span>
-      <span>Fin: ${new Date(c.endTime).toLocaleString()}</span>
-    </div>
-    ${!ready ? `<div class="text-right mt-1"><button onclick="completeCycle('${c.id}')" class="text-xs text-gray-600 hover:text-yellow-400">Completar manualmente</button></div>` : ''}`;
+    <div class="w-full bg-gray-800 rounded-full h-1.5"><div class="bar bg-blue-600 h-1.5 rounded-full" style="width:${pct}%"></div></div>
+    ${!ready?`<div class="text-right mt-1"><button onclick="completeCycle('${c.id}')" class="text-xs text-gray-600 hover:text-yellow-400">Completar manualmente</button></div>`:''}`;
 }
 
 function tickCycle(c) {
-  const remaining = Math.max(0, c.endTime - Date.now());
-  const el = document.getElementById(`cd-${c.id}`);
-  if (el) el.textContent = fmtCountdown(remaining);
-  if (remaining === 0) { clearInterval(cycleTimers[c.id]); renderActiveCycleCard(c); }
+  const rem=Math.max(0,c.endTime-Date.now());
+  const el=document.getElementById('cd-'+c.id); if(el) el.textContent=fmtCountdown(rem);
+  if(rem===0){clearInterval(cycleTimers[c.id]);renderActiveCycleCard(c);}
 }
-
 async function completeCycle(cycleId) {
   try {
-    const r = await fetch(`/api/cycles/${cycleId}/complete`, { method:'POST' });
-    const d = await r.json();
-    if (d.success) { clearInterval(cycleTimers[cycleId]); await loadValidation(); }
-    else alert('❌ ' + d.error);
-  } catch(e) { alert('❌ ' + e.message); }
+    const r=await fetch(`/api/cycles/${cycleId}/complete`,{method:'POST'}); const d=await r.json();
+    if(d.success){clearInterval(cycleTimers[cycleId]);await loadValidation();}
+    else alert('❌ '+d.error);
+  } catch(e){alert('❌ '+e.message);}
 }
 
 async function loadCompletedCycles() {
   const div = document.getElementById('completed-cycles');
   try {
-    const r = await fetch('/api/cycles/history');
-    const d = await r.json();
-    if (!d.success || d.cycles.length === 0) { div.innerHTML = '<p class="text-gray-500 text-sm">Sin ciclos completados aún.</p>'; return; }
-    div.innerHTML = '';
-    d.cycles.slice(0, 10).forEach(c => {
-      const excl = (c.excludedResults || []).length;
-      const card = document.createElement('div');
-      card.className = 'bg-gray-900 rounded-xl border border-gray-800 p-4 mb-2';
-      card.innerHTML = `
+    const r=await fetch('/api/cycles/history'); const d=await r.json();
+    if(!d.success||d.cycles.length===0){div.innerHTML='<p class="text-gray-500 text-sm">Sin ciclos completados.</p>';return;}
+    div.innerHTML='';
+    d.cycles.slice(0,10).forEach(c => {
+      const excl=(c.excludedResults||[]).length, sig=(c.durationMs||0)>=SIGNIFICANT_MS;
+      const card=document.createElement('div');
+      card.className='bg-gray-900 rounded-xl border border-gray-800 p-4 mb-2';
+      card.innerHTML=`
         <div class="flex justify-between items-center">
           <div>
             <p class="font-semibold text-sm">${new Date(c.completedAt).toLocaleString()}</p>
-            <p class="text-xs text-gray-500">${c.snapshot.length} activos · ${fmtDur(c.durationMs||43200000)} ${excl ? `· <span class="text-yellow-400">${excl} excluidos</span>` : ''}</p>
+            <div class="flex items-center gap-2 mt-0.5">
+              <span class="pill ${sig?'bg-green-900 text-green-300':'bg-gray-800 text-gray-400'}">${sig?'⭐⭐ Significativo':'⚗️ Testing'}</span>
+              <span class="text-xs text-gray-500">${c.snapshot?.length||0} activos · ${fmtDur(c.durationMs||0)} ${excl?`· <span class="text-yellow-400">${excl} excl.</span>`:''}</span>
+            </div>
           </div>
           <div class="flex items-center gap-3">
             <div class="text-right">
-              <div class="text-2xl font-bold text-green-400">${c.metrics?.successRate ?? '?'}%</div>
-              <div class="text-xs text-gray-500">${c.metrics?.correct ?? '?'}/${c.metrics?.total ?? '?'} correctas</div>
+              <div class="text-2xl font-bold ${parseFloat(c.metrics?.successRate||0)>60?'text-green-400':parseFloat(c.metrics?.successRate||0)>40?'text-yellow-400':'text-red-400'}">${c.metrics?.successRate??'?'}%</div>
+              <div class="text-xs text-gray-500">${c.metrics?.correct??'?'}/${c.metrics?.total??'?'}</div>
             </div>
             <button onclick="toggleDetail('${c.id}')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">📋 Ver</button>
             <button onclick="downloadReport('${c.id}')" class="bg-blue-900 hover:bg-blue-800 px-3 py-1 rounded text-xs">📄 Word</button>
           </div>
         </div>
         <div id="cdetail-${c.id}" class="hidden mt-3 border-t border-gray-800 pt-3">
-          <p class="text-xs text-gray-500 mb-2">Haz click para excluir/incluir resultados de las estadísticas</p>
-          <div class="space-y-1.5">${(c.results||[]).map(r => renderResultCard(r, c)).join('')}</div>
+          <p class="text-xs text-gray-500 mb-2">Click para excluir/incluir de las estadísticas</p>
+          <div class="space-y-1.5">${(c.results||[]).map(r=>renderResultCard(r,c)).join('')}</div>
         </div>`;
       div.appendChild(card);
     });
-  } catch(e) { div.innerHTML = `<p class="text-red-400 text-sm">Error: ${e.message}</p>`; }
+  } catch(e){div.innerHTML=`<p class="text-red-400 text-sm">Error: ${e.message}</p>`;}
 }
 
 function renderResultCard(result, cycle) {
-  const excl = (cycle.excludedResults||[]).includes(result.id);
-  const ok = result.correct;
-  const border = excl ? 'border-gray-700' : ok ? 'border-green-700' : 'border-red-700';
-  const op = excl ? 'opacity-40' : '';
-  const icon = excl ? '⊘' : ok ? '✓' : '✗';
-  const iconCl = excl ? 'text-gray-500' : ok ? 'text-green-400' : 'text-red-400';
-  return `
-    <div class="result-card ${op} bg-gray-800 rounded-lg p-2.5 border-l-4 ${border} flex justify-between items-center text-sm"
-         onclick="toggleExclude('${cycle.id}','${result.id}',this)" title="${excl ? 'Click para incluir' : 'Click para excluir'}">
-      <div class="flex items-center gap-2">
-        <span class="font-semibold">${result.name}</span>
-        <span class="text-gray-500 mono text-xs">${result.classification}</span>
-        ${result.validationReason ? `<span class="text-gray-600 text-xs hidden xl:inline truncate max-w-xs">${result.validationReason}</span>` : ''}
-      </div>
-      <div class="flex items-center gap-4 text-xs mono">
-        <span class="text-gray-400">Pred: <span class="text-white">${result.predictedChange}%</span></span>
-        <span class="text-gray-400">Real: <span class="${parseFloat(result.actualChange)>=0?'text-green-400':'text-red-400'}">${parseFloat(result.actualChange)>0?'+':''}${result.actualChange}%</span></span>
-        <span class="text-gray-500">Δ${result.error}%</span>
-        <span class="${iconCl} font-bold text-base w-4 text-center">${icon}</span>
-      </div>
-    </div>`;
+  const excl=(cycle.excludedResults||[]).includes(result.id);
+  const ok=result.correct;
+  const border=excl?'border-gray-700':ok?'border-green-700':'border-red-700';
+  const op=excl?'opacity-40':'';
+  return `<div class="result-card ${op} bg-gray-800 rounded-lg p-2.5 border-l-4 ${border} flex justify-between items-center text-sm"
+    onclick="toggleExclude('${cycle.id}','${result.id}',this)" title="${excl?'Click para incluir':'Click para excluir'}">
+    <div class="flex items-center gap-2">
+      <span class="font-semibold">${result.name}</span>
+      <span class="text-gray-500 mono text-xs">${result.classification}</span>
+    </div>
+    <div class="flex items-center gap-3 text-xs mono">
+      <span class="text-gray-400">Pred: <span class="text-white">${result.predictedChange}%</span></span>
+      <span class="text-gray-400">Real: <span class="${parseFloat(result.actualChange)>=0?'text-green-400':'text-red-400'}">${parseFloat(result.actualChange)>0?'+':''}${result.actualChange}%</span></span>
+      <span class="text-gray-500">Δ${result.error}%</span>
+      <span class="${excl?'text-gray-500':ok?'text-green-400':'text-red-400'} font-bold text-base">${excl?'⊘':ok?'✓':'✗'}</span>
+    </div>
+  </div>`;
 }
-
-function toggleDetail(id) {
-  document.getElementById('cdetail-' + id)?.classList.toggle('hidden');
-}
-
-async function toggleExclude(cycleId, assetId, el) {
+function toggleDetail(id) { document.getElementById('cdetail-'+id)?.classList.toggle('hidden'); }
+async function toggleExclude(cycleId, assetId) {
   try {
-    const r = await fetch(`/api/cycles/${cycleId}/results/${assetId}/toggle-exclude`, { method:'POST' });
-    const d = await r.json();
-    if (d.success) await loadCompletedCycles();
-  } catch(e) {}
+    const r=await fetch(`/api/cycles/${cycleId}/results/${assetId}/toggle-exclude`,{method:'POST'}); const d=await r.json();
+    if(d.success) await loadCompletedCycles();
+  } catch(e){}
 }
-
 async function loadGlobalStats() {
-  const div = document.getElementById('global-stats');
+  const div=document.getElementById('global-stats');
   try {
-    const r = await fetch('/api/cycles/stats/global');
-    const d = await r.json();
-    if (!d.success) return;
-    const s = d.stats;
-    div.innerHTML = `
-      <div class="grid grid-cols-3 gap-3">
-        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-blue-400">${s.totalCycles}</div><div class="text-xs text-gray-500 mt-1">Ciclos</div></div>
-        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-green-400">${s.avgSuccessRate}%</div><div class="text-xs text-gray-500 mt-1">Accuracy Promedio</div></div>
-        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-purple-400">${s.totalPredictions}</div><div class="text-xs text-gray-500 mt-1">Predicciones</div></div>
-      </div>
-      ${s.bestCycle ? `<p class="text-xs text-gray-500 mt-2">🏆 Mejor ciclo: ${s.bestCycle.successRate}% el ${s.bestCycle.date}</p>` : ''}`;
-  } catch(e) {}
+    const r=await fetch('/api/cycles/stats/global'); const d=await r.json();
+    if(!d.success) return;
+    const s=d.stats;
+    div.innerHTML=`<div class="grid grid-cols-3 gap-3">
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-blue-400">${s.totalCycles}</div><div class="text-xs text-gray-500 mt-1">Ciclos</div></div>
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-green-400">${s.avgSuccessRate}%</div><div class="text-xs text-gray-500 mt-1">Accuracy Promedio</div></div>
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-purple-400">${s.totalPredictions}</div><div class="text-xs text-gray-500 mt-1">Predicciones</div></div>
+    </div>`;
+  } catch(e){}
 }
+function downloadReport(id) { window.location.href='/api/cycles/'+id+'/report'; }
 
-function downloadReport(id) { window.location.href = '/api/cycles/' + id + '/report'; }
-
-setInterval(async () => {
+// Auto-completar ciclos pendientes
+setInterval(async ()=>{
   try {
-    const r = await fetch('/api/cycles/pending');
-    const d = await r.json();
-    if (d.success && d.cycles.length > 0) {
-      for (const c of d.cycles) {
-        await fetch(`/api/cycles/${c.id}/complete`, { method:'POST' });
-        clearInterval(cycleTimers[c.id]);
-      }
-      if (document.getElementById('content-validation').style.display !== 'none') await loadValidation();
+    const r=await fetch('/api/cycles/pending'); const d=await r.json();
+    if(d.success&&d.cycles.length>0){
+      for(const c of d.cycles){await fetch(`/api/cycles/${c.id}/complete`,{method:'POST'});clearInterval(cycleTimers[c.id]);}
+      if(document.getElementById('content-validation').style.display!=='none') await loadValidation();
     }
-  } catch(_) {}
+  } catch(_){}
 }, 30000);
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
+// ANÁLISIS DE SIMULACIONES
+// ═══════════════════════════════════════════════════════════
+async function loadAnalysis() {
+  const div = document.getElementById('analysis-content');
+  div.innerHTML = '<p class="text-gray-400 text-sm">⏳ Analizando simulaciones...</p>';
+  try {
+    const r = await fetch('/api/simulations/analysis'); const d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    renderAnalysis(d);
+  } catch(e) { div.innerHTML = `<p class="text-red-400 text-sm">❌ ${e.message}</p>`; }
+}
+
+function renderAnalysis(d) {
+  const div = document.getElementById('analysis-content');
+  if (!d.hasSignificant) {
+    div.innerHTML = `
+      <div class="bg-gray-900 border border-gray-700 rounded-xl p-5">
+        <p class="text-yellow-400 font-semibold mb-2">⚠️ Sin simulaciones significativas</p>
+        <p class="text-gray-400 text-sm">${d.message}</p>
+        ${d.testingCount > 0 ? `<p class="text-gray-500 text-sm mt-2">${d.testingCount} simulación(es) de testing (&lt;6h) no pueden calibrar el algoritmo.</p>` : ''}
+      </div>`;
+    return;
+  }
+
+  const accColor = parseFloat(d.overallAccuracy) > 60 ? 'text-green-400' : parseFloat(d.overallAccuracy) > 40 ? 'text-yellow-400' : 'text-red-400';
+  let html = `
+    <div class="grid grid-cols-3 gap-3 mb-5">
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold ${accColor}">${d.overallAccuracy}%</div><div class="text-xs text-gray-500 mt-1">Accuracy Global</div></div>
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-blue-400">${d.significantCount}</div><div class="text-xs text-gray-500 mt-1">Significativas (≥6h)</div></div>
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-gray-400">${d.testingCount}</div><div class="text-xs text-gray-500 mt-1">Testing (&lt;6h)</div></div>
+    </div>
+    <div class="grid grid-cols-3 gap-3 mb-5">`;
+
+  ['INVERTIBLE','APALANCADO','RUIDOSO'].forEach(cat => {
+    const a = d.analysis?.[cat]; if (!a) return;
+    const col = cat==='INVERTIBLE'?'green':cat==='APALANCADO'?'yellow':'gray';
+    const ac = parseFloat(a.accuracy) > 60 ? 'text-green-400' : parseFloat(a.accuracy) > 40 ? 'text-yellow-400' : 'text-red-400';
+    html += `<div class="bg-gray-900 border border-${col}-900 rounded-xl p-4">
+      <p class="text-xs font-semibold text-${col}-400 mb-2">${cat}</p>
+      <div class="text-2xl font-bold ${ac} mono">${a.accuracy}%</div>
+      <p class="text-xs text-gray-500 mt-1">${a.correct}/${a.total} correctas</p>
+      <p class="text-xs text-gray-600">Error prom: ${a.avgError}% · máx: ${a.maxError}%</p>
+    </div>`;
+  });
+
+  html += `</div>
+    <div class="mb-5">
+      <p class="text-sm font-semibold mb-3">💡 Recomendaciones de ajuste</p>
+      <div class="space-y-2">`;
+
+  d.recommendations.forEach(rec => {
+    const col = rec.priority==='HIGH'?'red':rec.priority==='MEDIUM'?'yellow':'green';
+    html += `<div class="bg-gray-900 border border-${col}-900 rounded-xl p-4">
+      <div class="flex items-start gap-3">
+        <span class="pill bg-${col}-950 text-${col}-400 flex-shrink-0">${rec.priority}</span>
+        <div>
+          <p class="text-sm font-medium text-gray-200">${rec.category}: ${rec.issue}</p>
+          <p class="text-xs text-gray-400 mt-1">→ ${rec.suggestion}</p>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  html += `</div></div>
+    <div class="bg-gray-900 border border-blue-900 rounded-xl p-5">
+      <div class="flex justify-between items-center mb-3">
+        <p class="text-sm font-semibold text-blue-400">⚙️ Configuración sugerida</p>
+        <button onclick="applySuggestion()" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold">Aplicar ajuste</button>
+      </div>
+      <pre class="text-xs mono bg-gray-950 p-3 rounded-lg overflow-auto max-h-48 text-gray-400">${JSON.stringify({classification:d.suggestedConfig?.classification,prediction:d.suggestedConfig?.prediction},null,2)}</pre>
+      <p class="text-xs text-gray-600 mt-2">${d.note}</p>
+    </div>`;
+
+  div.innerHTML = html;
+}
+
+async function applySuggestion() {
+  if (!confirm('¿Aplicar la configuración sugerida por el análisis de simulaciones?')) return;
+  try {
+    const r = await fetch('/api/simulations/apply-suggestion',{method:'POST'}); const d = await r.json();
+    if (d.success) { config=d.applied; applyConfigToUI(); alert('✅ Configuración aplicada.'); loadAnalysis(); }
+    else alert('❌ '+d.error);
+  } catch(e){ alert('❌ '+e.message); }
+}
+
+// ═══════════════════════════════════════════════════════════
 // ESTADO APIs
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 async function loadAPIStatus() {
-  const btn = document.getElementById('btn-refresh');
-  btn.disabled = true; btn.textContent = '⏳';
   ['apis-free','apis-freemium','apis-paid','apis-premium'].forEach(id => {
     document.getElementById(id).innerHTML = '<p class="text-gray-600 text-sm">Verificando...</p>';
   });
   try {
-    const r = await fetch('/api/status/complete');
-    const d = await r.json();
-    if (!d.success) throw new Error(d.error);
-
-    const s = d.summary;
-    document.getElementById('api-summary').innerHTML = `
-      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-blue-400">${s.total}</div><div class="text-xs text-gray-500 mt-1">Total</div></div>
-      <div class="bg-green-950 border border-green-900 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-green-400">${s.available}</div><div class="text-xs text-gray-500 mt-1">Operacionales</div></div>
-      <div class="bg-yellow-950 border border-yellow-900 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-yellow-400">${s.configured}</div><div class="text-xs text-gray-500 mt-1">Configuradas</div></div>
-      <div class="bg-red-950 border border-red-900 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-red-400">${s.errors}</div><div class="text-xs text-gray-500 mt-1">Con errores</div></div>`;
-
-    const groups = { free:[], freemium:[], paid:[], premium:[] };
-    Object.entries(d.apis).forEach(([k, api]) => { if (groups[api.tier]) groups[api.tier].push({ key:k, ...api }); });
-    ['free','freemium','paid','premium'].forEach(tier => {
-      document.getElementById('apis-' + tier).innerHTML = groups[tier].length
-        ? groups[tier].map(api => buildAPICard(api)).join('')
+    const r=await fetch('/api/status/complete'); const d=await r.json();
+    if(!d.success) throw new Error(d.error);
+    const s=d.summary;
+    document.getElementById('api-summary').innerHTML=`
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-blue-400">${s.total}</div><div class="text-xs text-gray-500">Total</div></div>
+      <div class="bg-green-950 border border-green-900 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-green-400">${s.available}</div><div class="text-xs text-gray-500">Operacionales</div></div>
+      <div class="bg-yellow-950 border border-yellow-900 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-yellow-400">${s.configured}</div><div class="text-xs text-gray-500">Configuradas</div></div>
+      <div class="bg-red-950 border border-red-900 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-red-400">${s.errors}</div><div class="text-xs text-gray-500">Con errores</div></div>`;
+    const groups={free:[],freemium:[],paid:[],premium:[]};
+    Object.entries(d.apis).forEach(([k,api])=>{ if(groups[api.tier]) groups[api.tier].push({key:k,...api}); });
+    ['free','freemium','paid','premium'].forEach(tier=>{
+      document.getElementById('apis-'+tier).innerHTML = groups[tier].length
+        ? groups[tier].map(api=>buildAPICard(api)).join('')
         : '<p class="text-gray-700 text-sm">—</p>';
     });
-  } catch(e) {
-    document.getElementById('api-summary').innerHTML = `<div class="col-span-4 text-red-400 text-sm">❌ ${e.message}</div>`;
-  } finally { btn.disabled = false; btn.textContent = '🔄 Actualizar'; }
+  } catch(e){ document.getElementById('api-summary').innerHTML=`<div class="col-span-4 text-red-400 text-sm">❌ ${e.message}</div>`; }
 }
 
 function buildAPICard(api) {
-  const icons   = { operational:'✅', error:'❌', not_configured:'⚪', limited:'⚠️', unknown:'❓' };
-  const borders = { operational:'border-green-800', error:'border-red-800', not_configured:'border-gray-700', limited:'border-yellow-800', unknown:'border-gray-700' };
-  const info    = API_INFO[api.key] || {};
-  const canConf = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN','SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY','WHALE_ALERT_API_KEY'];
-  const envName = { cryptocompare:'CRYPTOCOMPARE_API_KEY', newsapi:'NEWSAPI_KEY', github:'GITHUB_TOKEN', telegram:'TELEGRAM_BOT_TOKEN', serpapi:'SERPAPI_KEY', twitter:'TWITTER_BEARER_TOKEN', glassnode:'GLASSNODE_API_KEY', cryptoquant:'CRYPTOQUANT_API_KEY', whaleAlert:'WHALE_ALERT_API_KEY' }[api.key];
-
-  return `
-    <div class="bg-gray-900 rounded-xl border-l-4 ${borders[api.status]||'border-gray-700'} border border-gray-800 p-4">
-      <div class="flex justify-between items-start">
-        <div class="flex gap-3 items-start flex-1">
-          <span class="text-xl mt-0.5">${icons[api.status]||'❓'}</span>
-          <div class="flex-1">
-            <div class="flex flex-wrap items-center gap-2 mb-1">
-              <span class="font-semibold">${api.name}</span>
-              ${api.cost ? `<span class="text-xs text-orange-400 font-mono">${api.cost}</span>` : ''}
-              ${api.configured ? '<span class="text-xs text-green-500">✓ configurada</span>' : ''}
-            </div>
-            <p class="text-xs text-gray-400 mb-1">${api.message}</p>
-            ${api.currentValue ? `<p class="text-xs text-blue-300 mb-1">${api.currentValue}</p>` : ''}
-            <!-- Datos que extrae -->
-            ${info.extract ? `<div class="mt-2 pt-2 border-t border-gray-800 space-y-1">
-              <p class="text-xs text-gray-600"><span class="text-gray-500">📤 Extrae:</span> ${info.extract}</p>
-              <p class="text-xs text-gray-600"><span class="text-gray-500">📐 Construye:</span> ${info.indicators}</p>
-              <p class="text-xs text-gray-600"><span class="text-gray-500">⚖️ Peso:</span> ${info.weight}</p>
-            </div>` : ''}
+  const icons={operational:'✅',error:'❌',not_configured:'⚪',limited:'⚠️',unknown:'❓'};
+  const borders={operational:'border-green-800',error:'border-red-800',not_configured:'border-gray-700',limited:'border-yellow-800'};
+  const info=API_INFO[api.key]||{};
+  const envMap={cryptocompare:'CRYPTOCOMPARE_API_KEY',newsapi:'NEWSAPI_KEY',github:'GITHUB_TOKEN',telegram:'TELEGRAM_BOT_TOKEN',
+    serpapi:'SERPAPI_KEY',twitter:'TWITTER_BEARER_TOKEN',glassnode:'GLASSNODE_API_KEY',cryptoquant:'CRYPTOQUANT_API_KEY',
+    whaleAlert:'WHALE_ALERT_API_KEY',lunarcrush:'LUNARCRUSH_API_KEY',santiment:'SANTIMENT_API_KEY',
+    coindesk:'',cointelegraph:''};
+  const envName=envMap[api.key];
+  return `<div class="bg-gray-900 rounded-xl border-l-4 ${borders[api.status]||'border-gray-700'} border border-gray-800 p-4">
+    <div class="flex justify-between items-start">
+      <div class="flex gap-3 items-start flex-1">
+        <span class="text-xl mt-0.5">${icons[api.status]||'❓'}</span>
+        <div class="flex-1">
+          <div class="flex flex-wrap items-center gap-2 mb-1">
+            <span class="font-semibold">${api.name}</span>
+            ${api.cost?`<span class="text-xs text-orange-400 mono">${api.cost}</span>`:''}
+            ${api.configured?'<span class="text-xs text-green-500">✓ configurada</span>':''}
           </div>
-        </div>
-        <div class="ml-3 flex flex-col gap-1 flex-shrink-0">
-          ${envName ? `<button onclick="openAPIKeyModal('${envName}')" class="bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded">⚙️ ${api.configured ? 'Cambiar' : 'Configurar'}</button>` : ''}
-          ${api.responseTime > 0 ? `<span class="text-xs text-gray-600 mono text-right">${api.responseTime}ms</span>` : ''}
+          <p class="text-xs text-gray-400 mb-1">${api.message}</p>
+          ${api.currentValue?`<p class="text-xs text-blue-300 mb-1">${api.currentValue}</p>`:''}
+          ${info.extract?`<div class="mt-2 pt-2 border-t border-gray-800 space-y-0.5">
+            <p class="text-xs text-gray-600"><span class="text-gray-500">📤 Extrae:</span> ${info.extract}</p>
+            <p class="text-xs text-gray-600"><span class="text-gray-500">📐 Construye:</span> ${info.indicators}</p>
+            <p class="text-xs text-gray-600"><span class="text-gray-500">⚖️ Peso:</span> ${info.weight}</p>
+          </div>`:''}
         </div>
       </div>
-    </div>`;
+      ${envName?`<button onclick="openAPIKeyModal('${envName}')" class="ml-3 bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded flex-shrink-0">⚙️ ${api.configured?'Cambiar':'Config'}</button>`:''}
+    </div>
+  </div>`;
 }
 
-// API Key Modal
-let currentApiKeyName = null;
 function openAPIKeyModal(name) {
   currentApiKeyName = name;
   document.getElementById('apikey-name').textContent = name;
   document.getElementById('apikey-input').value = '';
   document.getElementById('apikey-msg').innerHTML = '';
-  openModal('modal-apikey');
+  showModal('modal-apikey');
 }
 async function saveAPIKey() {
-  const key = document.getElementById('apikey-input').value.trim();
-  const msg = document.getElementById('apikey-msg');
-  if (!key) { msg.innerHTML = '<span class="text-red-400">Introduce una key válida</span>'; return; }
+  const key=document.getElementById('apikey-input').value.trim();
+  const msg=document.getElementById('apikey-msg');
+  if(!key){msg.innerHTML='<span class="text-red-400">Introduce una key válida</span>';return;}
   try {
-    const r = await fetch('/api/config/api-key', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify({ apiName: currentApiKeyName, apiKey: key }) });
-    const d = await r.json();
-    if (d.success) {
-      msg.innerHTML = '<span class="text-green-400">✅ Guardada correctamente</span>';
-      setTimeout(() => { closeModal('modal-apikey'); loadAPIStatus(); }, 1500);
-    } else {
-      msg.innerHTML = `<span class="text-red-400">❌ ${d.error}</span>`;
-    }
-  } catch(e) { msg.innerHTML = `<span class="text-red-400">❌ ${e.message}</span>`; }
+    const r=await fetch('/api/config/api-key',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({apiName:currentApiKeyName,apiKey:key})});
+    const d=await r.json();
+    if(d.success){msg.innerHTML='<span class="text-green-400">✅ Guardada</span>';setTimeout(()=>{closeModal('modal-apikey');loadAPIStatus();},1500);}
+    else msg.innerHTML=`<span class="text-red-400">❌ ${d.error}</span>`;
+  } catch(e){msg.innerHTML=`<span class="text-red-400">❌ ${e.message}</span>`;}
 }
 
-// Debug
 async function runDebug() {
-  const panel = document.getElementById('debug-panel');
-  panel.classList.remove('hidden');
-  panel.innerHTML = '<p class="text-gray-400 text-sm">Ejecutando...</p>';
+  const panel=document.getElementById('debug-panel'); panel.classList.remove('hidden');
+  panel.innerHTML='<p class="text-gray-400">Ejecutando...</p>';
   try {
-    const [r1, r2] = await Promise.all([fetch('/api/debug/redis'), fetch('/api/debug/cycles')]);
-    const [d1, d2] = await Promise.all([r1.json(), r2.json()]);
-    panel.innerHTML = `
-      <p class="font-bold text-yellow-400 mb-2">🔧 Diagnóstico</p>
-      <div class="mono text-xs space-y-1 bg-gray-950 p-3 rounded">
-        <p class="${d1.success?'text-green-400':'text-red-400'}">Redis: ${d1.success?'✅ conectado':'❌ '+d1.error}</p>
-        <p>KV_URL: ${d1.env?.hasUrl?'✅':'❌ FALTA'} · KV_TOKEN: ${d1.env?.hasToken?'✅':'❌ FALTA'}</p>
-        <p>Ciclos activos: <span class="text-blue-300">${JSON.stringify(d2.activeIds||[])}</span></p>
-        ${d2.firstCycle ? `<p class="text-green-400">✅ Primer ciclo: ${d2.firstCycle.id} (${d2.firstCycle.status}, ${d2.firstCycle.assetsCount} activos)</p>` : '<p class="text-gray-500">Sin ciclos activos en Redis</p>'}
-        ${d2.error ? `<p class="text-red-400">Error: ${d2.error}</p>` : ''}
-      </div>`;
-  } catch(e) { panel.innerHTML = `<p class="text-red-400 text-sm">❌ ${e.message}</p>`; }
+    const [r1,r2]=await Promise.all([fetch('/api/debug/redis'),fetch('/api/debug/cycles')]);
+    const [d1,d2]=await Promise.all([r1.json(),r2.json()]);
+    panel.innerHTML=`<p class="font-bold text-yellow-400 mb-2">🔧 Diagnóstico Redis</p>
+      <p class="${d1.success?'text-green-400':'text-red-400'}">Redis: ${d1.success?'✅ conectado':'❌ '+d1.error}</p>
+      <p>KV_URL: ${d1.env?.hasUrl?'✅':'❌'} · KV_TOKEN: ${d1.env?.hasToken?'✅':'❌'}</p>
+      <p>Ciclos activos: ${JSON.stringify(d2.activeIds||[])}</p>
+      ${d2.firstCycle?`<p class="text-green-400">✅ ${d2.firstCycle.id} · ${d2.firstCycle.status} · ${d2.firstCycle.assetsCount} activos</p>`:'<p class="text-gray-500">Sin ciclos en Redis</p>'}`;
+  } catch(e){panel.innerHTML=`<p class="text-red-400">❌ ${e.message}</p>`;}
 }
 
-// ═══════════════════════════════════════════════════════════════════════════
-// TABS Y MODALES
-// ═══════════════════════════════════════════════════════════════════════════
-function setTab(tab) {
-  document.querySelectorAll('.tab-content').forEach(el => el.style.display = 'none');
-  document.querySelectorAll('.tab-btn').forEach(el => el.classList.remove('tab-active','text-white'));
-  document.getElementById('content-' + tab).style.display = 'block';
-  document.getElementById('tab-' + tab).classList.add('tab-active','text-white');
-  if (tab === 'validation') loadValidation();
-  if (tab === 'status') loadAPIStatus();
-}
-function showModal(id) { document.getElementById(id).classList.remove('hidden'); }
+// ═══════════════════════════════════════════════════════════
+// MODALES
+// ═══════════════════════════════════════════════════════════
+function showModal(id)  { document.getElementById(id).classList.remove('hidden'); }
 function closeModal(id) { document.getElementById(id).classList.add('hidden'); }
-function openModal(id) {
-  if (id === 'modal-cycle') {
-    document.getElementById('dur-assets').textContent = Math.min(cryptos.length, 20);
-  }
-  showModal(id);
-}
 
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 // UTILS
-// ═══════════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════
 function fmt(n) {
-  if (n === null || n === undefined) return '—';
-  if (n >= 1000) return n.toLocaleString('en-US', { minimumFractionDigits:2, maximumFractionDigits:2 });
-  if (n >= 1)    return n.toFixed(4);
-  if (n >= 0.01) return n.toFixed(6);
+  if (n == null) return '—';
+  if (n >= 1000)  return n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
+  if (n >= 1)     return n.toFixed(4);
+  if (n >= 0.01)  return n.toFixed(6);
   return n.toFixed(8);
 }
 function fmtLarge(n) {
   if (!n) return '—';
-  if (n >= 1e12) return (n/1e12).toFixed(2) + 'T';
-  if (n >= 1e9)  return (n/1e9).toFixed(2) + 'B';
-  if (n >= 1e6)  return (n/1e6).toFixed(1) + 'M';
-  if (n >= 1e3)  return (n/1e3).toFixed(0) + 'K';
+  if (n >= 1e12) return (n/1e12).toFixed(2)+'T';
+  if (n >= 1e9)  return (n/1e9).toFixed(2)+'B';
+  if (n >= 1e6)  return (n/1e6).toFixed(1)+'M';
+  if (n >= 1e3)  return (n/1e3).toFixed(0)+'K';
   return n.toFixed(0);
 }
 function fmtDur(ms) {
-  const h = Math.floor(ms/3600000), m = Math.floor((ms%3600000)/60000);
-  if (h===0) return m + 'min';
-  if (m===0) return h + 'h';
-  return h + 'h ' + m + 'min';
+  if (!ms) return '—';
+  const h=Math.floor(ms/3600000), m=Math.floor((ms%3600000)/60000);
+  if (h===0) return m+'min'; if (m===0) return h+'h'; return h+'h '+m+'min';
 }
 function fmtCountdown(ms) {
-  if (ms <= 0) return '00:00:00';
-  const h = Math.floor(ms/3600000), m = Math.floor((ms%3600000)/60000), s = Math.floor((ms%60000)/1000);
-  return String(h).padStart(2,'0') + ':' + String(m).padStart(2,'0') + ':' + String(s).padStart(2,'0');
+  if (ms<=0) return '00:00:00';
+  const h=Math.floor(ms/3600000), m=Math.floor((ms%3600000)/60000), s=Math.floor((ms%60000)/1000);
+  return String(h).padStart(2,'0')+':'+String(m).padStart(2,'0')+':'+String(s).padStart(2,'0');
 }
 function timeAgo(iso) {
-  const d = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
-  if (d < 60) return d + 'min';
-  if (d < 1440) return Math.floor(d/60) + 'h';
-  return Math.floor(d/1440) + 'd';
+  const d=Math.floor((Date.now()-new Date(iso).getTime())/60000);
+  if (d<60) return d+'min'; if (d<1440) return Math.floor(d/60)+'h'; return Math.floor(d/1440)+'d';
 }
 
 window.onload = () => init();

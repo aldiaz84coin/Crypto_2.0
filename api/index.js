@@ -98,6 +98,134 @@ async function getFearGreedIndex() {
   return { success: false };
 }
 
+// ── CoinDesk RSS ─────────────────────────────────────────────────────────────
+async function getCoinDeskNews(symbol, name) {
+  try {
+    // CoinDesk tiene RSS público — usar XML parseado como texto
+    const r = await axios.get('https://www.coindesk.com/arc/outboundfeeds/rss/', {
+      timeout: 5000, headers: { 'User-Agent': 'CryptoDetector/2.0', 'Accept': 'application/rss+xml' }
+    });
+    const xml = r.data || '';
+    // Parseo simple de RSS sin xml2js
+    const items = [];
+    const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+    const sym = symbol.toUpperCase();
+    const nameLower = name.toLowerCase();
+    itemMatches.slice(0, 30).forEach(item => {
+      const title = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
+                     item.match(/<title>(.*?)<\/title>/))?.[1] || '';
+      const link  = (item.match(/<link>(.*?)<\/link>/))?.[1] || '';
+      const pubDate = (item.match(/<pubDate>(.*?)<\/pubDate>/))?.[1] || '';
+      const titleL = title.toLowerCase();
+      if (titleL.includes(sym.toLowerCase()) || titleL.includes(nameLower) ||
+          titleL.includes('crypto') || titleL.includes('bitcoin') || titleL.includes('ethereum')) {
+        items.push({ title, url: link, publishedAt: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
+          source: 'CoinDesk', sentiment: analyzeSentiment(title) });
+      }
+    });
+    if (items.length > 0) {
+      // Filtrar los específicos del activo
+      const specific = items.filter(i => {
+        const t = i.title.toLowerCase();
+        return t.includes(sym.toLowerCase()) || t.includes(nameLower);
+      });
+      const use = specific.length > 0 ? specific : items.slice(0, 5);
+      const avg = use.reduce((s, i) => s + i.sentiment.score, 0) / use.length;
+      return { success: true, count: use.length, articles: use, avgSentiment: avg, source: 'coindesk' };
+    }
+  } catch(_) {}
+  return { success: false, count: 0, articles: [], avgSentiment: 0 };
+}
+
+// ── CoinTelegraph RSS ─────────────────────────────────────────────────────────
+async function getCoinTelegraphNews(symbol, name) {
+  try {
+    const r = await axios.get('https://cointelegraph.com/rss', {
+      timeout: 5000, headers: { 'User-Agent': 'CryptoDetector/2.0', 'Accept': 'application/rss+xml' }
+    });
+    const xml = r.data || '';
+    const itemMatches = xml.match(/<item>([\s\S]*?)<\/item>/g) || [];
+    const sym = symbol.toUpperCase();
+    const nameLower = name.toLowerCase();
+    const items = [];
+    itemMatches.slice(0, 30).forEach(item => {
+      const title = (item.match(/<title><!\[CDATA\[(.*?)\]\]><\/title>/) ||
+                     item.match(/<title>(.*?)<\/title>/))?.[1] || '';
+      const link  = (item.match(/<link>(.*?)<\/link>/))?.[1] ||
+                    (item.match(/<guid[^>]*>(.*?)<\/guid>/))?.[1] || '';
+      const pubDate = (item.match(/<pubDate>(.*?)<\/pubDate>/))?.[1] || '';
+      const titleL = title.toLowerCase();
+      if (titleL.includes(sym.toLowerCase()) || titleL.includes(nameLower)) {
+        items.push({ title, url: link, publishedAt: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString(),
+          source: 'CoinTelegraph', sentiment: analyzeSentiment(title) });
+      }
+    });
+    if (items.length > 0) {
+      const avg = items.reduce((s, i) => s + i.sentiment.score, 0) / items.length;
+      return { success: true, count: items.length, articles: items.slice(0, 5), avgSentiment: avg, source: 'cointelegraph' };
+    }
+  } catch(_) {}
+  return { success: false, count: 0, articles: [], avgSentiment: 0 };
+}
+
+// ── LunarCrush (social data) ─────────────────────────────────────────────────
+// API pública v2 — no requiere key para datos básicos de coins
+async function getLunarCrushData(symbol) {
+  try {
+    const key = await getRedisKey('LUNARCRUSH_API_KEY');
+    const url = key
+      ? `https://lunarcrush.com/api4/public/coins/${symbol.toLowerCase()}/v1`
+      : `https://lunarcrush.com/api4/public/coins/list/v2?limit=1&sort=social_score&filter=${symbol.toUpperCase()}`;
+    const headers = key ? { Authorization: `Bearer ${key}` } : {};
+    const r = await axios.get(url, { timeout: 5000, headers: { ...headers, 'User-Agent': 'CryptoDetector/2.0' } });
+    const data = r.data?.data;
+    if (!data) return { success: false };
+    const coin = Array.isArray(data) ? data[0] : data;
+    if (!coin) return { success: false };
+    return {
+      success: true,
+      socialScore:      coin.social_score         ?? coin.social_dominance ?? null,
+      socialVolume:     coin.social_volume         ?? null,
+      socialSentiment:  coin.sentiment             ?? coin.social_score_calc_24h ?? null,
+      galaxyScore:      coin.galaxy_score          ?? null,
+      altRank:          coin.alt_rank              ?? null,
+      tweetVolume:      coin.tweet_mentions        ?? coin.twitter_volume  ?? null,
+      redditPosts:      coin.reddit_posts          ?? null,
+      newsVolume:       coin.news_articles         ?? null,
+      source: 'lunarcrush'
+    };
+  } catch(_) {}
+  return { success: false };
+}
+
+// ── Santiment (social + dev activity) ────────────────────────────────────────
+async function getSantimentData(symbol) {
+  try {
+    const key = await getRedisKey('SANTIMENT_API_KEY');
+    if (!key) return { success: false, reason: 'no_key' };
+    const slug = symbol.toLowerCase();
+    const query = `{
+      socialVolume: socialVolume(slug: "${slug}", from: "utc_now-1d", to: "utc_now", interval: "1d", socialVolumeType: TOTAL_MENTIONS) { value }
+      socialDominance: socialDominance(slug: "${slug}", from: "utc_now-1d", to: "utc_now", interval: "1d", source: ALL) { value }
+      devActivity: devActivity(slug: "${slug}", from: "utc_now-7d", to: "utc_now", interval: "7d") { value }
+    }`;
+    const r = await axios.post('https://api.santiment.net/graphql',
+      { query },
+      { timeout: 6000, headers: { 'Content-Type': 'application/json', Authorization: `Apikey ${key}` } }
+    );
+    const d = r.data?.data;
+    if (!d) return { success: false };
+    return {
+      success: true,
+      socialVolume:    d.socialVolume?.[0]?.value     ?? null,
+      socialDominance: d.socialDominance?.[0]?.value  ?? null,
+      devActivity:     d.devActivity?.[0]?.value       ?? null,
+      source: 'santiment'
+    };
+  } catch(_) {}
+  return { success: false };
+}
+
 // ── Noticias genéricas de mercado ─────────────────────────────────────────────
 async function getMarketNews(limit = 10) {
   try {
@@ -169,31 +297,119 @@ async function getAssetNews(symbol, name) {
   return { success: false, count: 0, articles: [], avgSentiment: 0 };
 }
 
-// ── Reddit por activo ─────────────────────────────────────────────────────────
-async function getAssetReddit(symbol, name) {
+// ── Reddit por activo — multi-subreddit ───────────────────────────────────────
+// Subreddits relevantes según capitalización del activo
+function getSubredditsForAsset(symbol, marketCap) {
+  const sym = symbol.toUpperCase();
+  // Subreddits propios del activo (los más conocidos)
+  const ownSubs = {
+    BTC: 'bitcoin', ETH: 'ethereum', SOL: 'solana', BNB: 'binance',
+    ADA: 'cardano', DOT: 'polkadot', AVAX: 'Avax', MATIC: 'maticnetwork',
+    LINK: 'Chainlink', XRP: 'Ripple', DOGE: 'dogecoin', SHIB: 'SHIBArmy',
+    LTC: 'litecoin', UNI: 'Uniswap', ATOM: 'cosmosnetwork'
+  };
+  // Siempre buscar en los subreddits generales de crypto
+  const general = ['CryptoCurrency', 'CryptoMarkets', 'altcoin'];
+  // Para pequeñas caps: moonshots y altcoins específicos
+  const speculative = (marketCap || 0) < 500e6
+    ? ['CryptoMoonShots', 'SatoshiStreetBets', 'altcoins']
+    : [];
+  const own = ownSubs[sym] ? [ownSubs[sym]] : [];
+  return [...new Set([...own, ...general, ...speculative])];
+}
+
+async function getAssetReddit(symbol, name, marketCap) {
   try {
-    // Buscar en r/cryptocurrency y r/CryptoMarkets menciones del activo
-    const query = encodeURIComponent(`${name} OR ${symbol.toUpperCase()}`);
-    const r = await axios.get(
-      `https://www.reddit.com/r/CryptoCurrency/search.json?q=${query}&sort=new&limit=10&t=day&restrict_sr=1`,
-      { timeout: 5000, headers: { 'User-Agent': 'CryptoDetector/2.0' } }
-    );
-    if (r.data?.data?.children?.length > 0) {
-      const posts = r.data.data.children.map(p => ({
-        title:     p.data.title,
-        score:     p.data.score,
-        comments:  p.data.num_comments,
-        url:       `https://reddit.com${p.data.permalink}`,
-        created:   new Date(p.data.created_utc * 1000).toISOString(),
-        sentiment: analyzeSentiment(p.data.title + ' ' + (p.data.selftext || ''))
-      }));
-      const postCount    = posts.length;
-      const totalScore   = posts.reduce((s, p) => s + p.score, 0);
-      const avgSentiment = posts.reduce((s, p) => s + p.sentiment.score, 0) / postCount;
-      return { success: true, postCount, totalScore, avgSentiment, posts };
+    const sym  = symbol.toUpperCase();
+    const subs = getSubredditsForAsset(sym, marketCap);
+
+    // Estrategia: buscar en múltiples subreddits en paralelo
+    // Usar búsqueda global (sin restrict_sr) con términos precisos
+    const queries = [
+      sym,                    // ticker exacto: "ETH"
+      `${sym} crypto`,        // "ETH crypto"
+      name.split(' ')[0]      // primera palabra del nombre: "Ethereum"
+    ];
+
+    const allPosts = [];
+
+    // Búsqueda 1: subreddit propio (si existe) — más relevante
+    if (subs[0] !== 'CryptoCurrency') {
+      try {
+        const ownSub = subs[0];
+        const r = await axios.get(
+          `https://www.reddit.com/r/${ownSub}/hot.json?limit=5`,
+          { timeout: 4000, headers: { 'User-Agent': 'CryptoDetector/2.0 (research bot)' } }
+        );
+        const posts = r.data?.data?.children || [];
+        posts.forEach(p => {
+          if (p.data.ups > 5) allPosts.push({ ...p.data, subreddit: ownSub, relevance: 'own' });
+        });
+      } catch(_) {}
     }
-  } catch(_) {}
-  return { success: false, postCount: 0, totalScore: 0, avgSentiment: 0, posts: [] };
+
+    // Búsqueda 2: búsqueda global por ticker en subreddits generales (sin restrict_sr)
+    try {
+      const q = encodeURIComponent(sym);
+      const r = await axios.get(
+        `https://www.reddit.com/search.json?q=${q}&sort=new&limit=15&t=day&type=link`,
+        { timeout: 5000, headers: { 'User-Agent': 'CryptoDetector/2.0 (research bot)' } }
+      );
+      const posts = r.data?.data?.children || [];
+      // Filtrar solo subreddits de crypto
+      const cryptoSubs = new Set(['CryptoCurrency','CryptoMarkets','altcoin','CryptoMoonShots',
+        'SatoshiStreetBets','altcoins','Bitcoin','ethereum','binance','cardano','solana',
+        'investing','stocks','wallstreetbets','Superstonk']);
+      posts.forEach(p => {
+        if (cryptoSubs.has(p.data.subreddit)) {
+          allPosts.push({ ...p.data, subreddit: p.data.subreddit, relevance: 'search' });
+        }
+      });
+    } catch(_) {}
+
+    // Búsqueda 3: CryptoMoonShots para small-caps
+    if ((marketCap || 0) < 500e6) {
+      try {
+        const q = encodeURIComponent(sym);
+        const r = await axios.get(
+          `https://www.reddit.com/r/CryptoMoonShots+SatoshiStreetBets/search.json?q=${q}&sort=new&limit=10&t=week&restrict_sr=1`,
+          { timeout: 4000, headers: { 'User-Agent': 'CryptoDetector/2.0 (research bot)' } }
+        );
+        const posts = r.data?.data?.children || [];
+        posts.forEach(p => allPosts.push({ ...p.data, subreddit: p.data.subreddit, relevance: 'moonshots' }));
+      } catch(_) {}
+    }
+
+    // Deduplicar por id y ordenar por score
+    const seen = new Set();
+    const unique = allPosts
+      .filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; })
+      .sort((a, b) => (b.ups || 0) - (a.ups || 0))
+      .slice(0, 10);
+
+    if (unique.length === 0) {
+      return { success: false, postCount: 0, totalScore: 0, avgSentiment: 0, posts: [] };
+    }
+
+    const posts = unique.map(p => ({
+      title:     p.title,
+      score:     p.ups || 0,
+      comments:  p.num_comments || 0,
+      subreddit: p.subreddit,
+      relevance: p.relevance,
+      url:       `https://reddit.com${p.permalink}`,
+      created:   new Date(p.created_utc * 1000).toISOString(),
+      sentiment: analyzeSentiment(p.title + ' ' + (p.selftext || ''))
+    }));
+
+    const postCount    = posts.length;
+    const totalScore   = posts.reduce((s, p) => s + p.score, 0);
+    const avgSentiment = posts.reduce((s, p) => s + p.sentiment.score, 0) / postCount;
+    return { success: true, postCount, totalScore, avgSentiment, posts, subredditsSearched: subs };
+
+  } catch(e) {
+    return { success: false, postCount: 0, totalScore: 0, avgSentiment: 0, posts: [], error: e.message };
+  }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -262,7 +478,8 @@ app.post('/api/config/api-key', async (req, res) => {
   try {
     const { apiName, apiKey } = req.body;
     const allowed = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN',
-                     'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY','WHALE_ALERT_API_KEY'];
+                     'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY',
+                     'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY'];
     if (!allowed.includes(apiName)) return res.status(400).json({ success: false, error: 'API name no permitida' });
     await redisSet(`apikey:${apiName}`, apiKey?.trim() || '');
     res.json({ success: true, message: `Key guardada para ${apiName}` });
@@ -272,7 +489,8 @@ app.post('/api/config/api-key', async (req, res) => {
 app.get('/api/config/api-keys', async (_req, res) => {
   try {
     const names = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN',
-                   'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY','WHALE_ALERT_API_KEY'];
+                   'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY',
+                   'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY'];
     const keys = {};
     for (const n of names) {
       const v = await redisGet(`apikey:${n}`);
@@ -283,16 +501,26 @@ app.get('/api/config/api-keys', async (_req, res) => {
 });
 
 // ── Datos de mercado (lista completa) ─────────────────────────────────────────
+// mode: 'normal' | 'speculative'
+// En modo especulativo: excluir large-caps y mid-high caps
+// Pide más activos y filtra por market cap
+const SPECULATIVE_CAP_MAX = 200_000_000;  // $200M máximo
+const SPECULATIVE_VOL_MAX = 50_000_000;   // $50M volumen máximo
+
 app.get('/api/crypto', async (_req, res) => {
   try {
     const config = await getConfig();
+    const mode   = req.query.mode || 'normal'; // ?mode=speculative
+
+    // Especulativo: pedir 100 activos y filtrar; normal: top 20 por market cap
+    const perPage = mode === 'speculative' ? 250 : 20;
 
     const [marketRes, fgRes, newsRes] = await Promise.allSettled([
       axios.get(
         'https://api.coingecko.com/api/v3/coins/markets' +
-        '?vs_currency=usd&order=market_cap_desc&per_page=20&page=1' +
+        `?vs_currency=usd&order=market_cap_desc&per_page=${perPage}&page=1` +
         '&sparkline=false&price_change_percentage=24h,7d',
-        { timeout: 8000 }
+        { timeout: 10000 }
       ),
       getFearGreedIndex(),
       getMarketNews(10)
@@ -312,7 +540,16 @@ app.get('/api/crypto', async (_req, res) => {
       assetReddit: null
     };
 
-    const cryptosWithBoost = marketRes.value.data.map(crypto => {
+    // Filtrar activos según el modo
+    let rawCryptos = marketRes.value.data;
+    if (mode === 'speculative') {
+      rawCryptos = rawCryptos.filter(c =>
+        (c.market_cap  || 0) <= SPECULATIVE_CAP_MAX &&
+        (c.total_volume || 0) <= SPECULATIVE_VOL_MAX
+      ).slice(0, 20); // Top 20 small-caps por market cap
+    }
+
+    const cryptosWithBoost = rawCryptos.map(crypto => {
       const result = boostPowerCalc.calculateBoostPower(crypto, config, externalData);
       return {
         id:                              crypto.id,
@@ -392,19 +629,43 @@ app.get('/api/crypto/:id/detail', async (req, res) => {
       crypto.max_supply         = detail.market_data.max_supply;
     }
 
-    // Noticias y Reddit en paralelo
-    const [newsRes, redditRes] = await Promise.allSettled([
+    // Todas las fuentes en paralelo
+    const [newsRes, redditRes, coinDeskRes, coinTelRes, lunarRes, santRes] = await Promise.allSettled([
       getAssetNews(crypto.symbol, crypto.name),
-      getAssetReddit(crypto.symbol, crypto.name)
+      getAssetReddit(crypto.symbol, crypto.name, crypto.market_cap),
+      getCoinDeskNews(crypto.symbol, crypto.name),
+      getCoinTelegraphNews(crypto.symbol, crypto.name),
+      getLunarCrushData(crypto.symbol),
+      getSantimentData(crypto.symbol)
     ]);
 
-    const assetNews   = newsRes.status   === 'fulfilled' ? newsRes.value   : { success: false, count: 0, articles: [], avgSentiment: 0 };
-    const assetReddit = redditRes.status === 'fulfilled' ? redditRes.value : { success: false, postCount: 0, posts: [] };
+    const assetNews    = newsRes.status      === 'fulfilled' ? newsRes.value      : { success: false, count: 0, articles: [], avgSentiment: 0 };
+    const assetReddit  = redditRes.status    === 'fulfilled' ? redditRes.value    : { success: false, postCount: 0, posts: [] };
+    const coinDesk     = coinDeskRes.status  === 'fulfilled' ? coinDeskRes.value  : { success: false };
+    const coinTel      = coinTelRes.status   === 'fulfilled' ? coinTelRes.value   : { success: false };
+    const lunarCrush   = lunarRes.status     === 'fulfilled' ? lunarRes.value     : { success: false };
+    const santiment    = santRes.status      === 'fulfilled' ? santRes.value      : { success: false };
+
+    // Merge de artículos de todas las fuentes de noticias
+    const allArticles = [
+      ...(assetNews.articles    || []),
+      ...(coinDesk.articles     || []),
+      ...(coinTel.articles      || [])
+    ].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    const mergedNews = allArticles.length > 0 ? {
+      success: true,
+      count: allArticles.length,
+      articles: allArticles.slice(0, 10),
+      avgSentiment: allArticles.reduce((s, a) => s + (a.sentiment?.score || 0), 0) / allArticles.length,
+      sources: [assetNews.success && 'NewsAPI/CC', coinDesk.success && 'CoinDesk', coinTel.success && 'CoinTelegraph'].filter(Boolean)
+    } : assetNews;
 
     const externalData = {
-      fearGreed:   fg.success        ? fg          : null,
-      assetNews:   assetNews.success ? assetNews   : null,
-      assetReddit: assetReddit.success ? assetReddit : null,
+      fearGreed:   fg.success            ? fg          : null,
+      assetNews:   mergedNews.success    ? mergedNews  : (assetNews.success ? assetNews : null),
+      assetReddit: assetReddit.success   ? assetReddit : null,
+      lunarCrush:  lunarCrush.success    ? lunarCrush  : null,
+      santiment:   santiment.success     ? santiment   : null,
       marketNews:  null
     };
 
@@ -439,8 +700,10 @@ app.get('/api/crypto/:id/detail', async (req, res) => {
         breakdown:          result.breakdown,
         summary,
         // Datos cualitativos del activo
-        news:   assetNews.success   ? { count: assetNews.count,     avgSentiment: assetNews.avgSentiment,     articles: assetNews.articles }   : null,
-        reddit: assetReddit.success ? { postCount: assetReddit.postCount, avgSentiment: assetReddit.avgSentiment, posts: assetReddit.posts } : null,
+        news:       mergedNews.success  ? { count: mergedNews.count, avgSentiment: mergedNews.avgSentiment, articles: mergedNews.articles, sources: mergedNews.sources } : null,
+        reddit:     assetReddit.success ? { postCount: assetReddit.postCount, avgSentiment: assetReddit.avgSentiment, posts: assetReddit.posts, subredditsSearched: assetReddit.subredditsSearched } : null,
+        lunarCrush: lunarCrush.success  ? lunarCrush : null,
+        santiment:  santiment.success   ? santiment  : null,
         fearGreed: fg.success ? { value: fg.value, classification: fg.classification } : null
       }
     });
@@ -455,6 +718,124 @@ app.get('/api/status/complete', async (_req, res) => {
   try {
     const status = await apiHealthCheck.checkAllAPIs(redis);
     res.json({ success: true, ...status });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// ANÁLISIS DE SIMULACIONES — Recomendación de ajuste del algoritmo
+// ════════════════════════════════════════════════════════════════════════════
+
+const SIGNIFICANT_DURATION_MS = 6 * 3600000; // 6 horas = significativo
+
+// Analizar un conjunto de ciclos y emitir recomendaciones de ajuste
+function analyzeSimulations(cycles, config) {
+  const significant = cycles.filter(c => (c.durationMs || 0) >= SIGNIFICANT_DURATION_MS && c.status === 'completed');
+  const testing     = cycles.filter(c => (c.durationMs || 0) < SIGNIFICANT_DURATION_MS  && c.status === 'completed');
+
+  if (significant.length === 0) {
+    return { hasSignificant: false, significantCount: 0, testingCount: testing.length,
+      message: 'No hay simulaciones significativas (>6h) para analizar. Las simulaciones cortas (<6h) no se usan para calibrar el algoritmo.' };
+  }
+
+  // Métricas agregadas por categoría en simulaciones significativas
+  const catStats = { INVERTIBLE: { total:0, correct:0, errors:[] }, APALANCADO: { total:0, correct:0, errors:[] }, RUIDOSO: { total:0, correct:0, errors:[] } };
+  const factorDeviations = {}; // acumular desviaciones por categoría
+
+  significant.forEach(cycle => {
+    (cycle.results || []).forEach(r => {
+      const cat = r.classification || 'RUIDOSO';
+      if (catStats[cat]) {
+        catStats[cat].total++;
+        if (r.correct) catStats[cat].correct++;
+        catStats[cat].errors.push(parseFloat(r.error || 0));
+      }
+    });
+  });
+
+  // Calcular accuracy y error promedio por categoría
+  const analysis = {};
+  const recommendations = [];
+  const weightAdjustments = {};
+
+  Object.entries(catStats).forEach(([cat, s]) => {
+    if (s.total === 0) return;
+    const acc = (s.correct / s.total * 100);
+    const avgErr = s.errors.reduce((a,b) => a+b, 0) / s.errors.length;
+    const maxErr = Math.max(...s.errors);
+    analysis[cat] = { total: s.total, correct: s.correct, accuracy: acc.toFixed(1), avgError: avgErr.toFixed(2), maxError: maxErr.toFixed(2) };
+
+    if (cat === 'INVERTIBLE') {
+      if (acc < 40) {
+        recommendations.push({ priority:'HIGH', category:cat, issue:`Accuracy ${acc.toFixed(1)}% muy bajo — el algoritmo identifica mal los INVERTIBLES`, suggestion:'Aumentar umbral invertibleMinBoost a ' + Math.min(0.80, (config.classification?.invertibleMinBoost || 0.65) + 0.10).toFixed(2) + ' y reducir invertibleMaxMarketCap' });
+        weightAdjustments.classification = { invertibleMinBoost: Math.min(0.80, (config.classification?.invertibleMinBoost || 0.65) + 0.05) };
+      } else if (acc > 80) {
+        recommendations.push({ priority:'LOW', category:cat, issue:`Accuracy ${acc.toFixed(1)}% excelente`, suggestion:'Parámetros bien calibrados para INVERTIBLE. Considera bajar levemente el umbral para capturar más oportunidades.' });
+      } else {
+        recommendations.push({ priority:'MEDIUM', category:cat, issue:`Accuracy ${acc.toFixed(1)}% aceptable pero mejorable`, suggestion:'Ajusta magnitudeTolerance a ' + Math.min(15, (config.prediction?.magnitudeTolerance || 5) + 2) + '% para reducir falsos negativos' });
+      }
+      if (avgErr > 15) {
+        recommendations.push({ priority:'HIGH', category:cat, issue:`Error de magnitud ${avgErr.toFixed(1)}% alto en INVERTIBLES`, suggestion:'El target de ' + (config.prediction?.invertibleTarget || 30) + '% es demasiado ambicioso — reducir a ' + Math.max(10, (config.prediction?.invertibleTarget || 30) - 10) + '%' });
+        weightAdjustments.prediction = { invertibleTarget: Math.max(10, (config.prediction?.invertibleTarget || 30) - 10) };
+      }
+    }
+
+    if (cat === 'APALANCADO') {
+      if (acc < 35) {
+        recommendations.push({ priority:'MEDIUM', category:cat, issue:`Accuracy ${acc.toFixed(1)}% bajo en APALANCADOS`, suggestion:'Aumentar el peso de leverageRatio en resistencia — el sistema subestima la presión vendedora' });
+        weightAdjustments.resistanceWeights = { ...(weightAdjustments.resistanceWeights||{}), leverageRatio: Math.min(0.55, (config.resistanceWeights?.leverageRatio || 0.40) + 0.05) };
+      }
+    }
+
+    if (cat === 'RUIDOSO') {
+      if (acc < 50) {
+        recommendations.push({ priority:'LOW', category:cat, issue:`RUIDOSO acierta solo ${acc.toFixed(1)}% — muchos activos ruidosos sí se mueven`, suggestion:'Revisar si el umbral apalancadoMinBoost es demasiado alto (activos que deberían ser APALANCADO se clasifican como RUIDOSO)' });
+      }
+    }
+  });
+
+  // Calcular config ajustada sugerida
+  const suggestedConfig = JSON.parse(JSON.stringify(config));
+  if (weightAdjustments.classification) Object.assign(suggestedConfig.classification, weightAdjustments.classification);
+  if (weightAdjustments.prediction)     Object.assign(suggestedConfig.prediction,     weightAdjustments.prediction);
+  if (weightAdjustments.resistanceWeights) Object.assign(suggestedConfig.resistanceWeights, weightAdjustments.resistanceWeights);
+
+  const overallAcc = significant.reduce((s, c) => s + parseFloat(c.metrics?.successRate || 0), 0) / significant.length;
+
+  return {
+    hasSignificant:   true,
+    significantCount: significant.length,
+    testingCount:     testing.length,
+    overallAccuracy:  overallAcc.toFixed(1),
+    analysis,
+    recommendations,
+    suggestedConfig,
+    note: `Basado en ${significant.length} simulaciones significativas (≥6h) con ${significant.reduce((s,c) => s+(c.results?.length||0),0)} predicciones totales.`
+  };
+}
+
+app.get('/api/simulations/analysis', async (_req, res) => {
+  if (!redis) return res.json({ success: false, error: 'Redis no disponible' });
+  try {
+    const config  = await getConfig();
+    const ids     = await cyclesManager.getCompletedCycles(redis);
+    const cycles  = await cyclesManager.getCyclesDetails(redis, ids);
+    const result  = analyzeSimulations(cycles, config);
+    res.json({ success: true, ...result });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Aplicar configuración sugerida por el análisis
+app.post('/api/simulations/apply-suggestion', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const ids    = await cyclesManager.getCompletedCycles(redis);
+    const cycles = await cyclesManager.getCyclesDetails(redis, ids);
+    const config = await getConfig();
+    const result = analyzeSimulations(cycles, config);
+    if (!result.hasSignificant) return res.status(400).json({ success: false, error: result.message });
+    const newConfig = { ...result.suggestedConfig, lastModified: new Date().toISOString(), version: '2.0-autocal' };
+    await redisSet('algorithm-config', newConfig);
+    res.json({ success: true, applied: newConfig, changes: result.recommendations });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
