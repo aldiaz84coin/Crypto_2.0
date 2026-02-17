@@ -73,8 +73,9 @@ async function createCycle(redis, snapshot, config, durationMs) {
   // La predicción base del algoritmo asume 12h (43200000ms)
   // Pro-rata: si el ciclo es de 6h, la predicción se ajusta x0.5
   const BASE_DURATION_MS = 43200000; // 12h
-  const scaleFactor = Math.min(2.0, Math.max(0.1, (dur || BASE_DURATION_MS) / BASE_DURATION_MS));
-  const isSignificant = (dur || 0) >= 6 * 3600000; // ≥6h = significativo
+  const dur = (typeof durationMs === 'number' && durationMs >= 60000) ? durationMs : 43200000;
+  const scaleFactor = Math.min(2.0, Math.max(0.1, dur / BASE_DURATION_MS));
+  const isSignificant = dur >= 6 * 3600000; // ≥6h = significativo
 
   const cleanSnapshot = snapshot.map(a => {
     const basePred = typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0);
@@ -101,7 +102,6 @@ async function createCycle(redis, snapshot, config, durationMs) {
 
   const cycleId   = `cycle_${Date.now()}`;
   const startTime = Date.now();
-  const dur       = (typeof durationMs === 'number' && durationMs >= 60000) ? durationMs : 43200000;
 
   const cycle = {
     id:              cycleId,
