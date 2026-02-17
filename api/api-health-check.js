@@ -24,7 +24,7 @@ async function getKey(envName, redis) {
 }
 
 async function checkAllAPIs(redis) {
-  const [r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13] = await Promise.allSettled([
+  const [r1,r2,r3,r4,r5,r6,r7,r8,r9,r10,r11,r12,r13,r14,r15,r16,r17] = await Promise.allSettled([
     withTimeout(checkCoinGecko()),
     withTimeout(checkAlternative()),
     withTimeout(checkReddit()),
@@ -37,26 +37,34 @@ async function checkAllAPIs(redis) {
     withTimeout(checkTwitter(redis)),
     withTimeout(checkGlassnode(redis)),
     withTimeout(checkCryptoQuant(redis)),
-    withTimeout(checkWhaleAlert(redis))
+    withTimeout(checkWhaleAlert(redis)),
+    withTimeout(checkCoinDesk()),
+    withTimeout(checkCoinTelegraph()),
+    withTimeout(checkLunarCrush(redis)),
+    withTimeout(checkSantiment(redis))
   ]);
 
   const apis = {
-    coingecko:    resolveCheck(r1,  'CoinGecko',               'free',     ['Volume 24h','Market Cap','Volatilidad','ATL']),
-    alternative:  resolveCheck(r2,  'Alternative.me',          'free',     ['Fear & Greed Index']),
-    reddit:       resolveCheck(r3,  'Reddit',                  'free',     ['Reddit Sentiment']),
-    blockchain:   resolveCheck(r4,  'Blockchain.info',         'free',     ['Transacciones BTC']),
-    cryptocompare:resolveCheck(r5,  'CryptoCompare',           'freemium', ['News Volume','News Sentiment']),
-    newsapi:      resolveCheck(r6,  'NewsAPI',                 'freemium', ['Media Coverage','Breaking News']),
-    github:       resolveCheck(r7,  'GitHub',                  'freemium', ['Developer Activity']),
-    telegram:     resolveCheck(r8,  'Telegram Bot',            'free',     ['Telegram Activity']),
-    serpapi:      resolveCheck(r9,  'SerpAPI (Google Trends)', 'paid',     ['Google Trends']),
-    twitter:      resolveCheck(r10, 'Twitter API v2',          'paid',     ['Twitter Sentiment']),
-    glassnode:    resolveCheck(r11, 'Glassnode',               'premium',  ['Unique Addresses','Network Growth']),
-    cryptoquant:  resolveCheck(r12, 'CryptoQuant',             'premium',  ['Exchange Net Flow']),
-    whaleAlert:   resolveCheck(r13, 'Whale Alert',             'premium',  ['Whale Activity'])
+    coingecko:     resolveCheck(r1,  'CoinGecko',               'free',     ['Volume 24h','Market Cap','ATL/ATH']),
+    alternative:   resolveCheck(r2,  'Alternative.me',          'free',     ['Fear & Greed Index']),
+    reddit:        resolveCheck(r3,  'Reddit',                  'free',     ['Social Momentum','Reddit Sentiment']),
+    blockchain:    resolveCheck(r4,  'Blockchain.info',         'free',     ['Transacciones BTC on-chain']),
+    cryptocompare: resolveCheck(r5,  'CryptoCompare',           'freemium', ['News Sentiment (mercado)']),
+    newsapi:       resolveCheck(r6,  'NewsAPI',                 'freemium', ['News Sentiment (por activo)']),
+    github:        resolveCheck(r7,  'GitHub',                  'freemium', ['Developer Activity']),
+    telegram:      resolveCheck(r8,  'Telegram Bot',            'free',     ['Telegram Activity']),
+    serpapi:       resolveCheck(r9,  'SerpAPI (Google Trends)', 'paid',     ['Google Trends Score']),
+    twitter:       resolveCheck(r10, 'Twitter API v2',          'paid',     ['Twitter Sentiment']),
+    glassnode:     resolveCheck(r11, 'Glassnode',               'premium',  ['Unique Addresses','Network Growth']),
+    cryptoquant:   resolveCheck(r12, 'CryptoQuant',             'premium',  ['Exchange Net Flow']),
+    whaleAlert:    resolveCheck(r13, 'Whale Alert',             'premium',  ['Whale Activity']),
+    coindesk:      resolveCheck(r14, 'CoinDesk RSS',            'free',     ['News Sentiment (CoinDesk)']),
+    cointelegraph: resolveCheck(r15, 'CoinTelegraph RSS',       'free',     ['News Sentiment (CoinTelegraph)']),
+    lunarcrush:    resolveCheck(r16, 'LunarCrush',              'freemium', ['Galaxy Score','Alt Rank','Social Volume']),
+    santiment:     resolveCheck(r17, 'Santiment',               'paid',     ['Social Dominance','Dev Activity'])
   };
 
-  const summary = { total: 13, available: 0, configured: 0, errors: 0 };
+  const summary = { total: 17, available: 0, configured: 0, errors: 0 };
   Object.values(apis).forEach(a => {
     if (a.available) summary.available++;
     if (a.configured) summary.configured++;
@@ -239,6 +247,64 @@ async function checkWhaleAlert(redis) {
     return { name:'Whale Alert', tier:'premium', factors:['Whale Activity'], cost:'$49/mes', configured:true, available:true, status:'operational', message:`OK (${ms}ms)`, responseTime:ms, lastCheck:new Date().toISOString() };
   } catch(e) {
     return { name:'Whale Alert', tier:'premium', factors:['Whale Activity'], cost:'$49/mes', configured:true, available:false, status:'error', message:e.response?.status===401?'API key inválida':e.message, responseTime:Date.now()-t, lastCheck:new Date().toISOString() };
+  }
+}
+
+
+async function checkCoinDesk() {
+  const t = Date.now();
+  try {
+    const r = await axios.get('https://www.coindesk.com/arc/outboundfeeds/rss/', { timeout: TIMEOUT_MS, headers: { 'User-Agent': 'CryptoDetector/2.0' } });
+    const ms = Date.now()-t;
+    const hasItems = (r.data||'').includes('<item>');
+    if (hasItems) return { name:'CoinDesk RSS', tier:'free', factors:['News Sentiment'], cost:'Gratis', configured:true, available:true, status:'operational', message:`RSS OK — feed disponible (${ms}ms)`, currentValue:'Feed activo', responseTime:ms, lastCheck:new Date().toISOString() };
+    throw new Error('Feed vacío');
+  } catch(e) {
+    return { name:'CoinDesk RSS', tier:'free', factors:['News Sentiment'], cost:'Gratis', configured:true, available:false, status:'error', message:e.message, responseTime:Date.now()-t, lastCheck:new Date().toISOString() };
+  }
+}
+
+async function checkCoinTelegraph() {
+  const t = Date.now();
+  try {
+    const r = await axios.get('https://cointelegraph.com/rss', { timeout: TIMEOUT_MS, headers: { 'User-Agent': 'CryptoDetector/2.0' } });
+    const ms = Date.now()-t;
+    const hasItems = (r.data||'').includes('<item>');
+    if (hasItems) return { name:'CoinTelegraph RSS', tier:'free', factors:['News Sentiment'], cost:'Gratis', configured:true, available:true, status:'operational', message:`RSS OK — feed disponible (${ms}ms)`, currentValue:'Feed activo', responseTime:ms, lastCheck:new Date().toISOString() };
+    throw new Error('Feed vacío');
+  } catch(e) {
+    return { name:'CoinTelegraph RSS', tier:'free', factors:['News Sentiment'], cost:'Gratis', configured:true, available:false, status:'error', message:e.message, responseTime:Date.now()-t, lastCheck:new Date().toISOString() };
+  }
+}
+
+async function checkLunarCrush(redis) {
+  const key = await getKey('LUNARCRUSH_API_KEY', redis);
+  if (!key) return { name:'LunarCrush', tier:'freemium', factors:['Galaxy Score','Alt Rank','Social Volume'], cost:'Gratis (limitado) / $29/mes', configured:false, available:false, status:'not_configured', message:'Sin API key — registra en lunarcrush.com (plan gratuito disponible)', responseTime:0, configInstructions:'https://lunarcrush.com/developers', lastCheck:new Date().toISOString() };
+  const t = Date.now();
+  try {
+    const r = await axios.get('https://lunarcrush.com/api4/public/coins/list/v2?limit=1', { timeout: TIMEOUT_MS, headers: { Authorization: `Bearer ${key}`, 'User-Agent': 'CryptoDetector/2.0' } });
+    const ms = Date.now()-t;
+    const coin = r.data?.data?.[0];
+    return { name:'LunarCrush', tier:'freemium', factors:['Galaxy Score','Alt Rank','Social Volume'], cost:'Gratis / $29/mes', configured:true, available:true, status:'operational', message:`OK (${ms}ms)`, currentValue: coin ? `BTC Galaxy Score: ${coin.galaxy_score ?? '?'}` : 'OK', responseTime:ms, lastCheck:new Date().toISOString() };
+  } catch(e) {
+    const msg = e.response?.status===401?'API key inválida':e.response?.status===429?'Rate limit':e.message;
+    return { name:'LunarCrush', tier:'freemium', factors:['Galaxy Score','Alt Rank','Social Volume'], cost:'Gratis / $29/mes', configured:true, available:false, status:'error', message:msg, responseTime:Date.now()-t, lastCheck:new Date().toISOString() };
+  }
+}
+
+async function checkSantiment(redis) {
+  const key = await getKey('SANTIMENT_API_KEY', redis);
+  if (!key) return { name:'Santiment', tier:'paid', factors:['Social Dominance','Dev Activity'], cost:'$49-999/mes', configured:false, available:false, status:'not_configured', message:'API key no configurada — desde $49/mes en santiment.net', responseTime:0, configInstructions:'https://santiment.net/', lastCheck:new Date().toISOString() };
+  const t = Date.now();
+  try {
+    const query = '{ currentUser { id } }';
+    const r = await axios.post('https://api.santiment.net/graphql', { query }, { timeout: TIMEOUT_MS, headers: { 'Content-Type': 'application/json', Authorization: `Apikey ${key}` } });
+    const ms = Date.now()-t;
+    if (r.data?.errors) throw new Error(r.data.errors[0]?.message || 'GraphQL error');
+    return { name:'Santiment', tier:'paid', factors:['Social Dominance','Dev Activity'], cost:'$49-999/mes', configured:true, available:true, status:'operational', message:`OK — autenticado (${ms}ms)`, responseTime:ms, lastCheck:new Date().toISOString() };
+  } catch(e) {
+    const msg = e.response?.status===401?'API key inválida':e.message;
+    return { name:'Santiment', tier:'paid', factors:['Social Dominance','Dev Activity'], cost:'$49-999/mes', configured:true, available:false, status:'error', message:msg, responseTime:Date.now()-t, lastCheck:new Date().toISOString() };
   }
 }
 

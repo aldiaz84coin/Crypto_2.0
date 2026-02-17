@@ -507,7 +507,7 @@ app.get('/api/config/api-keys', async (_req, res) => {
 const SPECULATIVE_CAP_MAX = 200_000_000;  // $200M máximo
 const SPECULATIVE_VOL_MAX = 50_000_000;   // $50M volumen máximo
 
-app.get('/api/crypto', async (_req, res) => {
+app.get('/api/crypto', async (req, res) => {
   try {
     const config = await getConfig();
     const mode   = req.query.mode || 'normal'; // ?mode=speculative
