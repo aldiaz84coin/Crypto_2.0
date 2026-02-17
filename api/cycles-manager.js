@@ -145,12 +145,16 @@ async function detectPendingCycles(redis) {
   return pending;
 }
 
-async function completeCycle(redis, cycleId, currentPrices) {
+async function completeCycle(redis, cycleId, currentPrices, config) {
   if (!redis) throw new Error('Redis no disponible');
 
   const cycle = await loadCycle(redis, cycleId);
   if (!cycle) throw new Error(`Ciclo ${cycleId} no encontrado`);
   if (cycle.status === 'completed') return cycle; // idempotente
+
+  // Validación honesta: usa validatePrediction del nuevo algoritmo
+  const boostPowerCalc = require('./boost-power-calculator');
+  const cfg = config || {};
 
   const results = [];
   let correct = 0;
@@ -160,25 +164,28 @@ async function completeCycle(redis, cycleId, currentPrices) {
     if (!current) continue;
 
     const actualChange    = ((current.current_price - asset.current_price) / asset.current_price) * 100;
-    const predictedChange = asset.predictedChange || 0;
-    const sameDir         = (predictedChange >= 0 && actualChange >= 0) || (predictedChange < 0 && actualChange < 0);
-    const closeEnough     = Math.abs(predictedChange - actualChange) < 15;
-    const isCorrect       = sameDir && closeEnough;
+    const predictedChange = typeof asset.predictedChange === 'number'
+      ? asset.predictedChange
+      : parseFloat(asset.predictedChange || 0);
+    const category = asset.classification || 'RUIDOSO';
 
-    if (isCorrect) correct++;
+    // Validación rigurosa: dirección + tolerancia configurada (no ±15% fijo)
+    const validation = boostPowerCalc.validatePrediction(predictedChange, actualChange, category, cfg);
+    if (validation.correct) correct++;
 
     results.push({
-      id:             asset.id,
-      symbol:         asset.symbol,
-      name:           asset.name,
-      snapshotPrice:  asset.current_price,
-      currentPrice:   current.current_price,
-      predictedChange: predictedChange.toFixed(2),
-      actualChange:   actualChange.toFixed(2),
-      classification: asset.classification,
-      boostPower:     asset.boostPower,
-      correct:        isCorrect,
-      error:          Math.abs(predictedChange - actualChange).toFixed(2)
+      id:               asset.id,
+      symbol:           asset.symbol,
+      name:             asset.name,
+      snapshotPrice:    asset.current_price,
+      currentPrice:     current.current_price,
+      predictedChange:  predictedChange.toFixed(2),
+      actualChange:     actualChange.toFixed(2),
+      classification:   category,
+      boostPower:       asset.boostPower,
+      correct:          validation.correct,
+      validationReason: validation.reason,
+      error:            Math.abs(predictedChange - actualChange).toFixed(2)
     });
   }
 

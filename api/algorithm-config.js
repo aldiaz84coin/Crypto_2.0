@@ -1,171 +1,138 @@
-// algorithm-config.js - Configuración Expandida (Iteración 2)
-
-/**
- * CONFIGURACIÓN POR DEFECTO - ITERACIÓN 2
- * 
- * Expandida con:
- * - 2 meta-pesos (cuantitativo/cualitativo)
- * - 8 pesos de factores individuales
- * - 6 umbrales básicos
- */
+// algorithm-config.js — v2.0
+// Configuración completa con umbrales configurables
 
 const DEFAULT_CONFIG = {
-  version: '3.1-iter2',
-  
-  // Meta-pesos (deben sumar 1.0)
+  version: '3.2-v2',
+
+  // ── Meta-pesos ─────────────────────────────────────────────────────────────
   metaWeights: {
-    quantitative: 0.60,  // 60% a factores cuantitativos
-    qualitative: 0.40    // 40% a factores cualitativos
+    potential:   0.60,   // peso del bloque "Potencial"
+    resistance:  0.40    // peso del bloque "Resistencia"
   },
-  
-  // Pesos de factores individuales
-  factorWeights: {
-    // Cuantitativos (deben sumar ~1.0 dentro de su categoría)
-    volume: 0.10,           // Volumen 24h
-    marketCap: 0.08,        // Market Cap ratio vs BTC
-    volatility: 0.07,       // Volatilidad 7 días
-    historicalLow: 0.05,    // Distancia desde ATL
-    googleTrends: 0.10,     // Tendencias de búsqueda
-    
-    // Cualitativos (deben sumar ~1.0 dentro de su categoría)
-    fearGreedIndex: 0.02,   // Índice Fear & Greed
-    newsVolume: 0.12,       // Volumen de noticias
-    newsCount: 0.08         // Cantidad de noticias
+
+  // ── Pesos de factores de POTENCIAL ─────────────────────────────────────────
+  potentialWeights: {
+    atlProximity:    0.30,  // Espacio para subir desde ATL
+    volumeSurge:     0.20,  // Volumen actual vs media 7d
+    socialMomentum:  0.20,  // Reddit + noticias positivas
+    newsSentiment:   0.15,  // Sentimiento de noticias
+    reboundRecency:  0.15   // ATL reciente (últimos 6 meses)
   },
-  
-  // Umbrales básicos (6 umbrales críticos)
+
+  // ── Pesos de factores de RESISTENCIA ───────────────────────────────────────
+  resistanceWeights: {
+    leverageRatio:   0.40,  // Cap alta = mucha presión vendedora
+    marketCapSize:   0.30,  // Grande = difícil de mover
+    volatilityNoise: 0.20,  // Volatilidad extrema = ruido
+    fearOverlap:     0.10   // FGI alto = euforia = techo cercano
+  },
+
+  // ── Umbrales de clasificación ──────────────────────────────────────────────
+  classification: {
+    invertibleMinBoost:   0.65,   // BoostPower mínimo para INVERTIBLE
+    apalancadoMinBoost:   0.40,   // BoostPower mínimo para APALANCADO
+    // Condiciones DURAS para INVERTIBLE (todas deben cumplirse)
+    invertibleMaxMarketCap: 500000000,   // $500M máximo (configurable)
+    invertibleMinAtlProx:   0.60,        // 60% del rango hacia ATL
+    invertibleMinVolSurge:  1.20,        // volumen 20% sobre la media
+    invertibleMinSocial:    0.50         // score social mínimo
+  },
+
+  // ── Objetivo de predicción ─────────────────────────────────────────────────
+  prediction: {
+    invertibleTarget:   30,   // % objetivo de subida para INVERTIBLE (configurable)
+    apalancadoTarget:   10,   // % objetivo de subida para APALANCADO
+    ruidosoTarget:      0,    // RUIDOSO: sin predicción de dirección
+    // Ventana de validación: ¿cuándo se considera "acertado"?
+    // directionOnly: solo importa la dirección (sube/baja)
+    // magnitudeTolerance: tolerancia en puntos porcentuales
+    directionOnly:          false,
+    magnitudeTolerance:     5     // ±5 puntos porcentuales (no ±15%)
+  },
+
+  // ── Umbrales técnicos ──────────────────────────────────────────────────────
   thresholds: {
-    // Volumen
-    volumeMin: 100000000,      // $100M mínimo
-    volumeMax: 10000000000,    // $10B máximo
-    
-    // Volatilidad
-    volatilityMin: 0.05,       // 5% mínimo
-    volatilityMax: 0.50,       // 50% máximo
-    
-    // Noticias
-    newsCountMin: 3,           // Mínimo 3 noticias
-    newsCountMax: 100          // Máximo 100 noticias
+    volumeMin:        50000000,    // $50M mínimo de volumen
+    volumeMax:        5000000000,  // $5B máximo
+    volume7dAvgMin:   10000000,    // mínimo para calcular surge
+    marketCapSmall:   200000000,   // < $200M = micro-cap (máximo potencial)
+    marketCapMid:     2000000000,  // $200M-$2B = mid-cap
+    marketCapLarge:   10000000000, // > $2B = large-cap (máxima resistencia)
+    atlProxHigh:      0.25,        // < 25% del rango = muy cerca de ATL
+    atlProxMid:       0.50,        // 25-50% = zona de oportunidad
+    reboundDaysMax:   180,         // ATL en últimos 6 meses = rebote reciente
+    newsCountMin:     2,
+    newsCountMax:     50,
+    fgiExtremeFear:   25,          // < 25 = miedo extremo = oportunidad contrarian
+    fgiNeutral:       50,
+    fgiGreed:         70
   },
-  
-  // Umbral de clasificación
-  boostPowerThreshold: 0.40,
-  
-  // Metadata
+
   lastModified: null,
-  modifiedBy: 'system'
+  modifiedBy:   'system'
 };
 
-/**
- * Validar configuración expandida
- */
+// ── Validación ─────────────────────────────────────────────────────────────
+
 function validateConfig(config) {
   const errors = [];
-  
-  // Validar meta-pesos
-  if (!config.metaWeights) {
-    errors.push('Faltan metaWeights');
-    return { valid: false, errors };
-  }
-  
-  const { quantitative, qualitative } = config.metaWeights;
-  
-  if (typeof quantitative !== 'number' || quantitative < 0 || quantitative > 1) {
-    errors.push('metaWeights.quantitative debe estar entre 0 y 1');
-  }
-  
-  if (typeof qualitative !== 'number' || qualitative < 0 || qualitative > 1) {
-    errors.push('metaWeights.qualitative debe estar entre 0 y 1');
-  }
-  
-  const metaSum = quantitative + qualitative;
-  if (Math.abs(metaSum - 1.0) > 0.01) {
-    errors.push(`Meta-pesos deben sumar 1.0 (actual: ${metaSum.toFixed(2)})`);
-  }
-  
-  // Validar pesos de factores
-  if (!config.factorWeights) {
-    errors.push('Faltan factorWeights');
-    return { valid: false, errors };
-  }
-  
-  const requiredFactors = [
-    'volume', 'marketCap', 'volatility', 'historicalLow', 'googleTrends',
-    'fearGreedIndex', 'newsVolume', 'newsCount'
-  ];
-  
-  for (const factor of requiredFactors) {
-    const weight = config.factorWeights[factor];
-    if (typeof weight !== 'number' || weight < 0 || weight > 1) {
-      errors.push(`factorWeights.${factor} debe estar entre 0 y 1`);
-    }
-  }
-  
-  // Validar umbrales
-  if (!config.thresholds) {
-    errors.push('Faltan thresholds');
-    return { valid: false, errors };
-  }
-  
-  const { thresholds } = config;
-  
-  if (thresholds.volumeMin >= thresholds.volumeMax) {
-    errors.push('volumeMin debe ser menor que volumeMax');
-  }
-  
-  if (thresholds.volatilityMin >= thresholds.volatilityMax) {
-    errors.push('volatilityMin debe ser menor que volatilityMax');
-  }
-  
-  if (thresholds.newsCountMin >= thresholds.newsCountMax) {
-    errors.push('newsCountMin debe ser menor que newsCountMax');
-  }
-  
-  // Validar threshold de clasificación
-  if (typeof config.boostPowerThreshold !== 'number' || 
-      config.boostPowerThreshold < 0.30 || 
-      config.boostPowerThreshold > 0.50) {
-    errors.push('boostPowerThreshold debe estar entre 0.30 y 0.50');
-  }
-  
-  return {
-    valid: errors.length === 0,
-    errors: errors
-  };
+
+  const mw = config.metaWeights || {};
+  if (Math.abs((mw.potential||0) + (mw.resistance||0) - 1.0) > 0.01)
+    errors.push('metaWeights.potential + resistance deben sumar 1.0');
+
+  const pw = config.potentialWeights || {};
+  const pwSum = Object.values(pw).reduce((s,v) => s+v, 0);
+  if (Math.abs(pwSum - 1.0) > 0.05)
+    errors.push(`potentialWeights deben sumar ~1.0 (actual: ${pwSum.toFixed(2)})`);
+
+  const rw = config.resistanceWeights || {};
+  const rwSum = Object.values(rw).reduce((s,v) => s+v, 0);
+  if (Math.abs(rwSum - 1.0) > 0.05)
+    errors.push(`resistanceWeights deben sumar ~1.0 (actual: ${rwSum.toFixed(2)})`);
+
+  const cl = config.classification || {};
+  if (cl.invertibleMinBoost <= cl.apalancadoMinBoost)
+    errors.push('invertibleMinBoost debe ser mayor que apalancadoMinBoost');
+  if (cl.invertibleMaxMarketCap < 1000000)
+    errors.push('invertibleMaxMarketCap demasiado bajo (mínimo $1M)');
+
+  const pr = config.prediction || {};
+  if (pr.invertibleTarget < 0 || pr.invertibleTarget > 200)
+    errors.push('invertibleTarget debe estar entre 0 y 200');
+  if (pr.magnitudeTolerance < 1 || pr.magnitudeTolerance > 50)
+    errors.push('magnitudeTolerance debe estar entre 1 y 50');
+
+  return { valid: errors.length === 0, errors };
 }
 
-/**
- * Normalizar un valor a rango 0-1
- */
+// ── Normalización ──────────────────────────────────────────────────────────
+
 function normalize(value, min, max) {
+  if (max <= min) return 0.5;
   if (value <= min) return 0;
   if (value >= max) return 1;
   return (value - min) / (max - min);
 }
 
-/**
- * Obtener metadata de factores (para UI)
- */
+// ── Metadata para UI ───────────────────────────────────────────────────────
+
 function getFactorMetadata() {
   return {
-    quantitative: [
-      { id: 'volume', name: 'Volumen 24h', description: 'Liquidez del activo' },
-      { id: 'marketCap', name: 'Market Cap', description: 'Capitalización vs BTC' },
-      { id: 'volatility', name: 'Volatilidad', description: 'Movimiento de precio' },
-      { id: 'historicalLow', name: 'Desde ATL', description: 'Distancia del mínimo' },
-      { id: 'googleTrends', name: 'Google Trends', description: 'Interés de búsqueda' }
+    potential: [
+      { id: 'atlProximity',   name: 'Proximidad ATL',    description: 'Distancia al mínimo histórico — más cerca = más potencial' },
+      { id: 'volumeSurge',    name: 'Surge de Volumen',  description: 'Volumen actual vs media 7d — >1.3x indica dinero entrando' },
+      { id: 'socialMomentum', name: 'Momentum Social',   description: 'Actividad en Reddit y noticias recientes' },
+      { id: 'newsSentiment',  name: 'Sentimiento Noticias', description: 'Tono de noticias recientes sobre el activo' },
+      { id: 'reboundRecency', name: 'Recencia de ATL',   description: 'ATL reciente = rebote más probable' }
     ],
-    qualitative: [
-      { id: 'fearGreedIndex', name: 'Fear & Greed', description: 'Sentimiento de mercado' },
-      { id: 'newsVolume', name: 'Volumen Noticias', description: 'Cantidad + sentimiento' },
-      { id: 'newsCount', name: 'Cantidad Noticias', description: 'Número de artículos' }
+    resistance: [
+      { id: 'leverageRatio',   name: 'Ratio Apalancamiento', description: 'Cap alta vs histórico — holders en beneficio venderán' },
+      { id: 'marketCapSize',   name: 'Tamaño de Cap',        description: 'Cap grande = difícil de mover significativamente' },
+      { id: 'volatilityNoise', name: 'Ruido de Volatilidad', description: 'Volatilidad extrema indica ruido sin señal real' },
+      { id: 'fearOverlap',     name: 'Solapamiento FGI',     description: 'FGI alto = euforia = techo cercano' }
     ]
   };
 }
 
-module.exports = {
-  DEFAULT_CONFIG,
-  validateConfig,
-  normalize,
-  getFactorMetadata
-};
+module.exports = { DEFAULT_CONFIG, validateConfig, normalize, getFactorMetadata };
