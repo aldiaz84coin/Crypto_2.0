@@ -461,9 +461,9 @@ app.get('/api/debug/cycles', async (_req, res) => {
 });
 
 // ── Config ────────────────────────────────────────────────────────────────────
-app.get('/api/config', async (_req, res) => {
+app.get('/api/config', async (req, res) => {
   try {
-    const mode = _req.query?.mode || 'normal';
+    const mode = req.query?.mode || 'normal';
     res.json({ success: true, config: await getConfig(mode), mode });
   }
   catch(e) { res.status(500).json({ success: false, error: e.message }); }
@@ -475,16 +475,17 @@ app.post('/api/config', async (req, res) => {
     if (!config) return res.status(400).json({ success: false, error: 'Se requiere "config"' });
     const v = algorithmConfig.validateConfig(config);
     if (!v.valid) return res.status(400).json({ success: false, errors: v.errors });
+    const mode = req.query?.mode || config.modelType || 'normal';
     config.lastModified = new Date().toISOString();
-    config.version = '2.0.0';
-    await redisSet('algorithm-config', config);
-    res.json({ success: true, config });
+    config.modelType    = mode;
+    await redisSet(getConfigKey(mode), config);
+    res.json({ success: true, config, mode });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-app.post('/api/config/reset', async (_req, res) => {
+app.post('/api/config/reset', async (req, res) => {
   try {
-    const mode = _req.query?.mode || 'normal';
+    const mode = req.query?.mode || 'normal';
     const config = { ...getDefaultConfig(mode), lastModified: new Date().toISOString() };
     await redisSet(getConfigKey(mode), config);
     res.json({ success: true, config, mode, message: `Config ${mode} reseteada a defaults` });
@@ -840,7 +841,7 @@ function analyzeSimulations(cycles, config, mode = 'normal') {
 app.get('/api/simulations/analysis', async (req, res) => {
   if (!redis) return res.json({ success: false, error: 'Redis no disponible' });
   try {
-    const mode   = _req.query?.mode || 'normal';
+    const mode   = req.query?.mode || 'normal';
     const config = await getConfig(mode);
     const ids    = await cyclesManager.getCompletedCycles(redis);
     const allCycles = await cyclesManager.getCyclesDetails(redis, ids);
