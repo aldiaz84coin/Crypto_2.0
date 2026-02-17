@@ -2368,7 +2368,17 @@ function renderDetectionCard(d) {
       ${newsHTML ? `<div class="bg-yellow-950/30 border border-yellow-900 rounded-lg p-3 mb-3"><p class="text-xs font-semibold text-yellow-400 mb-2">Noticias con lenguaje sospechoso</p>${newsHTML}</div>` : ''}
 
       <!-- Mensajes clonados -->
-      ${clonesHTML ? `<div class="bg-orange-950/30 border border-orange-900 rounded-lg p-3"><p class="text-xs font-semibold text-orange-400 mb-2">Mensajes clonados detectados</p><div class="space-y-1">${clonesHTML}</div></div>` : ''}
+      ${clonesHTML ? `<div class="bg-orange-950/30 border border-orange-900 rounded-lg p-3 mb-3"><p class="text-xs font-semibold text-orange-400 mb-2">Mensajes clonados detectados</p><div class="space-y-1">${clonesHTML}</div></div>` : ''}
+
+      <!-- Botones de acción -->
+      <div class="flex gap-2 mt-4">
+        <button onclick="viewPumpAssetDetail('${d.assetId}')" class="flex-1 bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
+          🔍 Ver análisis completo
+        </button>
+        <button onclick="addPumpAssetToCycle('${d.assetId}', '${d.symbol}')" class="flex-1 bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
+          ➕ Añadir a ciclo
+        </button>
+      </div>
     </div>`;
 }
 
@@ -2489,6 +2499,191 @@ async function testPumpEmail() {
 }
 
 window.onload = () => { init(); };
+
+// ═══════════════════════════════════════════════════════════════
+// FUNCIONES PARA ACTIVOS DETECTADOS EN PUMP
+// ═══════════════════════════════════════════════════════════════
+
+let currentPumpAssetDetail = null;
+
+async function viewPumpAssetDetail(assetId) {
+  try {
+    document.getElementById('pump-asset-detail-loading').classList.remove('hidden');
+    document.getElementById('pump-asset-detail-content').classList.add('hidden');
+    showModal('modal-pump-asset-detail');
+
+    const r = await fetch(`/api/pump/asset/${assetId}?mode=speculative`);
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error);
+
+    currentPumpAssetDetail = d.asset;
+    renderPumpAssetDetail(d.asset);
+    document.getElementById('pump-asset-detail-loading').classList.add('hidden');
+    document.getElementById('pump-asset-detail-content').classList.remove('hidden');
+  } catch(e) {
+    alert('❌ Error al cargar análisis: ' + e.message);
+    closeModal('modal-pump-asset-detail');
+  }
+}
+
+function renderPumpAssetDetail(asset) {
+  const div = document.getElementById('pump-asset-detail-content');
+  const p = asset.pumpAnalysis || {};
+  const cl = asset.classification || {};
+  const pumpColor = { red:'red', orange:'orange', green:'green' }[p.riskColor] || 'gray';
+
+  // Breakdown del algoritmo principal
+  const breakdownBars = Object.entries(asset.breakdown || {}).map(([key, val]) => {
+    const pct = val.potential !== undefined ? Math.round(val.potential * 100) : 0;
+    const barColor = pct >= 70 ? 'bg-green-500' : pct >= 40 ? 'bg-yellow-500' : 'bg-gray-600';
+    return `<div class="mb-3">
+      <div class="flex justify-between text-xs mb-1">
+        <span class="text-gray-400">${val.label || key}</span>
+        <span class="mono font-medium text-gray-300">${pct}%</span>
+      </div>
+      <div class="w-full bg-gray-800 rounded-full h-2">
+        <div class="h-2 rounded-full ${barColor}" style="width:${pct}%"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  // Breakdown del pump detector
+  const pumpBreakdownBars = Object.entries(p.breakdown || {}).map(([key, val]) => {
+    const pct = val.max > 0 ? Math.round(val.score / val.max * 100) : 0;
+    const barColor = pct >= 80 ? 'bg-red-500' : pct >= 50 ? 'bg-orange-500' : 'bg-green-600';
+    return `<div class="mb-2">
+      <div class="flex justify-between text-xs mb-0.5">
+        <span class="text-gray-400">${val.label}</span>
+        <span class="mono font-medium">${val.score}/${val.max}</span>
+      </div>
+      <div class="w-full bg-gray-800 rounded-full h-1.5">
+        <div class="h-1.5 rounded-full ${barColor}" style="width:${pct}%"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  div.innerHTML = `
+    <div class="space-y-4">
+      <!-- Header -->
+      <div class="flex justify-between items-start">
+        <div>
+          <h3 class="text-2xl font-bold mb-1">${asset.name} <span class="text-gray-500 text-base">${asset.symbol?.toUpperCase()}</span></h3>
+          <p class="text-sm text-gray-400">$${asset.current_price?.toFixed(6) || '—'} · Cap: $${((asset.market_cap || 0)/1e6).toFixed(1)}M</p>
+        </div>
+        <div class="text-right">
+          <p class="text-sm text-gray-500">Boost Power</p>
+          <p class="text-3xl font-bold mono ${cl.color || 'text-gray-400'}">${asset.boostPowerPercent || 0}%</p>
+        </div>
+      </div>
+
+      <!-- Clasificación + Predicción -->
+      <div class="grid grid-cols-2 gap-3">
+        <div class="bg-gray-800 rounded-lg p-3">
+          <p class="text-xs text-gray-500 mb-1">Clasificación</p>
+          <p class="text-lg font-bold ${cl.color || 'text-gray-400'}">${cl.emoji || ''} ${cl.category || 'N/A'}</p>
+        </div>
+        <div class="bg-gray-800 rounded-lg p-3">
+          <p class="text-xs text-gray-500 mb-1">Predicción 12h</p>
+          <p class="text-lg font-bold ${(asset.predictedChange || 0) > 0 ? 'text-green-400' : 'text-red-400'}">
+            ${(asset.predictedChange || 0) > 0 ? '+' : ''}${(asset.predictedChange || 0).toFixed(1)}%
+          </p>
+        </div>
+      </div>
+
+      <!-- Análisis de Pump -->
+      <div class="bg-${pumpColor}-950/30 border border-${pumpColor}-800 rounded-xl p-4">
+        <div class="flex justify-between items-center mb-3">
+          <h4 class="font-semibold text-${pumpColor}-400">🚨 Análisis de Pump Coordinado</h4>
+          <div class="text-right">
+            <p class="text-2xl font-bold mono text-${pumpColor}-400">${p.totalScore || 0}/10</p>
+            <p class="text-xs text-gray-500">${p.riskEmoji || ''} ${p.riskLevel || 'Normal'}</p>
+          </div>
+        </div>
+        <div class="grid grid-cols-2 gap-2">
+          ${pumpBreakdownBars}
+        </div>
+      </div>
+
+      <!-- Breakdown algoritmo principal -->
+      <div class="bg-gray-800 rounded-xl p-4">
+        <h4 class="font-semibold text-blue-400 mb-3">📊 Factores del Algoritmo</h4>
+        ${breakdownBars}
+      </div>
+
+      <!-- Noticias -->
+      ${asset.news?.count > 0 ? `
+        <div class="bg-gray-800 rounded-xl p-4">
+          <h4 class="font-semibold text-gray-300 mb-2">📰 Noticias (${asset.news.count})</h4>
+          <p class="text-xs text-gray-500 mb-3">Específicas: ${asset.news.specificCount} · Genéricas: ${asset.news.genericCount} · Sentimiento: ${(asset.news.avgSentiment * 100).toFixed(0)}%</p>
+          <div class="space-y-2">
+            ${(asset.news.articles || []).slice(0, 5).map(a => `
+              <div class="bg-gray-900 rounded p-2">
+                <p class="text-xs text-white mb-0.5">${a.title}</p>
+                <p class="text-xs text-gray-600">${a.source || '—'} · ${new Date(a.publishedAt).toLocaleDateString('es-ES')}</p>
+              </div>
+            `).join('')}
+          </div>
+        </div>` : ''}
+
+      <!-- Botón añadir a ciclo -->
+      <button onclick="addPumpAssetToCycleFromDetail()" class="w-full bg-green-700 hover:bg-green-600 py-3 rounded-lg font-bold text-lg">
+        ➕ Añadir a ciclo especulativo
+      </button>
+    </div>
+  `;
+}
+
+async function addPumpAssetToCycle(assetId, symbol) {
+  if (!confirm(`¿Añadir ${symbol} a un ciclo especulativo?\n\nSe añadirá al ciclo activo o se creará uno nuevo de 12h.`)) return;
+  try {
+    const r = await fetch('/api/cycles/add-asset', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ assetId, mode: 'speculative' })
+    });
+    const d = await r.json();
+    if (d.success) {
+      alert(`✅ ${d.message}`);
+      if (d.newCycle) {
+        // Recargar validación para mostrar el nuevo ciclo
+        if (document.getElementById('content-validation').style.display !== 'none') {
+          await loadValidation();
+        }
+      }
+    } else {
+      alert(`❌ ${d.error}`);
+    }
+  } catch(e) {
+    alert('❌ Error: ' + e.message);
+  }
+}
+
+async function addPumpAssetToCycleFromDetail() {
+  if (!currentPumpAssetDetail) return;
+  await addPumpAssetToCycle(currentPumpAssetDetail.id, currentPumpAssetDetail.symbol);
+  closeModal('modal-pump-asset-detail');
+}
+
 </script>
+
+<!-- ══ MODAL: DETALLE ACTIVO PUMP ═══════════════════════════════════════════ -->
+<div id="modal-pump-asset-detail" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 overflow-y-auto">
+  <div class="bg-gray-900 rounded-2xl w-full max-w-4xl shadow-2xl my-8 max-h-[90vh] overflow-y-auto">
+    <div class="sticky top-0 bg-gray-900 border-b border-gray-800 px-6 py-4 flex justify-between items-center">
+      <h3 class="text-xl font-bold">🔍 Análisis Completo</h3>
+      <button onclick="closeModal('modal-pump-asset-detail')" class="text-gray-500 hover:text-white text-2xl">×</button>
+    </div>
+    <div class="p-6">
+      <div id="pump-asset-detail-loading" class="text-center py-12">
+        <p class="text-blue-400 text-lg">⏳ Cargando análisis completo...</p>
+        <p class="text-xs text-gray-500 mt-2">Obteniendo datos de mercado, noticias, redes sociales...</p>
+      </div>
+      <div id="pump-asset-detail-content" class="hidden">
+        <!-- El contenido se renderiza dinámicamente -->
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

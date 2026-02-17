@@ -1687,8 +1687,231 @@ app.get('/api/pump/history', async (_req, res) => {
     res.json({ success: true, history });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
+// ── GET /api/pump/asset/:id ──────────────────────────────────────────────────
+// Retorna análisis completo del activo: datos de pump + scoring del algoritmo
+app.get('/api/pump/asset/:id', async (req, res) => {
+  try {
+    const mode   = req.query.mode || 'speculative'; // pumps son small-caps
+    const config = await getConfig(mode);
+    const { id } = req.params;
+
+    // Obtener datos del activo desde CoinGecko
+    const [marketRes, detailRes, fgRes] = await Promise.allSettled([
+      axios.get(
+        `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${id}` +
+        `&order=market_cap_desc&per_page=1&sparkline=false&price_change_percentage=24h,7d,30d`,
+        { timeout: 6000 }
+      ),
+      axios.get(`https://api.coingecko.com/api/v3/coins/${id}?localization=false&tickers=false&market_data=true&community_data=true&developer_data=false&sparkline=false`, { timeout: 6000 }),
+      getFearGreedIndex()
+    ]);
+
+    const crypto = marketRes.status === 'fulfilled' ? marketRes.value.data[0] : null;
+    if (!crypto) return res.status(404).json({ success: false, error: `Activo ${id} no encontrado` });
+
+    const detail = detailRes.status === 'fulfilled' ? detailRes.value.data : null;
+    const fg     = fgRes.status === 'fulfilled'     ? fgRes.value           : { success: false };
+
+    if (detail?.market_data) {
+      crypto.price_change_percentage_30d = detail.market_data.price_change_percentage_30d;
+      crypto.price_change_percentage_7d_in_currency = detail.market_data.price_change_percentage_7d_in_currency?.usd;
+      crypto.circulating_supply = detail.market_data.circulating_supply;
+      crypto.total_supply       = detail.market_data.total_supply;
+      crypto.max_supply         = detail.market_data.max_supply;
+    }
+
+    // Análisis de pump (mismo que el scan)
+    const pumpAnalysis = await pumpDetector.analyzePumpForAsset(crypto, getRedisKey);
+
+    // Datos cualitativos: noticias, reddit, etc
+    const [newsRes, redditRes, coinDeskRes, coinTelRes, lunarRes, santRes] = await Promise.allSettled([
+      getAssetNews(crypto.symbol, crypto.name),
+      getAssetReddit(crypto.symbol, crypto.name, crypto.market_cap),
+      getCoinDeskNews(crypto.symbol, crypto.name),
+      getCoinTelegraphNews(crypto.symbol, crypto.name),
+      getLunarCrushData(crypto.symbol),
+      getSantimentData(crypto.symbol)
+    ]);
+
+    const assetNews    = newsRes.status      === 'fulfilled' ? newsRes.value      : { success: false, count: 0, articles: [], avgSentiment: 0 };
+    const assetReddit  = redditRes.status    === 'fulfilled' ? redditRes.value    : { success: false, postCount: 0, posts: [] };
+    const coinDesk     = coinDeskRes.status  === 'fulfilled' ? coinDeskRes.value  : { success: false };
+    const coinTel      = coinTelRes.status   === 'fulfilled' ? coinTelRes.value   : { success: false };
+    const lunarCrush   = lunarRes.status     === 'fulfilled' ? lunarRes.value     : { success: false };
+    const santiment    = santRes.status      === 'fulfilled' ? santRes.value      : { success: false };
+
+    const allArticles = [
+      ...(assetNews.articles || []),
+      ...(coinDesk.articles  || []),
+      ...(coinTel.articles   || [])
+    ].sort((a, b) => new Date(b.publishedAt) - new Date(a.publishedAt));
+    const seenTitles = new Set();
+    const dedupedArticles = allArticles.filter(a => {
+      const k = (a.title || '').slice(0, 50);
+      if (seenTitles.has(k)) return false; seenTitles.add(k); return true;
+    });
+    const mergedNews = dedupedArticles.length > 0 ? (() => {
+      let weightedSum = 0, totalWeight = 0;
+      dedupedArticles.forEach(a => {
+        const w = a.sentiment?.relevant ? 2 : 1;
+        weightedSum += (a.sentiment?.score || 0) * w;
+        totalWeight += w;
+      });
+      const specificCount = dedupedArticles.filter(a => a.sentiment?.relevant).length;
+      return {
+        success: true, count: dedupedArticles.length, specificCount, genericCount: dedupedArticles.length - specificCount,
+        articles: dedupedArticles.slice(0, 10), avgSentiment: totalWeight > 0 ? weightedSum / totalWeight : 0,
+        rawAvgSentiment: dedupedArticles.reduce((s, a) => s + (a.sentiment?.score || 0), 0) / dedupedArticles.length,
+        sources: [assetNews.success && 'NewsAPI/CC', coinDesk.success && 'CoinDesk', coinTel.success && 'CoinTelegraph'].filter(Boolean)
+      };
+    })() : { success: false, count: 0, specificCount: 0, genericCount: 0, articles: [], avgSentiment: 0 };
+
+    const externalData = {
+      fearGreed:   fg.success            ? fg          : null,
+      assetNews:   mergedNews.success    ? mergedNews  : (assetNews.success ? assetNews : null),
+      assetReddit: assetReddit.success   ? assetReddit : null,
+      lunarCrush:  lunarCrush.success    ? lunarCrush  : null,
+      santiment:   santiment.success     ? santiment   : null,
+      marketNews:  null
+    };
+
+    // Análisis del algoritmo principal (boostPower, clasificación, predicción)
+    const result  = boostPowerCalc.calculateBoostPower(crypto, config, externalData);
+    const summary = boostPowerCalc.generateSummary(crypto, result, externalData);
+
+    res.json({
+      success: true,
+      asset: {
+        id:            crypto.id,
+        symbol:        crypto.symbol,
+        name:          crypto.name,
+        image:         crypto.image || detail?.image?.large,
+        current_price: crypto.current_price,
+        market_cap:    crypto.market_cap,
+        total_volume:  crypto.total_volume,
+        ath:           crypto.ath,
+        ath_date:      crypto.ath_date,
+        atl:           crypto.atl,
+        atl_date:      crypto.atl_date,
+        circulating_supply: crypto.circulating_supply,
+        total_supply:       crypto.total_supply,
+        max_supply:         crypto.max_supply,
+        change24h:  crypto.price_change_percentage_24h,
+        change7d:   crypto.price_change_percentage_7d_in_currency,
+        change30d:  crypto.price_change_percentage_30d,
+        // Análisis del algoritmo
+        boostPower:         result.boostPower,
+        boostPowerPercent:  result.boostPowerPercent,
+        predictedChange:    result.predictedChange,
+        classification:     result.classification,
+        breakdown:          result.breakdown,
+        summary,
+        // Análisis de pump
+        pumpAnalysis: pumpAnalysis || { totalScore: 0, riskLevel: 'Normal', riskColor: 'text-gray-400', evidence: [] },
+        // Datos cualitativos
+        news:       mergedNews.success  ? { count: mergedNews.count, specificCount: mergedNews.specificCount, genericCount: mergedNews.genericCount,
+                      avgSentiment: mergedNews.avgSentiment, rawAvgSentiment: mergedNews.rawAvgSentiment,
+                      articles: mergedNews.articles, sources: mergedNews.sources } : null,
+        reddit:     assetReddit.success ? { postCount: assetReddit.postCount, avgSentiment: assetReddit.avgSentiment,
+                      posts: assetReddit.posts, subredditsSearched: assetReddit.subredditsSearched } : null,
+        lunarCrush: lunarCrush.success  ? lunarCrush  : null,
+        santiment:  santiment.success   ? santiment   : null,
+        fearGreed:  fg.success          ? { value: fg.value, classification: fg.classification } : null
+      }
+    });
+  } catch(e) {
+    console.error('/api/pump/asset/:id error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 
 // ── GET /api/pump/settings ────────────────────────────────────────────────
+
+// ── POST /api/cycles/add-asset ───────────────────────────────────────────────
+// Añade un activo manualmente a un ciclo activo o crea nuevo ciclo si no existe
+app.post('/api/cycles/add-asset', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const { assetId, mode } = req.body;
+    if (!assetId) return res.status(400).json({ success: false, error: 'assetId requerido' });
+
+    const cycleMode = mode || 'speculative'; // pumps detectados son especulativos por defecto
+    const config    = await getConfig(cycleMode);
+
+    // Obtener datos del activo
+    const r = await axios.get(
+      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${assetId}` +
+      `&order=market_cap_desc&per_page=1&sparkline=false&price_change_percentage=24h,7d,30d`,
+      { timeout: 6000 }
+    );
+    const crypto = r.data?.[0];
+    if (!crypto) return res.status(404).json({ success: false, error: `Activo ${assetId} no encontrado` });
+
+    // Obtener noticias y reddit básicos para el análisis
+    const [newsRes, redditRes, fgRes] = await Promise.allSettled([
+      getAssetNews(crypto.symbol, crypto.name),
+      getAssetReddit(crypto.symbol, crypto.name, crypto.market_cap),
+      getFearGreedIndex()
+    ]);
+    const assetNews   = newsRes.status === 'fulfilled'   ? newsRes.value   : { success: false, count: 0 };
+    const assetReddit = redditRes.status === 'fulfilled' ? redditRes.value : { success: false, postCount: 0 };
+    const fg          = fgRes.status === 'fulfilled'     ? fgRes.value     : { success: false };
+
+    const externalData = {
+      fearGreed:   fg.success ? fg : null,
+      assetNews:   assetNews.success ? assetNews : null,
+      assetReddit: assetReddit.success ? assetReddit : null,
+      marketNews:  null
+    };
+
+    // Calcular boostPower y clasificación
+    const result = boostPowerCalc.calculateBoostPower(crypto, config, externalData);
+    const assetData = {
+      id:                          crypto.id,
+      symbol:                      crypto.symbol,
+      name:                        crypto.name,
+      current_price:               crypto.current_price,
+      market_cap:                  crypto.market_cap,
+      total_volume:                crypto.total_volume,
+      price_change_percentage_24h: crypto.price_change_percentage_24h,
+      ath:                         crypto.ath,
+      atl:                         crypto.atl,
+      boostPower:                  result.boostPower,
+      boostPowerPercent:           result.boostPowerPercent,
+      classification:              result.classification.category,
+      predictedChange:             result.predictedChange,
+      manuallyAdded:               true,  // marcar que fue añadido manual
+      addedAt:                     new Date().toISOString()
+    };
+
+    // Buscar ciclo activo del mismo modo
+    const activeIds = await cyclesManager.getActiveCycles(redis);
+    const activeCycles = await cyclesManager.getCyclesDetails(redis, activeIds);
+    let targetCycle = activeCycles.find(c => (c.mode || 'normal') === cycleMode && c.status === 'active');
+
+    if (targetCycle) {
+      // Añadir al ciclo existente
+      const existing = targetCycle.snapshot.find(a => a.id === assetId);
+      if (existing) {
+        return res.status(400).json({ success: false, error: 'Activo ya presente en el ciclo activo' });
+      }
+      targetCycle.snapshot.push(assetData);
+      await redisSet(targetCycle.id, targetCycle);
+      res.json({ success: true, message: `Activo añadido al ciclo activo ${targetCycle.id}`, cycleId: targetCycle.id, asset: assetData });
+    } else {
+      // No hay ciclo activo → crear uno nuevo con duración 12h
+      const durationMs = 12 * 3600000;
+      const snapshot   = [assetData];
+      const cycle      = await cyclesManager.createCycle(redis, snapshot, config, durationMs, cycleMode);
+      res.json({ success: true, message: `Nuevo ciclo ${cycle.id} creado con el activo`, cycleId: cycle.id, asset: assetData, newCycle: true });
+    }
+  } catch(e) {
+    console.error('add-asset error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 app.get('/api/pump/settings', async (_req, res) => {
   try {
     const settings = await getPumpSettings();
