@@ -1,625 +1,464 @@
-// api/index.js - Backend Completo Iteración 3
+// api/index.js - Backend Crypto Detector v3.2 (CORREGIDO)
+'use strict';
+
 const express = require('express');
-const cors = require('cors');
-const axios = require('axios');
+const cors    = require('axios');   // placeholder — se sobreescribe abajo
+const axios   = require('axios');
 const { Packer } = require('docx');
 
 const app = express();
+app.use(require('cors')());
+app.use(express.json({ limit: '5mb' }));
 
-app.use(cors());
-app.use(express.json());
-
-// ============================================
-// CONEXIÓN REDIS
-// ============================================
-
+// ─── Redis ──────────────────────────────────────────────────────────────────
 let redis = null;
-
 try {
-  if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) {
+  const url   = process.env.KV_REST_API_URL;
+  const token = process.env.KV_REST_API_TOKEN;
+  if (url && token) {
     const { Redis } = require('@upstash/redis');
-    redis = new Redis({
-      url: process.env.KV_REST_API_URL,
-      token: process.env.KV_REST_API_TOKEN,
-    });
-    console.log('✅ Upstash Redis conectado');
+    redis = new Redis({ url, token });
+    console.log('✅ Redis conectado');
   } else {
-    console.log('⚠️ Redis no disponible');
+    console.warn('⚠️  Redis: KV_REST_API_URL / KV_REST_API_TOKEN no definidos');
   }
-} catch (error) {
-  console.log('⚠️ Redis error:', error.message);
+} catch (e) {
+  console.error('⚠️  Redis init error:', e.message);
 }
 
-// ============================================
-// MÓDULOS
-// ============================================
-
-const algorithmConfig = require('./algorithm-config');
-const boostPowerCalc = require('./boost-power-calculator');
-const dataSources = require('./data-sources');
-const cyclesManager = require('./cycles-manager');
-const reportGenerator = require('./report-generator');
+// ─── Módulos propios ────────────────────────────────────────────────────────
+const algorithmConfig  = require('./algorithm-config');
+const boostPowerCalc   = require('./boost-power-calculator');
+const cyclesManager    = require('./cycles-manager');
+const reportGenerator  = require('./report-generator');
+const apiHealthCheck   = require('./api-health-check');
 
 const DEFAULT_CONFIG = algorithmConfig.DEFAULT_CONFIG;
 
-// ============================================
-// ENDPOINTS BÁSICOS
-// ============================================
+// ─── Helpers inline (reemplazan data-sources.js) ────────────────────────────
 
-app.get('/api/health', (req, res) => {
-  res.json({ 
+async function getFearGreedIndex() {
+  try {
+    const r = await axios.get('https://api.alternative.me/fng/?limit=1', { timeout: 4000 });
+    const d = r.data?.data?.[0];
+    if (d) return { success: true, value: parseInt(d.value), classification: d.value_classification };
+  } catch (_) {}
+  return { success: false };
+}
+
+async function getCryptoNews(symbol = '', limit = 5) {
+  try {
+    const key     = process.env.CRYPTOCOMPARE_API_KEY || '';
+    const headers = key ? { authorization: `Apikey ${key}` } : {};
+    const r = await axios.get('https://min-api.cryptocompare.com/data/v2/news/?lang=EN', {
+      headers, timeout: 4000
+    });
+    if (r.data?.Data) {
+      const articles = r.data.Data.slice(0, limit);
+      return { success: true, count: articles.length, articles };
+    }
+  } catch (_) {}
+  return { success: false, count: 0, articles: [] };
+}
+
+function analyzeSentiment(text) {
+  const t = text.toLowerCase();
+  const pos = ['surge','gain','rise','bullish','adoption','partnership','upgrade','growth','rally','recovery'].filter(w => t.includes(w)).length;
+  const neg = ['crash','drop','decline','bearish','hack','ban','lawsuit','loss','collapse','fraud'].filter(w => t.includes(w)).length;
+  const score = Math.max(-1, Math.min(1, (pos - neg) / 3));
+  return { score, label: score > 0.3 ? 'positive' : score < -0.3 ? 'negative' : 'neutral' };
+}
+
+// ─── Helpers de Redis (con manejo de errores) ────────────────────────────────
+
+// Upstash serializa/deserializa automáticamente — pasar objetos directamente
+async function redisGet(key) {
+  if (!redis) return null;
+  try {
+    return await redis.get(key) ?? null;
+  } catch (e) {
+    console.error(`Redis GET ${key}:`, e.message);
+    return null;
+  }
+}
+
+async function redisSet(key, value) {
+  if (!redis) throw new Error('Redis no disponible');
+  try {
+    await redis.set(key, value);
+    return true;
+  } catch (e) {
+    console.error(`Redis SET ${key}:`, e.message);
+    throw e;
+  }
+}
+
+async function getConfig() {
+  const stored = await redisGet('algorithm-config');
+  if (stored && typeof stored === 'object') return stored;
+  if (stored && typeof stored === 'string') { try { return JSON.parse(stored); } catch(_){} }
+  return { ...DEFAULT_CONFIG };
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+// ENDPOINTS
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── Health ──────────────────────────────────────────────────────────────────
+app.get('/api/health', (_req, res) => {
+  res.json({
     status: 'ok',
-    version: '3.2-final',
-    timestamp: new Date().toISOString(),
-    redis: redis ? 'connected' : 'not available'
+    version: '3.2.1',
+    redis: redis ? 'connected' : 'not available',
+    timestamp: new Date().toISOString()
   });
 });
 
-// ============================================
-// ENDPOINT DE STATUS COMPLETO (NUEVO)
-// ============================================
-
-const apiHealthCheck = require('./api-health-check');
-
-/**
- * GET /api/status/complete
- * Estado completo de todas las APIs y fuentes de datos
- */
-app.get('/api/status/complete', async (req, res) => {
+// ── Debug Redis (para diagnosticar problemas en Vercel) ─────────────────────
+app.get('/api/debug/redis', async (_req, res) => {
+  if (!redis) return res.json({ success: false, error: 'Redis no configurado' });
   try {
-    const status = await apiHealthCheck.checkAllAPIs();
-    
+    const testKey = '_debug_test';
+    await redisSet(testKey, { ok: true, ts: Date.now() });
+    const back = await redisGet(testKey);
+    const activeCycles = await redisGet('active_cycles');
     res.json({
       success: true,
-      ...status
+      writeRead: !!back,
+      activeCycles: Array.isArray(activeCycles) ? activeCycles : (activeCycles ? activeCycles : []),
+      env: {
+        hasUrl:   !!process.env.KV_REST_API_URL,
+        hasToken: !!process.env.KV_REST_API_TOKEN
+      }
     });
-  } catch (error) {
-    console.error('Error checking APIs:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error al verificar estado de APIs',
-      message: error.message
-    });
+  } catch (e) {
+    res.json({ success: false, error: e.message });
   }
 });
 
-// ============================================
-// ENDPOINTS DE CONFIGURACIÓN
-// ============================================
-
-app.get('/api/config', async (req, res) => {
+// ── Debug ciclos (flujo completo) ───────────────────────────────────────────
+app.get('/api/debug/cycles', async (_req, res) => {
+  if (!redis) return res.json({ success: false, error: 'Redis no configurado' });
   try {
-    let config = { ...DEFAULT_CONFIG };
-    
-    if (redis) {
-      try {
-        const stored = await redis.get('algorithm-config');
-        if (stored) {
-          config = typeof stored === 'string' ? JSON.parse(stored) : stored;
-        }
-      } catch (error) {
-        console.log('Usando config por defecto');
-      }
+    // 1. Leer active_cycles directamente
+    const raw = await redis.get('active_cycles');
+    const activeIds = await cyclesManager.getActiveCycles(redis);
+
+    // 2. Leer el primer ciclo activo si existe
+    let firstCycle = null;
+    if (activeIds.length > 0) {
+      firstCycle = await cyclesManager.getCycle(redis, activeIds[0]);
     }
-    
+
     res.json({
       success: true,
-      config: config,
-      timestamp: new Date().toISOString()
+      rawActiveValue: raw,
+      rawType: typeof raw,
+      activeIds,
+      firstCycle: firstCycle ? {
+        id: firstCycle.id,
+        status: firstCycle.status,
+        startTime: firstCycle.startTime,
+        endTime: firstCycle.endTime,
+        assetsCount: firstCycle.snapshot?.length
+      } : null
     });
-  } catch (error) {
-    console.error('Error getting config:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener configuración'
-    });
+  } catch(e) {
+    res.json({ success: false, error: e.message, stack: e.stack });
+  }
+});
+
+// ── Config ──────────────────────────────────────────────────────────────────
+app.get('/api/config', async (_req, res) => {
+  try {
+    res.json({ success: true, config: await getConfig() });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
 app.post('/api/config', async (req, res) => {
   try {
     const { config } = req.body;
-    
-    if (!config) {
-      return res.status(400).json({
-        success: false,
-        error: 'Se requiere objeto "config"'
-      });
-    }
-    
+    if (!config) return res.status(400).json({ success: false, error: 'Se requiere "config"' });
+
     const validation = algorithmConfig.validateConfig(config);
-    
-    if (!validation.valid) {
-      return res.status(400).json({
-        success: false,
-        errors: validation.errors
-      });
-    }
-    
+    if (!validation.valid) return res.status(400).json({ success: false, errors: validation.errors });
+
     config.lastModified = new Date().toISOString();
-    config.version = '3.1-iter3';
-    
-    if (redis) {
-      try {
-        await redis.set('algorithm-config', JSON.stringify(config));
-      } catch (error) {
-        return res.status(503).json({
-          success: false,
-          error: 'Redis no disponible'
-        });
-      }
-    } else {
-      return res.status(503).json({
-        success: false,
-        error: 'Redis no disponible'
-      });
-    }
-    
-    res.json({
-      success: true,
-      message: 'Configuración guardada',
-      config: config
-    });
-  } catch (error) {
-    console.error('Error saving config:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error al guardar configuración'
-    });
+    config.version = '3.2.1';
+    await redisSet('algorithm-config', config);
+    res.json({ success: true, config });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-app.post('/api/config/reset', async (req, res) => {
+app.post('/api/config/reset', async (_req, res) => {
   try {
-    const config = { 
-      ...DEFAULT_CONFIG,
-      lastModified: new Date().toISOString()
-    };
-    
-    if (redis) {
-      try {
-        await redis.set('algorithm-config', JSON.stringify(config));
-      } catch (error) {
-        console.error('Error resetting:', error);
-      }
-    }
-    
-    res.json({
-      success: true,
-      message: 'Configuración reseteada',
-      config: config
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al resetear'
-    });
+    const config = { ...DEFAULT_CONFIG, lastModified: new Date().toISOString() };
+    await redisSet('algorithm-config', config);
+    res.json({ success: true, config });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-app.get('/api/config/metadata', (req, res) => {
+app.get('/api/config/metadata', (_req, res) => {
   try {
-    const metadata = algorithmConfig.getFactorMetadata();
-    res.json({
-      success: true,
-      metadata: metadata
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener metadata'
-    });
+    res.json({ success: true, metadata: algorithmConfig.getFactorMetadata() });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ============================================
-// ENDPOINTS DE DATOS
-// ============================================
-
-app.get('/api/crypto', async (req, res) => {
+// ── Datos de mercado ─────────────────────────────────────────────────────────
+app.get('/api/crypto', async (_req, res) => {
   try {
-    let config = { ...DEFAULT_CONFIG };
-    if (redis) {
-      try {
-        const stored = await redis.get('algorithm-config');
-        if (stored) {
-          config = typeof stored === 'string' ? JSON.parse(stored) : stored;
-        }
-      } catch (error) {}
-    }
-    
-    // Obtener datos de CoinGecko
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage_24h=true'
-    );
-    
-    // Obtener datos externos (Fear & Greed, News)
-    const fearGreed = await dataSources.getFearGreedIndex();
-    const news = await dataSources.getCryptoNews('', 5);
-    
+    const config = await getConfig();
+
+    const [marketRes, fearGreed, news] = await Promise.allSettled([
+      axios.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=20&page=1&sparkline=false&price_change_percentage_24h=true', { timeout: 8000 }),
+      getFearGreedIndex(),
+      getCryptoNews('', 5)
+    ]);
+
+    if (marketRes.status === 'rejected') throw new Error('CoinGecko no disponible: ' + marketRes.reason?.message);
+
+    const fgData   = fearGreed.status === 'fulfilled' ? fearGreed.value : { success: false };
+    const newsData = news.status      === 'fulfilled' ? news.value      : { success: false, count: 0 };
+
     const externalData = {
-      fearGreed: fearGreed.success ? fearGreed : null,
-      news: news.success ? news : null
+      fearGreed: fgData.success ? fgData : null,
+      news:      newsData.success ? newsData : null
     };
-    
-    // Calcular BoostPower con datos reales
-    const cryptosWithBoost = response.data.map(crypto => {
+
+    const cryptosWithBoost = marketRes.value.data.map(crypto => {
       const { boostPower, breakdown } = boostPowerCalc.calculateBoostPower(crypto, config, externalData);
       const classification = boostPowerCalc.classifyAsset(boostPower, config.boostPowerThreshold);
-      
       return {
-        ...crypto,
-        boostPower: boostPower,
+        id:                          crypto.id,
+        symbol:                      crypto.symbol,
+        name:                        crypto.name,
+        image:                       crypto.image,
+        current_price:               crypto.current_price,
+        market_cap:                  crypto.market_cap,
+        market_cap_rank:             crypto.market_cap_rank,
+        total_volume:                crypto.total_volume,
+        price_change_percentage_24h: crypto.price_change_percentage_24h,
+        ath:                         crypto.ath,
+        atl:                         crypto.atl,
+        boostPower,
         boostPowerPercent: Math.round(boostPower * 100),
-        breakdown: breakdown,
+        breakdown,
         classification: classification.category,
-        color: classification.color,
+        color:          classification.color,
         recommendation: classification.recommendation,
-        predictedChange: (boostPower - 0.5) * 30 // Predicción simple basada en BoostPower
+        predictedChange: parseFloat(((boostPower - 0.5) * 30).toFixed(2))
       };
     });
-    
+
     cryptosWithBoost.sort((a, b) => b.boostPower - a.boostPower);
-    
+
     res.json({
       success: true,
       data: cryptosWithBoost,
       externalData: {
-        fearGreed: fearGreed.success ? { value: fearGreed.value, classification: fearGreed.classification } : null,
-        newsCount: news.success ? news.count : 0
+        fearGreed: fgData.success ? { value: fgData.value, classification: fgData.classification } : null,
+        newsCount: newsData.count || 0
       },
       timestamp: new Date().toISOString()
     });
-  } catch (error) {
-    console.error('Error fetching crypto:', error.message);
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener datos'
-    });
+  } catch (e) {
+    console.error('/api/crypto error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-app.get('/api/data/sources-status', async (req, res) => {
+// ── Estado completo de APIs ──────────────────────────────────────────────────
+app.get('/api/status/complete', async (_req, res) => {
   try {
-    const status = await dataSources.checkAPIsStatus();
-    res.json({
-      success: true,
-      status
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al verificar APIs'
-    });
+    const status = await apiHealthCheck.checkAllAPIs();
+    res.json({ success: true, ...status });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ============================================
-// ENDPOINTS DE CICLOS
-// ============================================
+// ── Guardar API key desde la UI ──────────────────────────────────────────────
+// Almacena la key en Redis (las vars de entorno de Vercel no se pueden
+// modificar en runtime; usamos Redis como almacén de keys de usuario)
+app.post('/api/config/api-key', async (req, res) => {
+  try {
+    const { apiName, apiKey } = req.body;
+    const allowed = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN','SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY','WHALE_ALERT_API_KEY'];
+    if (!allowed.includes(apiName)) return res.status(400).json({ success: false, error: 'API name no permitida' });
+    if (!apiKey || apiKey.trim() === '') {
+      await redisSet(`apikey:${apiName}`, '');
+    } else {
+      await redisSet(`apikey:${apiName}`, apiKey.trim());
+    }
+    res.json({ success: true, message: `Key guardada para ${apiName}` });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.get('/api/config/api-keys', async (_req, res) => {
+  try {
+    const names = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN','SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY','WHALE_ALERT_API_KEY'];
+    const keys = {};
+    for (const n of names) {
+      const v = await redisGet(`apikey:${n}`);
+      keys[n] = v && v !== '""' && v !== '' ? '••••••' : ''; // Ocultar valor real
+    }
+    res.json({ success: true, keys });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════════════════
+// CICLOS
+// ════════════════════════════════════════════════════════════════════════════
 
 app.post('/api/cycles/start', async (req, res) => {
-  try {
-    if (!redis) {
-      return res.status(503).json({
-        success: false,
-        error: 'Redis no disponible. Configura Upstash Redis.'
-      });
-    }
-    
-    const { snapshot, durationMs } = req.body;
-    
-    if (!snapshot || !Array.isArray(snapshot) || snapshot.length === 0) {
-      return res.status(400).json({
-        success: false,
-        error: 'Se requiere array "snapshot" con datos de activos'
-      });
-    }
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible. Configura KV_REST_API_URL y KV_REST_API_TOKEN en Vercel.' });
 
-    // Validar duración: mínimo 1 minuto, máximo 7 días
-    const parsedDuration = parseInt(durationMs);
-    const finalDuration = (!isNaN(parsedDuration) && parsedDuration >= 60000 && parsedDuration <= 7*24*60*60*1000)
-      ? parsedDuration
-      : 12 * 60 * 60 * 1000;
-    
-    // Obtener config actual
-    let config = { ...DEFAULT_CONFIG };
-    try {
-      const stored = await redis.get('algorithm-config');
-      if (stored) {
-        config = typeof stored === 'string' ? JSON.parse(stored) : stored;
-      }
-    } catch (error) {}
-    
-    // Crear ciclo con duración variable
-    const cycle = await cyclesManager.createCycle(redis, snapshot, config, finalDuration);
-    
+  const { snapshot, durationMs } = req.body;
+  if (!snapshot || !Array.isArray(snapshot) || snapshot.length === 0) {
+    return res.status(400).json({ success: false, error: 'Se requiere "snapshot" con al menos 1 activo' });
+  }
+
+  const dur = parseInt(durationMs);
+  const finalDuration = (!isNaN(dur) && dur >= 60000 && dur <= 7 * 86400000) ? dur : 43200000;
+
+  try {
+    const config = await getConfig();
+    const cycle  = await cyclesManager.createCycle(redis, snapshot, config, finalDuration);
     res.json({
       success: true,
-      message: 'Ciclo iniciado correctamente',
-      cycle: {
-        id: cycle.id,
-        startTime: cycle.startTime,
-        endTime: cycle.endTime,
-        durationMs: cycle.durationMs,
-        assetsCount: snapshot.length
-      }
+      cycle: { id: cycle.id, startTime: cycle.startTime, endTime: cycle.endTime, durationMs: cycle.durationMs, assetsCount: cycle.snapshot.length }
     });
-  } catch (error) {
-    console.error('Error starting cycle:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error al iniciar ciclo',
-      message: error.message
-    });
+  } catch (e) {
+    console.error('cycles/start error:', e);
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-app.get('/api/cycles/active', async (req, res) => {
+app.get('/api/cycles/active', async (_req, res) => {
+  if (!redis) return res.json({ success: true, cycles: [] });
   try {
-    if (!redis) {
-      return res.json({ success: true, cycles: [] });
-    }
-    
-    const cycleIds = await cyclesManager.getActiveCycles(redis);
-    const cycles = await cyclesManager.getCyclesDetails(redis, cycleIds);
-    
-    // Añadir tiempo restante
-    const now = Date.now();
-    cycles.forEach(cycle => {
-      cycle.timeRemaining = Math.max(0, cycle.endTime - now);
-      cycle.hoursRemaining = (cycle.timeRemaining / (1000 * 60 * 60)).toFixed(1);
+    const ids    = await cyclesManager.getActiveCycles(redis);
+    const cycles = await cyclesManager.getCyclesDetails(redis, ids);
+    const now    = Date.now();
+    cycles.forEach(c => {
+      c.timeRemaining  = Math.max(0, c.endTime - now);
+      c.hoursRemaining = (c.timeRemaining / 3600000).toFixed(1);
     });
-    
-    res.json({
-      success: true,
-      cycles
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener ciclos activos'
-    });
+    res.json({ success: true, cycles });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-app.get('/api/cycles/pending', async (req, res) => {
+app.get('/api/cycles/pending', async (_req, res) => {
+  if (!redis) return res.json({ success: true, cycles: [] });
   try {
-    if (!redis) {
-      return res.json({ success: true, cycles: [] });
-    }
-    
     const pending = await cyclesManager.detectPendingCycles(redis);
-    
-    res.json({
-      success: true,
-      cycles: pending
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener ciclos pendientes'
-    });
+    res.json({ success: true, cycles: pending });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
 app.post('/api/cycles/:cycleId/complete', async (req, res) => {
-  try {
-    if (!redis) {
-      return res.status(503).json({
-        success: false,
-        error: 'Redis no disponible'
-      });
-    }
-    
-    const { cycleId } = req.params;
-    
-    // Obtener precios actuales
-    const response = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1'
-    );
-    
-    const cycle = await cyclesManager.completeCycle(redis, cycleId, response.data);
-    
-    res.json({
-      success: true,
-      message: 'Ciclo completado',
-      cycle: {
-        id: cycle.id,
-        metrics: cycle.metrics,
-        completedAt: cycle.completedAt
-      }
-    });
-  } catch (error) {
-    console.error('Error completing cycle:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error al completar ciclo',
-      message: error.message
-    });
-  }
-});
-
-/**
- * POST /api/cycles/:cycleId/results/:assetId/toggle-exclude
- * Incluir o excluir un resultado individual de las estadísticas
- */
-app.post('/api/cycles/:cycleId/results/:assetId/toggle-exclude', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
-
-  const { cycleId, assetId } = req.params;
   try {
-    const cycle = await cyclesManager.getCycle(redis, cycleId);
-    if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
-    if (cycle.status !== 'completed') return res.status(400).json({ success: false, error: 'El ciclo no está completado' });
-
-    // Toggle exclusión
-    const excluded = cycle.excludedResults || [];
-    const idx = excluded.indexOf(assetId);
-    if (idx === -1) {
-      excluded.push(assetId);
-    } else {
-      excluded.splice(idx, 1);
-    }
-    cycle.excludedResults = excluded;
-
-    // Recalcular métricas excluyendo los seleccionados
-    const activeResults = cycle.results.filter(r => !excluded.includes(r.id));
-    cycle.metrics = cyclesManager.recalculateMetrics(activeResults);
-    cycle.metricsExcluded = excluded.length;
-
-    await redis.set(cycleId, JSON.stringify(cycle));
-
-    res.json({
-      success: true,
-      excluded,
-      metrics: cycle.metrics,
-      isExcluded: excluded.includes(assetId)
-    });
-  } catch (error) {
-    res.status(500).json({ success: false, error: error.message });
+    const prices = await axios.get('https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1', { timeout: 8000 });
+    const cycle  = await cyclesManager.completeCycle(redis, req.params.cycleId, prices.data);
+    res.json({ success: true, cycle: { id: cycle.id, metrics: cycle.metrics, completedAt: cycle.completedAt } });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-app.get('/api/cycles/history', async (req, res) => {
+app.get('/api/cycles/history', async (_req, res) => {
+  if (!redis) return res.json({ success: true, cycles: [] });
   try {
-    if (!redis) {
-      return res.json({ success: true, cycles: [] });
-    }
-    
-    const cycleIds = await cyclesManager.getCompletedCycles(redis);
-    const cycles = await cyclesManager.getCyclesDetails(redis, cycleIds);
-    
-    res.json({
-      success: true,
-      cycles
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener historial'
-    });
+    const ids    = await cyclesManager.getCompletedCycles(redis);
+    const cycles = await cyclesManager.getCyclesDetails(redis, ids);
+    res.json({ success: true, cycles });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.get('/api/cycles/stats/global', async (_req, res) => {
+  if (!redis) return res.json({ success: true, stats: { totalCycles: 0, totalPredictions: 0, avgSuccessRate: 0 } });
+  try {
+    const stats = await cyclesManager.getGlobalStats(redis);
+    res.json({ success: true, stats });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
 app.get('/api/cycles/:cycleId', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
-    if (!redis) {
-      return res.status(503).json({
-        success: false,
-        error: 'Redis no disponible'
-      });
-    }
-    
-    const { cycleId } = req.params;
+    const cycle = await cyclesManager.getCycle(redis, req.params.cycleId);
+    if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+    res.json({ success: true, cycle });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+app.post('/api/cycles/:cycleId/results/:assetId/toggle-exclude', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  const { cycleId, assetId } = req.params;
+  try {
     const cycle = await cyclesManager.getCycle(redis, cycleId);
-    
-    if (!cycle) {
-      return res.status(404).json({
-        success: false,
-        error: 'Ciclo no encontrado'
-      });
-    }
-    
-    res.json({
-      success: true,
-      cycle
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener ciclo'
-    });
+    if (!cycle)                        return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+    if (cycle.status !== 'completed')  return res.status(400).json({ success: false, error: 'Ciclo no completado' });
+
+    const excluded = cycle.excludedResults || [];
+    const idx = excluded.indexOf(assetId);
+    if (idx === -1) excluded.push(assetId); else excluded.splice(idx, 1);
+    cycle.excludedResults = excluded;
+    cycle.metrics = cyclesManager.recalculateMetrics(cycle.results.filter(r => !excluded.includes(r.id)));
+
+    await redisSet(cycleId, cycle);
+    res.json({ success: true, excluded, metrics: cycle.metrics, isExcluded: excluded.includes(assetId) });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-app.get('/api/cycles/stats/global', async (req, res) => {
-  try {
-    if (!redis) {
-      return res.json({ 
-        success: true, 
-        stats: { totalCycles: 0, totalPredictions: 0, avgSuccessRate: 0 } 
-      });
-    }
-    
-    const stats = await cyclesManager.getGlobalStats(redis);
-    
-    res.json({
-      success: true,
-      stats
-    });
-  } catch (error) {
-    res.status(500).json({
-      success: false,
-      error: 'Error al obtener estadísticas'
-    });
-  }
-});
-
-// ============================================
-// ENDPOINT DE INFORMES
-// ============================================
-
+// ── Informe Word ─────────────────────────────────────────────────────────────
 app.get('/api/cycles/:cycleId/report', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
-    if (!redis) {
-      return res.status(503).json({
-        success: false,
-        error: 'Redis no disponible'
-      });
-    }
-    
-    const { cycleId } = req.params;
-    const cycle = await cyclesManager.getCycle(redis, cycleId);
-    
-    if (!cycle) {
-      return res.status(404).json({
-        success: false,
-        error: 'Ciclo no encontrado'
-      });
-    }
-    
-    if (cycle.status !== 'completed') {
-      return res.status(400).json({
-        success: false,
-        error: 'El ciclo aún no está completado'
-      });
-    }
-    
-    // Generar documento Word
-    const doc = reportGenerator.generateCycleReport(cycle);
-    
-    // Convertir a buffer
+    const cycle = await cyclesManager.getCycle(redis, req.params.cycleId);
+    if (!cycle)                       return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+    if (cycle.status !== 'completed') return res.status(400).json({ success: false, error: 'El ciclo aún no está completado' });
+
+    const doc    = reportGenerator.generateCycleReport(cycle);
     const buffer = await Packer.toBuffer(doc);
-    
-    // Enviar como descarga
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename=Informe_Ciclo_${cycleId}.docx`);
+    res.setHeader('Content-Disposition', `attachment; filename=Informe_${req.params.cycleId}.docx`);
     res.send(buffer);
-  } catch (error) {
-    console.error('Error generating report:', error);
-    res.status(500).json({
-      success: false,
-      error: 'Error al generar informe',
-      message: error.message
-    });
+  } catch (e) {
+    console.error('report error:', e);
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 
-// ============================================
-// DESARROLLO LOCAL
-// ============================================
-
+// ─── Arranque local ──────────────────────────────────────────────────────────
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
-  app.listen(PORT, () => {
-    console.log(`🚀 Server running on port ${PORT}`);
-    console.log(`📊 Redis: ${redis ? 'Connected' : 'Not available'}`);
-  });
+  app.listen(PORT, () => console.log(`🚀 http://localhost:${PORT}`));
 }
-
-// ============================================
-// EXPORTAR PARA VERCEL
-// ============================================
 
 module.exports = app;

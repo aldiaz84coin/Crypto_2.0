@@ -1,280 +1,227 @@
-// cycles-manager.js - Gestión de Ciclos con duración variable (CORREGIDO)
+// cycles-manager.js — serialización compatible con @upstash/redis
+//
+// REGLA CRÍTICA con @upstash/redis:
+//   - redis.set(key, objeto_js)  → Upstash serializa internamente
+//   - redis.get(key)             → devuelve ya el objeto JS, NO un string
+//   → NUNCA usar JSON.stringify al guardar ni JSON.parse al leer
 
-/**
- * Crear un nuevo ciclo de predicción
- * @param {Object} redis
- * @param {Array}  snapshot - activos con datos completos
- * @param {Object} config   - configuración del algoritmo
- * @param {number} durationMs - duración en ms (default 12h)
- */
+// ── helpers de bajo nivel ────────────────────────────────────────────────────
+
+async function rGet(redis, key) {
+  const v = await redis.get(key);
+  // Upstash devuelve null si no existe, o el valor ya deserializado
+  return v ?? null;
+}
+
+async function rSet(redis, key, value) {
+  // Pasar el valor directamente; Upstash lo serializa
+  await redis.set(key, value);
+}
+
+// ── listas de IDs ────────────────────────────────────────────────────────────
+
+async function getActiveIds(redis) {
+  const v = await rGet(redis, 'active_cycles');
+  if (!v) return [];
+  // Por si viene como string de migración anterior
+  if (typeof v === 'string') {
+    try { return JSON.parse(v); } catch { return []; }
+  }
+  return Array.isArray(v) ? v : [];
+}
+
+async function setActiveIds(redis, ids) {
+  await rSet(redis, 'active_cycles', ids);
+}
+
+async function getCompletedIds(redis) {
+  const v = await rGet(redis, 'completed_cycles');
+  if (!v) return [];
+  if (typeof v === 'string') {
+    try { return JSON.parse(v); } catch { return []; }
+  }
+  return Array.isArray(v) ? v : [];
+}
+
+async function setCompletedIds(redis, ids) {
+  await rSet(redis, 'completed_cycles', ids);
+}
+
+// ── ciclo individual ─────────────────────────────────────────────────────────
+
+async function saveCycle(redis, cycle) {
+  await rSet(redis, cycle.id, cycle);
+}
+
+async function loadCycle(redis, cycleId) {
+  const v = await rGet(redis, cycleId);
+  if (!v) return null;
+  // Compatibilidad: si viene como string (versión anterior)
+  if (typeof v === 'string') {
+    try { return JSON.parse(v); } catch { return null; }
+  }
+  return v;
+}
+
+// ── API pública ──────────────────────────────────────────────────────────────
+
 async function createCycle(redis, snapshot, config, durationMs) {
   if (!redis) throw new Error('Redis no disponible');
 
-  // Limpiar snapshot: solo guardar campos esenciales para no saturar Redis
+  // Solo campos esenciales — evitar objetos grandes que superen el límite de Upstash
   const cleanSnapshot = snapshot.map(a => ({
-    id:                       a.id,
-    symbol:                   a.symbol,
-    name:                     a.name,
-    current_price:            a.current_price,
-    market_cap:               a.market_cap,
-    total_volume:             a.total_volume,
+    id:                          a.id,
+    symbol:                      a.symbol,
+    name:                        a.name,
+    current_price:               a.current_price,
+    market_cap:                  a.market_cap,
+    total_volume:                a.total_volume,
     price_change_percentage_24h: a.price_change_percentage_24h,
-    ath:                      a.ath,
-    atl:                      a.atl,
-    boostPower:               a.boostPower,
-    boostPowerPercent:        a.boostPowerPercent,
-    classification:           a.classification,
-    predictedChange:          a.predictedChange
+    ath:                         a.ath,
+    atl:                         a.atl,
+    boostPower:                  a.boostPower,
+    boostPowerPercent:           a.boostPowerPercent,
+    classification:              a.classification,
+    predictedChange:             a.predictedChange
   }));
 
   const cycleId   = `cycle_${Date.now()}`;
   const startTime = Date.now();
-  const endTime   = startTime + (durationMs || 12 * 60 * 60 * 1000);
+  const dur       = (typeof durationMs === 'number' && durationMs >= 60000) ? durationMs : 43200000;
 
   const cycle = {
-    id: cycleId,
+    id:              cycleId,
     startTime,
-    endTime,
-    durationMs: durationMs || 12 * 60 * 60 * 1000,
-    status:      'active',
-    snapshot:    cleanSnapshot,
-    config:      { version: config.version, boostPowerThreshold: config.boostPowerThreshold },
-    results:     null,
-    metrics:     null,
-    completedAt: null,
-    // Para seguimiento de selección manual de resultados
+    endTime:         startTime + dur,
+    durationMs:      dur,
+    status:          'active',
+    snapshot:        cleanSnapshot,
+    config:          { boostPowerThreshold: config.boostPowerThreshold },
+    results:         null,
+    metrics:         null,
+    completedAt:     null,
     excludedResults: []
   };
 
-  await redis.set(cycleId, JSON.stringify(cycle));
+  // Guardar ciclo
+  await saveCycle(redis, cycle);
 
-  const activeCycles = await getActiveCycles(redis);
-  activeCycles.push(cycleId);
-  await redis.set('active_cycles', JSON.stringify(activeCycles));
+  // Añadir a lista de activos
+  const ids = await getActiveIds(redis);
+  if (!ids.includes(cycleId)) ids.push(cycleId);
+  await setActiveIds(redis, ids);
 
   return cycle;
 }
 
-/**
- * Obtener ciclos activos
- */
 async function getActiveCycles(redis) {
   if (!redis) return [];
-  
-  try {
-    const stored = await redis.get('active_cycles');
-    return stored ? JSON.parse(stored) : [];
-  } catch (error) {
-    return [];
-  }
+  return getActiveIds(redis);
 }
 
-/**
- * Obtener un ciclo por ID
- */
 async function getCycle(redis, cycleId) {
   if (!redis) return null;
-  
-  try {
-    const stored = await redis.get(cycleId);
-    return stored ? JSON.parse(stored) : null;
-  } catch (error) {
-    return null;
-  }
+  return loadCycle(redis, cycleId);
 }
 
-/**
- * Detectar ciclos pendientes que ya cumplieron 12h
- */
+async function getCyclesDetails(redis, cycleIds) {
+  const out = [];
+  for (const id of cycleIds) {
+    const c = await loadCycle(redis, id);
+    if (c) out.push(c);
+  }
+  return out;
+}
+
 async function detectPendingCycles(redis) {
   if (!redis) return [];
-  
-  const activeCycles = await getActiveCycles(redis);
+  const ids = await getActiveIds(redis);
   const now = Date.now();
   const pending = [];
-  
-  for (const cycleId of activeCycles) {
-    const cycle = await getCycle(redis, cycleId);
-    if (cycle && cycle.status === 'active' && now >= cycle.endTime) {
-      pending.push(cycle);
-    }
+  for (const id of ids) {
+    const c = await loadCycle(redis, id);
+    if (c && c.status === 'active' && now >= c.endTime) pending.push(c);
   }
-  
   return pending;
 }
 
-/**
- * Completar un ciclo con resultados
- */
 async function completeCycle(redis, cycleId, currentPrices) {
-  if (!redis) {
-    throw new Error('Redis no disponible');
-  }
-  
-  const cycle = await getCycle(redis, cycleId);
-  if (!cycle) {
-    throw new Error('Ciclo no encontrado');
-  }
-  
-  // Calcular resultados
+  if (!redis) throw new Error('Redis no disponible');
+
+  const cycle = await loadCycle(redis, cycleId);
+  if (!cycle) throw new Error(`Ciclo ${cycleId} no encontrado`);
+  if (cycle.status === 'completed') return cycle; // idempotente
+
   const results = [];
   let correct = 0;
-  
+
   for (const asset of cycle.snapshot) {
-    const current = currentPrices.find(c => c.id === asset.id);
-    
-    if (current) {
-      const actualChange = ((current.current_price - asset.current_price) / asset.current_price) * 100;
-      const predictedChange = asset.predictedChange || 0;
-      
-      // Validar predicción
-      const sameDirection = (predictedChange >= 0 && actualChange >= 0) || 
-                           (predictedChange < 0 && actualChange < 0);
-      const magnitudeSimilar = Math.abs(predictedChange - actualChange) < 15;
-      const isCorrect = sameDirection && magnitudeSimilar;
-      
-      if (isCorrect) correct++;
-      
-      results.push({
-        id: asset.id,
-        symbol: asset.symbol,
-        name: asset.name,
-        snapshotPrice: asset.current_price,
-        currentPrice: current.current_price,
-        predictedChange: predictedChange.toFixed(2),
-        actualChange: actualChange.toFixed(2),
-        classification: asset.classification,
-        boostPower: asset.boostPower,
-        correct: isCorrect,
-        error: Math.abs(predictedChange - actualChange).toFixed(2)
-      });
-    }
+    const current = currentPrices.find(p => p.id === asset.id);
+    if (!current) continue;
+
+    const actualChange    = ((current.current_price - asset.current_price) / asset.current_price) * 100;
+    const predictedChange = asset.predictedChange || 0;
+    const sameDir         = (predictedChange >= 0 && actualChange >= 0) || (predictedChange < 0 && actualChange < 0);
+    const closeEnough     = Math.abs(predictedChange - actualChange) < 15;
+    const isCorrect       = sameDir && closeEnough;
+
+    if (isCorrect) correct++;
+
+    results.push({
+      id:             asset.id,
+      symbol:         asset.symbol,
+      name:           asset.name,
+      snapshotPrice:  asset.current_price,
+      currentPrice:   current.current_price,
+      predictedChange: predictedChange.toFixed(2),
+      actualChange:   actualChange.toFixed(2),
+      classification: asset.classification,
+      boostPower:     asset.boostPower,
+      correct:        isCorrect,
+      error:          Math.abs(predictedChange - actualChange).toFixed(2)
+    });
   }
-  
-  // Calcular métricas
-  const metrics = {
-    total: results.length,
-    correct,
-    successRate: results.length > 0 ? (correct / results.length * 100).toFixed(2) : 0,
-    
-    // Por categoría
-    invertible: calculateCategoryMetrics(results, 'INVERTIBLE'),
-    apalancado: calculateCategoryMetrics(results, 'APALANCADO'),
-    ruidoso: calculateCategoryMetrics(results, 'RUIDOSO'),
-    
-    // Errores
-    avgError: calculateAvgError(results),
-    maxError: calculateMaxError(results)
-  };
-  
-  // Actualizar ciclo
-  cycle.status = 'completed';
-  cycle.results = results;
-  cycle.metrics = metrics;
+
+  cycle.status      = 'completed';
+  cycle.results     = results;
+  cycle.metrics     = buildMetrics(results);
   cycle.completedAt = Date.now();
-  
-  await redis.set(cycleId, JSON.stringify(cycle));
-  
-  // Remover de activos
-  let activeCycles = await getActiveCycles(redis);
-  activeCycles = activeCycles.filter(id => id !== cycleId);
-  await redis.set('active_cycles', JSON.stringify(activeCycles));
-  
+
+  // Guardar ciclo actualizado
+  await saveCycle(redis, cycle);
+
+  // Quitar de activos
+  const activeIds = await getActiveIds(redis);
+  await setActiveIds(redis, activeIds.filter(id => id !== cycleId));
+
   // Añadir a historial
-  const history = await getCompletedCycles(redis);
-  history.unshift(cycleId);
-  await redis.set('completed_cycles', JSON.stringify(history.slice(0, 50))); // Max 50
-  
+  const completedIds = await getCompletedIds(redis);
+  if (!completedIds.includes(cycleId)) completedIds.unshift(cycleId);
+  await setCompletedIds(redis, completedIds.slice(0, 50));
+
   return cycle;
 }
 
-/**
- * Calcular métricas por categoría
- */
-function calculateCategoryMetrics(results, category) {
-  const filtered = results.filter(r => r.classification === category);
-  if (filtered.length === 0) return { total: 0, correct: 0, successRate: 0 };
-  
-  const correct = filtered.filter(r => r.correct).length;
-  return {
-    total: filtered.length,
-    correct,
-    successRate: (correct / filtered.length * 100).toFixed(2)
-  };
-}
-
-/**
- * Calcular error promedio
- */
-function calculateAvgError(results) {
-  if (results.length === 0) return 0;
-  const sum = results.reduce((acc, r) => acc + parseFloat(r.error), 0);
-  return (sum / results.length).toFixed(2);
-}
-
-/**
- * Calcular error máximo
- */
-function calculateMaxError(results) {
-  if (results.length === 0) return 0;
-  return Math.max(...results.map(r => parseFloat(r.error))).toFixed(2);
-}
-
-/**
- * Obtener historial de ciclos completados
- */
 async function getCompletedCycles(redis) {
   if (!redis) return [];
-  
-  try {
-    const stored = await redis.get('completed_cycles');
-    return stored ? JSON.parse(stored) : [];
-  } catch (error) {
-    return [];
-  }
+  return getCompletedIds(redis);
 }
 
-/**
- * Obtener detalles de múltiples ciclos
- */
-async function getCyclesDetails(redis, cycleIds) {
-  const cycles = [];
-  
-  for (const cycleId of cycleIds) {
-    const cycle = await getCycle(redis, cycleId);
-    if (cycle) {
-      cycles.push(cycle);
-    }
-  }
-  
-  return cycles;
-}
-
-/**
- * Calcular estadísticas globales
- */
 async function getGlobalStats(redis) {
-  const completedIds = await getCompletedCycles(redis);
-  const cycles = await getCyclesDetails(redis, completedIds);
-  
+  const ids    = await getCompletedIds(redis);
+  const cycles = await getCyclesDetails(redis, ids);
+
   if (cycles.length === 0) {
-    return {
-      totalCycles: 0,
-      totalPredictions: 0,
-      avgSuccessRate: 0,
-      bestCycle: null,
-      worstCycle: null
-    };
+    return { totalCycles: 0, totalPredictions: 0, avgSuccessRate: '0.00', bestCycle: null, worstCycle: null };
   }
-  
-  const totalPredictions = cycles.reduce((sum, c) => sum + (c.metrics?.total || 0), 0);
-  const successRates = cycles.map(c => parseFloat(c.metrics?.successRate || 0));
-  const avgSuccessRate = (successRates.reduce((sum, r) => sum + r, 0) / successRates.length).toFixed(2);
-  
-  const sorted = [...cycles].sort((a, b) => 
+
+  const totalPredictions = cycles.reduce((s, c) => s + (c.metrics?.total || 0), 0);
+  const rates            = cycles.map(c => parseFloat(c.metrics?.successRate || 0));
+  const avgSuccessRate   = (rates.reduce((s, r) => s + r, 0) / rates.length).toFixed(2);
+  const sorted           = [...cycles].sort((a, b) =>
     parseFloat(b.metrics?.successRate || 0) - parseFloat(a.metrics?.successRate || 0)
   );
-  
+
   return {
     totalCycles: cycles.length,
     totalPredictions,
@@ -292,34 +239,57 @@ async function getGlobalStats(redis) {
   };
 }
 
-/**
- * Recalcular métricas con un subconjunto de resultados (excluidos fuera)
- */
 function recalculateMetrics(results) {
+  return buildMetrics(results || []);
+}
+
+// ── helpers de métricas ──────────────────────────────────────────────────────
+
+function buildMetrics(results) {
   if (!results || results.length === 0) {
-    return { total: 0, correct: 0, successRate: '0.00', avgError: '0.00', maxError: '0.00', invertible: { total: 0, correct: 0, successRate: '0.00' }, apalancado: { total: 0, correct: 0, successRate: '0.00' }, ruidoso: { total: 0, correct: 0, successRate: '0.00' } };
+    return { total: 0, correct: 0, successRate: '0.00', avgError: '0.00', maxError: '0.00',
+      invertible: { total:0, correct:0, successRate:'0.00' },
+      apalancado:  { total:0, correct:0, successRate:'0.00' },
+      ruidoso:     { total:0, correct:0, successRate:'0.00' } };
   }
   const correct = results.filter(r => r.correct).length;
   return {
-    total: results.length,
+    total:       results.length,
     correct,
     successRate: (correct / results.length * 100).toFixed(2),
-    invertible: calculateCategoryMetrics(results, 'INVERTIBLE'),
-    apalancado: calculateCategoryMetrics(results, 'APALANCADO'),
-    ruidoso: calculateCategoryMetrics(results, 'RUIDOSO'),
-    avgError: calculateAvgError(results),
-    maxError: calculateMaxError(results)
+    invertible:  catMetrics(results, 'INVERTIBLE'),
+    apalancado:  catMetrics(results, 'APALANCADO'),
+    ruidoso:     catMetrics(results, 'RUIDOSO'),
+    avgError:    avgErr(results),
+    maxError:    maxErr(results)
   };
+}
+
+function catMetrics(results, cat) {
+  const sub = results.filter(r => r.classification === cat);
+  if (!sub.length) return { total: 0, correct: 0, successRate: '0.00' };
+  const ok = sub.filter(r => r.correct).length;
+  return { total: sub.length, correct: ok, successRate: (ok / sub.length * 100).toFixed(2) };
+}
+
+function avgErr(results) {
+  if (!results.length) return '0.00';
+  return (results.reduce((s, r) => s + parseFloat(r.error), 0) / results.length).toFixed(2);
+}
+
+function maxErr(results) {
+  if (!results.length) return '0.00';
+  return Math.max(...results.map(r => parseFloat(r.error))).toFixed(2);
 }
 
 module.exports = {
   createCycle,
   getActiveCycles,
   getCycle,
+  getCyclesDetails,
   detectPendingCycles,
   completeCycle,
   getCompletedCycles,
-  getCyclesDetails,
   getGlobalStats,
   recalculateMetrics
 };
