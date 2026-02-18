@@ -1177,10 +1177,22 @@ app.get('/api/insights/keys-status', async (_req, res) => {
       gemini: !!(await getRedisKey('GEMINI_API_KEY')),
       claude: !!(await getRedisKey('ANTHROPIC_API_KEY')),
       openai: !!(await getRedisKey('OPENAI_API_KEY')),
-      groq:   !!(await getRedisKey('GROQ_API_KEY'))
+      groq: !!(await getRedisKey('GROQ_API_KEY')),
+      mistral: !!(await getRedisKey('MISTRAL_API_KEY')),
+      cohere: !!(await getRedisKey('COHERE_API_KEY')),
+      cerebras: !!(await getRedisKey('CEREBRAS_API_KEY'))
+    };
+    const usageCurrentCycle = {
+      gemini: 'No disponible',
+      claude: 'No disponible',
+      openai: 'No disponible',
+      groq: 'No disponible',
+      mistral: 'No disponible',
+      cohere: 'No disponible',
+      cerebras: 'No disponible'
     };
     const configured = Object.values(keys).filter(Boolean).length;
-    res.json({ success: true, keys, configured, total: 4 });
+    res.json({ success: true, keys, configured, total: 7, usageCurrentCycle });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -1210,7 +1222,10 @@ app.post('/api/insights/analyze', async (req, res) => {
       gemini: await getRedisKey('GEMINI_API_KEY'),
       claude: await getRedisKey('ANTHROPIC_API_KEY'),
       openai: await getRedisKey('OPENAI_API_KEY'),
-      groq:   await getRedisKey('GROQ_API_KEY')
+      groq: await getRedisKey('GROQ_API_KEY'),
+      mistral: await getRedisKey('MISTRAL_API_KEY'),
+      cohere: await getRedisKey('COHERE_API_KEY'),
+      cerebras: await getRedisKey('CEREBRAS_API_KEY')
     };
     
     const configuredCount = Object.values(apiKeys).filter(Boolean).length;
