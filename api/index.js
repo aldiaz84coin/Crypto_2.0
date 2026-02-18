@@ -584,8 +584,7 @@ app.post('/api/config/api-key', async (req, res) => {
     const allowed = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN',
                      'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY',
                      'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY',
-                     'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY',
-                     'MISTRAL_API_KEY','COHERE_API_KEY','CEREBRAS_API_KEY'];
+                     'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY'];
     if (!allowed.includes(apiName)) return res.status(400).json({ success: false, error: 'API name no permitida' });
     await redisSet(`apikey:${apiName}`, apiKey?.trim() || '');
     res.json({ success: true, message: `Key guardada para ${apiName}` });
@@ -597,8 +596,7 @@ app.get('/api/config/api-keys', async (_req, res) => {
     const names = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN',
                    'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY',
                    'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY',
-                   'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY',
-                   'MISTRAL_API_KEY','COHERE_API_KEY','CEREBRAS_API_KEY'];
+                   'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY'];
     const keys = {};
     for (const n of names) {
       const v = await redisGet(`apikey:${n}`);
@@ -1124,27 +1122,48 @@ app.get('/api/cycles/:cycleId/report', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 // ── GET /api/cycles/:cycleId/enhanced-report ───────────────────────────────
-// Generar informe mejorado con análisis de oportunidades perdidas
+// Informe paramétrico completo: factores por activo, predicción vs real,
+// contexto de mercado, tendencias, parámetros compra/venta y conclusiones LLM
 app.get('/api/cycles/:cycleId/enhanced-report', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
     const cycle = await cyclesManager.getCycle(redis, req.params.cycleId);
     if (!cycle)                       return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
     if (cycle.status !== 'completed') return res.status(400).json({ success: false, error: 'Ciclo aún no completado' });
-    
-    // Obtener config del modo del ciclo
+
     const mode   = cycle.mode || 'normal';
     const config = await getConfig(mode);
-    
-    const doc    = enhancedReportGen.generateEnhancedReport(cycle, cycle.fullSnapshot || cycle.snapshot, config);
+
+    // API keys de LLMs (para "Los 3 Sabios" dentro del informe)
+    const apiKeys = {
+      gemini:   await getRedisKey('GEMINI_API_KEY'),
+      claude:   await getRedisKey('ANTHROPIC_API_KEY'),
+      openai:   await getRedisKey('OPENAI_API_KEY'),
+      groq:     await getRedisKey('GROQ_API_KEY'),
+      mistral:  await getRedisKey('MISTRAL_API_KEY'),
+      cohere:   await getRedisKey('COHERE_API_KEY'),
+      cerebras: await getRedisKey('CEREBRAS_API_KEY'),
+    };
+
+    // Configuración del módulo de inversión durante el ciclo
+    const investConfig = await getInvestConfig();
+
+    // generateEnhancedReport ahora es async (llama a LLMs internamente)
+    const doc    = await enhancedReportGen.generateEnhancedReport(
+      cycle,
+      cycle.fullSnapshot || cycle.snapshot,
+      config,
+      apiKeys,
+      investConfig
+    );
     const buffer = await Packer.toBuffer(doc);
-    
+
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
-    res.setHeader('Content-Disposition', `attachment; filename=Informe_Mejorado_${req.params.cycleId}.docx`);
+    res.setHeader('Content-Disposition', `attachment; filename=Informe_${mode}_${req.params.cycleId}.docx`);
     res.send(buffer);
-  } catch(e) { 
-    console.error('enhanced-report error:', e.message);
-    res.status(500).json({ success: false, error: e.message }); 
+  } catch(e) {
+    console.error('enhanced-report error:', e.message, e.stack);
+    res.status(500).json({ success: false, error: e.message });
   }
 });
 // ════════════════════════════════════════════════════════════════════════════
@@ -1158,13 +1177,10 @@ app.get('/api/insights/keys-status', async (_req, res) => {
       gemini: !!(await getRedisKey('GEMINI_API_KEY')),
       claude: !!(await getRedisKey('ANTHROPIC_API_KEY')),
       openai: !!(await getRedisKey('OPENAI_API_KEY')),
-      groq:     !!(await getRedisKey('GROQ_API_KEY')),
-      mistral:  !!(await getRedisKey('MISTRAL_API_KEY')),
-      cohere:   !!(await getRedisKey('COHERE_API_KEY')),
-      cerebras: !!(await getRedisKey('CEREBRAS_API_KEY')),
+      groq:   !!(await getRedisKey('GROQ_API_KEY'))
     };
     const configured = Object.values(keys).filter(Boolean).length;
-    res.json({ success: true, keys, configured, total: 7 });
+    res.json({ success: true, keys, configured, total: 4 });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -1194,10 +1210,7 @@ app.post('/api/insights/analyze', async (req, res) => {
       gemini: await getRedisKey('GEMINI_API_KEY'),
       claude: await getRedisKey('ANTHROPIC_API_KEY'),
       openai: await getRedisKey('OPENAI_API_KEY'),
-      groq:     await getRedisKey('GROQ_API_KEY'),
-      mistral:  await getRedisKey('MISTRAL_API_KEY'),
-      cohere:   await getRedisKey('COHERE_API_KEY'),
-      cerebras: await getRedisKey('CEREBRAS_API_KEY'),
+      groq:   await getRedisKey('GROQ_API_KEY')
     };
     
     const configuredCount = Object.values(apiKeys).filter(Boolean).length;
