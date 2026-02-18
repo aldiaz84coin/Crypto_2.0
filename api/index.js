@@ -1179,14 +1179,8 @@ app.get('/api/insights/keys-status', async (_req, res) => {
       openai: !!(await getRedisKey('OPENAI_API_KEY')),
       groq:   !!(await getRedisKey('GROQ_API_KEY'))
     };
-    const usageCurrentCycle = {
-      gemini: 'No disponible',
-      claude: 'No disponible',
-      openai: 'No disponible',
-      groq: 'No disponible'
-    };
     const configured = Object.values(keys).filter(Boolean).length;
-    res.json({ success: true, keys, configured, total: 4, usageCurrentCycle });
+    res.json({ success: true, keys, configured, total: 4 });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
   }
