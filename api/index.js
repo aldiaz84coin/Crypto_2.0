@@ -584,7 +584,8 @@ app.post('/api/config/api-key', async (req, res) => {
     const allowed = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN',
                      'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY',
                      'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY',
-                     'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY'];
+                     'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY',
+                     'MISTRAL_API_KEY','COHERE_API_KEY','CEREBRAS_API_KEY'];
     if (!allowed.includes(apiName)) return res.status(400).json({ success: false, error: 'API name no permitida' });
     await redisSet(`apikey:${apiName}`, apiKey?.trim() || '');
     res.json({ success: true, message: `Key guardada para ${apiName}` });
@@ -596,7 +597,8 @@ app.get('/api/config/api-keys', async (_req, res) => {
     const names = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN',
                    'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY',
                    'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY',
-                   'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY'];
+                   'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY',
+                   'MISTRAL_API_KEY','COHERE_API_KEY','CEREBRAS_API_KEY'];
     const keys = {};
     for (const n of names) {
       const v = await redisGet(`apikey:${n}`);
@@ -1156,10 +1158,13 @@ app.get('/api/insights/keys-status', async (_req, res) => {
       gemini: !!(await getRedisKey('GEMINI_API_KEY')),
       claude: !!(await getRedisKey('ANTHROPIC_API_KEY')),
       openai: !!(await getRedisKey('OPENAI_API_KEY')),
-      groq:   !!(await getRedisKey('GROQ_API_KEY'))
+      groq:     !!(await getRedisKey('GROQ_API_KEY')),
+      mistral:  !!(await getRedisKey('MISTRAL_API_KEY')),
+      cohere:   !!(await getRedisKey('COHERE_API_KEY')),
+      cerebras: !!(await getRedisKey('CEREBRAS_API_KEY')),
     };
     const configured = Object.values(keys).filter(Boolean).length;
-    res.json({ success: true, keys, configured, total: 4 });
+    res.json({ success: true, keys, configured, total: 7 });
   } catch(e) {
     res.status(500).json({ success: false, error: e.message });
   }
@@ -1189,7 +1194,10 @@ app.post('/api/insights/analyze', async (req, res) => {
       gemini: await getRedisKey('GEMINI_API_KEY'),
       claude: await getRedisKey('ANTHROPIC_API_KEY'),
       openai: await getRedisKey('OPENAI_API_KEY'),
-      groq:   await getRedisKey('GROQ_API_KEY')
+      groq:     await getRedisKey('GROQ_API_KEY'),
+      mistral:  await getRedisKey('MISTRAL_API_KEY'),
+      cohere:   await getRedisKey('COHERE_API_KEY'),
+      cerebras: await getRedisKey('CEREBRAS_API_KEY'),
     };
     
     const configuredCount = Object.values(apiKeys).filter(Boolean).length;
