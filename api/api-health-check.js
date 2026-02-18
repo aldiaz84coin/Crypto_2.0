@@ -64,32 +64,6 @@ async function checkAllAPIs(redis) {
     santiment:     resolveCheck(r17, 'Santiment',               'paid',     ['Social Dominance','Dev Activity'])
   };
 
-  const limitsByApi = {
-    coingecko: 'Plan público con límites variables por IP',
-    alternative: 'Sin key; uso público compartido',
-    reddit: 'Rate limit de Reddit para tráfico anónimo',
-    blockchain: 'Endpoint público con límites no documentados',
-    cryptocompare: 'Free tier con límite diario',
-    newsapi: 'Free: 100 req/día',
-    coindesk: 'RSS público',
-    cointelegraph: 'RSS público',
-    lunarcrush: 'Gratis limitado / planes de pago',
-    santiment: 'Según plan contratado',
-    github: 'Rate limit REST según autenticación',
-    serpapi: 'Cuota mensual según plan',
-    twitter: 'Cuota por plan X API v2',
-    glassnode: 'Cuota según plan contratado',
-    cryptoquant: 'Cuota según plan contratado',
-    whaleAlert: 'Cuota según plan contratado',
-    telegram: 'Limitado por Bot API'
-  };
-
-  Object.entries(apis).forEach(([key, api]) => {
-    const limit = limitsByApi[key] || 'No disponible';
-    const cycleUsage = api.currentValue || 'No disponible';
-    apis[key] = { ...api, limits: limit, currentCycleUsage: cycleUsage };
-  });
-
   const summary = { total: 17, available: 0, configured: 0, errors: 0 };
   Object.values(apis).forEach(a => {
     if (a.available) summary.available++;
