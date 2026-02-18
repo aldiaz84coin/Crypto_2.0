@@ -296,14 +296,40 @@
   <div id="content-analysis" class="tab-content">
     <div class="flex justify-between items-center mb-4">
       <h2 class="text-xl font-semibold">🔬 Análisis de Simulaciones</h2>
-      <button onclick="loadAnalysis()" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold">🔄 Analizar</button>
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-gray-500">Modelo:</span>
+        <select id="analysis-mode-select" onchange="switchAnalysisMode(this.value)" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
+          <option value="normal">📊 Generalista</option>
+          <option value="speculative">🎯 Especulativo</option>
+        </select>
+        <button onclick="loadAnalysis()" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold">🔄 Analizar</button>
+      </div>
     </div>
-    <div class="bg-gray-900 border border-blue-900 rounded-xl p-4 mb-5 text-sm">
-      <p class="text-blue-400 font-semibold mb-1">📌 Cómo funciona</p>
-      <p class="text-gray-400">Solo simulaciones <strong class="text-white">≥6 horas</strong> calibran el algoritmo. Las ejecuciones cortas (&lt;6h) validan la tendencia proporcionalmente pero <strong class="text-yellow-400">no corrigen los pesos</strong>. Las predicciones se escalan automáticamente a la ventana temporal del ciclo.</p>
+    <div id="analysis-mode-info" class="bg-blue-950 border border-blue-800 rounded-lg p-3 mb-4">
+      <p class="text-sm text-blue-300">Analizando ciclos del modelo <span id="analysis-mode-label" class="font-bold">Generalista</span></p>
+    </div>
+    <div class="bg-gray-900 border border-gray-700 rounded-xl p-4 mb-5 text-sm">
+      <p class="text-gray-400 font-semibold mb-1">📌 Cómo funciona</p>
+      <p class="text-gray-500">Solo simulaciones <strong class="text-white">≥6 horas</strong> calibran el algoritmo. Las ejecuciones cortas (&lt;6h) validan la tendencia proporcionalmente pero <strong class="text-yellow-400">no corrigen los pesos</strong>. Las predicciones se escalan automáticamente a la ventana temporal del ciclo.</p>
     </div>
     <div id="analysis-content">
       <p class="text-gray-500 text-sm">Haz click en "Analizar" para procesar los resultados.</p>
+    </div>
+
+    <!-- ══ INSIGHTS CON 4 LLMs ═══════════════════════════════════════════════ -->
+    <div class="mt-8 pt-6 border-t border-gray-800">
+      <div class="flex justify-between items-center mb-4">
+        <div>
+          <h3 class="text-lg font-bold text-purple-400">🧠 Insights con 4 LLMs — "3 Sabios Recomiendan"</h3>
+          <p class="text-xs text-gray-500 mt-1">Analiza ciclos históricos con Gemini, Claude, GPT-4 y Llama para obtener recomendaciones de consenso</p>
+        </div>
+        <button onclick="openInsightsModal()" class="bg-purple-700 hover:bg-purple-600 px-4 py-2 rounded-lg text-sm font-semibold">
+          🚀 Analizar con LLMs
+        </button>
+      </div>
+      <div id="insights-result" class="hidden">
+        <!-- El resultado del análisis se renderiza aquí -->
+      </div>
     </div>
   </div>
 
@@ -323,6 +349,65 @@
       <div><h3 class="text-sm font-semibold text-yellow-400 mb-2">🟡 FREEMIUM</h3><div id="apis-freemium" class="space-y-2"></div></div>
       <div><h3 class="text-sm font-semibold text-orange-400 mb-2">🟠 PAID</h3><div id="apis-paid" class="space-y-2"></div></div>
       <div><h3 class="text-sm font-semibold text-red-400 mb-2">🔴 PREMIUM</h3><div id="apis-premium" class="space-y-2"></div></div>
+      
+      <!-- LLMs para Insights -->
+      <div>
+        <h3 class="text-sm font-semibold text-purple-400 mb-2">🧠 LLMs para Insights (Opcional)</h3>
+        <p class="text-xs text-gray-500 mb-3">Configura al menos 2 APIs para usar "3 Sabios Recomiendan"</p>
+        <div class="space-y-3">
+          <!-- Gemini -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold">🔷 Google Gemini</span>
+              <span class="pill bg-blue-950 text-blue-400 text-xs">FREE</span>
+            </div>
+            <input type="password" id="api-key-gemini" placeholder="AIza..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
+            <div class="flex gap-2">
+              <button onclick="saveAPIKey('GEMINI_API_KEY', 'api-key-gemini')" class="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
+              <a href="https://aistudio.google.com/apikey" target="_blank" class="text-xs text-blue-400 hover:underline flex items-center">Obtener key →</a>
+            </div>
+          </div>
+          
+          <!-- Claude -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold">🟣 Anthropic Claude</span>
+              <span class="pill bg-purple-950 text-purple-400 text-xs">PAID</span>
+            </div>
+            <input type="password" id="api-key-claude" placeholder="sk-ant-..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
+            <div class="flex gap-2">
+              <button onclick="saveAPIKey('ANTHROPIC_API_KEY', 'api-key-claude')" class="bg-purple-700 hover:bg-purple-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-xs text-purple-400 hover:underline flex items-center">Obtener key →</a>
+            </div>
+          </div>
+          
+          <!-- OpenAI -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold">🟢 OpenAI GPT-4</span>
+              <span class="pill bg-green-950 text-green-400 text-xs">PAID</span>
+            </div>
+            <input type="password" id="api-key-openai" placeholder="sk-proj-..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
+            <div class="flex gap-2">
+              <button onclick="saveAPIKey('OPENAI_API_KEY', 'api-key-openai')" class="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
+              <a href="https://platform.openai.com/api-keys" target="_blank" class="text-xs text-green-400 hover:underline flex items-center">Obtener key →</a>
+            </div>
+          </div>
+          
+          <!-- Groq Llama -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold">🟠 Groq Llama</span>
+              <span class="pill bg-orange-950 text-orange-400 text-xs">FREE</span>
+            </div>
+            <input type="password" id="api-key-groq" placeholder="gsk_..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
+            <div class="flex gap-2">
+              <button onclick="saveAPIKey('GROQ_API_KEY', 'api-key-groq')" class="bg-orange-700 hover:bg-orange-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
+              <a href="https://console.groq.com/keys" target="_blank" class="text-xs text-orange-400 hover:underline flex items-center">Obtener key →</a>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -788,7 +873,10 @@ function setTab(tab) {
   if (btnEl) btnEl.classList.add('tab-active','text-white');
   if (tab === 'validation') loadValidation();
   if (tab === 'status')     loadAPIStatus();
-  if (tab === 'analysis')   loadAnalysis();
+  if (tab === 'analysis')   { 
+    switchAnalysisMode(currentMode); 
+    loadAnalysis(); 
+  }
   if (tab === 'invest')     loadInvestData();
   if (tab === 'pump')       { loadPumpSettings(); loadPumpScan(); }
   if (tab === 'config')     switchConfigModel(configEditMode || 'normal');
@@ -1352,7 +1440,7 @@ async function completeCycle(cycleId) {
 async function loadCompletedCycles() {
   const div = document.getElementById('completed-cycles');
   try {
-    const r=await fetch('/api/cycles/history'); const d=await r.json();
+    const r=await fetch(`/api/cycles/history?mode=${currentMode}`); const d=await r.json();
     if(!d.success||d.cycles.length===0){div.innerHTML='<p class="text-gray-500 text-sm">Sin ciclos completados.</p>';return;}
     div.innerHTML='';
     d.cycles.slice(0,10).forEach(c => {
@@ -1375,6 +1463,7 @@ async function loadCompletedCycles() {
             </div>
             <button onclick="toggleDetail('${c.id}')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">📋 Ver</button>
             <button onclick="downloadReport('${c.id}')" class="bg-blue-900 hover:bg-blue-800 px-3 py-1 rounded text-xs">📄 Word</button>
+            ${sig ? `<button onclick="downloadEnhancedReport('${c.id}')" class="bg-green-900 hover:bg-green-800 px-3 py-1 rounded text-xs" title="Informe con análisis de oportunidades perdidas">📊 Mejorado</button>` : ''}
           </div>
         </div>
         <div id="cdetail-${c.id}" class="hidden mt-3 border-t border-gray-800 pt-3">
@@ -1409,13 +1498,20 @@ function toggleDetail(id) { document.getElementById('cdetail-'+id)?.classList.to
 async function toggleExclude(cycleId, assetId) {
   try {
     const r=await fetch(`/api/cycles/${cycleId}/results/${assetId}/toggle-exclude`,{method:'POST'}); const d=await r.json();
-    if(d.success) await loadCompletedCycles();
+    if(d.success) {
+      await loadCompletedCycles();
+      await loadGlobalStats();
+      // Si la pestaña análisis está abierta, recargarla también
+      if (document.getElementById('content-analysis')?.style.display !== 'none') {
+        await loadAnalysis();
+      }
+    }
   } catch(e){}
 }
 async function loadGlobalStats() {
   const div=document.getElementById('global-stats');
   try {
-    const r=await fetch('/api/cycles/stats/global'); const d=await r.json();
+    const r=await fetch(`/api/cycles/stats/global?mode=${currentMode}`); const d=await r.json();
     if(!d.success) return;
     const s=d.stats;
     div.innerHTML=`<div class="grid grid-cols-3 gap-3">
@@ -1426,6 +1522,7 @@ async function loadGlobalStats() {
   } catch(e){}
 }
 function downloadReport(id) { window.location.href='/api/cycles/'+id+'/report'; }
+function downloadEnhancedReport(id) { window.location.href='/api/cycles/'+id+'/enhanced-report'; }
 
 // Auto-completar ciclos pendientes
 setInterval(async ()=>{
@@ -1441,6 +1538,23 @@ setInterval(async ()=>{
 // ═══════════════════════════════════════════════════════════
 // ANÁLISIS DE SIMULACIONES
 // ═══════════════════════════════════════════════════════════
+
+function switchAnalysisMode(mode) {
+  currentMode = mode;
+  const label = document.getElementById('analysis-mode-label');
+  const info  = document.getElementById('analysis-mode-info');
+  if (mode === 'speculative') {
+    label.textContent = 'Especulativo';
+    info.className = 'bg-yellow-950 border border-yellow-800 rounded-lg p-3 mb-4';
+    info.querySelector('p').className = 'text-sm text-yellow-300';
+  } else {
+    label.textContent = 'Generalista';
+    info.className = 'bg-blue-950 border border-blue-800 rounded-lg p-3 mb-4';
+    info.querySelector('p').className = 'text-sm text-blue-300';
+  }
+  document.getElementById('analysis-mode-select').value = mode;
+}
+
 async function loadAnalysis() {
   const div = document.getElementById('analysis-content');
   div.innerHTML = '<p class="text-gray-400 text-sm">⏳ Analizando simulaciones...</p>';
@@ -1464,10 +1578,18 @@ function renderAnalysis(d) {
   }
 
   const accColor = parseFloat(d.overallAccuracy) > 60 ? 'text-green-400' : parseFloat(d.overallAccuracy) > 40 ? 'text-yellow-400' : 'text-red-400';
+  const modeLabel = d.mode === 'speculative' ? 'Especulativo' : 'Generalista';
+  const modeColor = d.mode === 'speculative' ? 'yellow' : 'blue';
+  
   let html = `
+    <div class="bg-gray-900 border border-${modeColor}-900 rounded-xl p-4 mb-4">
+      <p class="text-sm text-gray-400 mb-2">📋 Fuente de datos</p>
+      <p class="text-sm text-${modeColor}-300"><span class="font-bold">${d.cyclesThisMode || 0}</span> ciclos completados del modelo <span class="font-bold">${modeLabel}</span> (${d.significantCount} significativos, ${d.testingCount} de testing)</p>
+      <p class="text-xs text-gray-500 mt-1">${d.note || ''}</p>
+    </div>
     <div class="grid grid-cols-3 gap-3 mb-5">
       <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold ${accColor}">${d.overallAccuracy}%</div><div class="text-xs text-gray-500 mt-1">Accuracy Global</div></div>
-      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-blue-400">${d.significantCount}</div><div class="text-xs text-gray-500 mt-1">Significativas (≥6h)</div></div>
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-${modeColor}-400">${d.significantCount}</div><div class="text-xs text-gray-500 mt-1">Significativas (≥6h)</div></div>
       <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-gray-400">${d.testingCount}</div><div class="text-xs text-gray-500 mt-1">Testing (&lt;6h)</div></div>
     </div>
     <div class="grid grid-cols-3 gap-3 mb-5">`;
@@ -1516,12 +1638,25 @@ function renderAnalysis(d) {
 }
 
 async function applySuggestion() {
-  if (!confirm('¿Aplicar la configuración sugerida por el análisis de simulaciones?')) return;
+  if (!confirm(`¿Aplicar la configuración sugerida al modelo ${currentMode === 'speculative' ? 'Especulativo' : 'Generalista'}?`)) return;
   try {
-    const r = await fetch('/api/simulations/apply-suggestion',{method:'POST'}); const d = await r.json();
-    if (d.success) { config=d.applied; applyConfigToUI(); alert('✅ Configuración aplicada.'); loadAnalysis(); }
-    else alert('❌ '+d.error);
-  } catch(e){ alert('❌ '+e.message); }
+    const r = await fetch('/api/simulations/apply-suggestion', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mode: currentMode })
+    });
+    const d = await r.json();
+    if (d.success) { 
+      config = d.applied; 
+      applyConfigToUI(); 
+      alert(`✅ Configuración aplicada al modelo ${currentMode === 'speculative' ? 'Especulativo' : 'Generalista'}`); 
+      loadAnalysis(); 
+    } else {
+      alert('❌ ' + d.error);
+    }
+  } catch(e) { 
+    alert('❌ ' + e.message); 
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2664,6 +2799,318 @@ async function addPumpAssetToCycleFromDetail() {
   closeModal('modal-pump-asset-detail');
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// INSIGHTS CON 4 LLMs
+// ═══════════════════════════════════════════════════════════════
+
+let selectedCyclesForInsights = [];
+let currentInsightsResult = null;
+
+async function openInsightsModal() {
+  showModal('modal-insights');
+  selectedCyclesForInsights = [];
+  document.getElementById('btn-run-insights').disabled = true;
+  
+  // Verificar estado de APIs
+  try {
+    const r = await fetch('/api/insights/keys-status');
+    const d = await r.json();
+    const statusDiv = document.getElementById('insights-api-status');
+    if (d.success) {
+      const badges = [
+        d.keys.gemini ? '✅ Gemini' : '❌ Gemini',
+        d.keys.claude ? '✅ Claude' : '❌ Claude',
+        d.keys.openai ? '✅ GPT-4' : '❌ GPT-4',
+        d.keys.groq   ? '✅ Llama'  : '❌ Llama'
+      ].join(' · ');
+      statusDiv.innerHTML = `<p class="text-sm ${d.configured >= 2 ? 'text-green-400' : 'text-red-400'}">${badges} (${d.configured}/4 configuradas)</p>
+        ${d.configured < 2 ? '<p class="text-xs text-yellow-400 mt-1">⚠️ Se recomienda al menos 2 APIs configuradas. Ve a la pestaña APIs para añadir keys.</p>' : ''}`;
+    }
+  } catch(e) {
+    console.error('Error verificando APIs:', e);
+  }
+  
+  // Cargar ciclos significativos del modo actual
+  await loadInsightsCycles();
+}
+
+async function loadInsightsCycles() {
+  const div = document.getElementById('insights-cycles-list');
+  try {
+    const r = await fetch(`/api/cycles/history?mode=${currentMode}`);
+    const d = await r.json();
+    if (!d.success || d.cycles.length === 0) {
+      div.innerHTML = '<p class="text-gray-500 text-sm">Sin ciclos completados en este modo.</p>';
+      return;
+    }
+    
+    // Filtrar solo significativos (≥6h)
+    const significant = d.cycles.filter(c => (c.durationMs || 0) >= 21600000);
+    if (significant.length === 0) {
+      div.innerHTML = '<p class="text-gray-500 text-sm">Sin ciclos significativos (≥6h) en este modo.</p>';
+      return;
+    }
+    
+    div.innerHTML = '<div class="space-y-2"></div>';
+    const container = div.querySelector('div');
+    
+    significant.slice(0, 20).forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'bg-gray-900 border border-gray-700 rounded-lg p-3 cursor-pointer hover:border-purple-600 transition-colors';
+      card.innerHTML = `
+        <div class="flex items-center gap-3">
+          <input type="checkbox" id="cycle-${c.id}" class="w-4 h-4" onchange="toggleCycleSelection('${c.id}')">
+          <label for="cycle-${c.id}" class="flex-1 cursor-pointer text-sm">
+            <div class="flex justify-between items-center">
+              <span class="font-semibold">${new Date(c.completedAt).toLocaleDateString('es-ES')} ${new Date(c.completedAt).toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit'})}</span>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-500">${c.snapshot?.length || 0} activos</span>
+                <span class="text-xs font-bold ${parseFloat(c.metrics?.successRate || 0) > 60 ? 'text-green-400' : parseFloat(c.metrics?.successRate || 0) > 40 ? 'text-yellow-400' : 'text-red-400'}">${c.metrics?.successRate || '0'}%</span>
+              </div>
+            </div>
+            <p class="text-xs text-gray-600 mt-0.5">${fmtDur(c.durationMs || 0)} · ${c.metrics?.correct || 0}/${c.metrics?.total || 0} correctas</p>
+          </label>
+        </div>
+      `;
+      container.appendChild(card);
+    });
+    
+  } catch(e) {
+    div.innerHTML = `<p class="text-red-400 text-sm">Error: ${e.message}</p>`;
+  }
+}
+
+function toggleCycleSelection(cycleId) {
+  const checkbox = document.getElementById('cycle-' + cycleId);
+  if (checkbox.checked) {
+    if (!selectedCyclesForInsights.includes(cycleId)) {
+      selectedCyclesForInsights.push(cycleId);
+    }
+  } else {
+    selectedCyclesForInsights = selectedCyclesForInsights.filter(id => id !== cycleId);
+  }
+  
+  // Habilitar botón si hay al menos 1 ciclo seleccionado
+  document.getElementById('btn-run-insights').disabled = selectedCyclesForInsights.length === 0;
+}
+
+async function runInsightsAnalysis() {
+  if (selectedCyclesForInsights.length === 0) {
+    alert('Selecciona al menos 1 ciclo para analizar');
+    return;
+  }
+  
+  const btn = document.getElementById('btn-run-insights');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Analizando con LLMs... (30-60s)';
+  
+  const resultDiv = document.getElementById('insights-modal-result');
+  resultDiv.classList.remove('hidden');
+  resultDiv.innerHTML = `
+    <div class="bg-gray-800 border border-purple-700 rounded-xl p-6 text-center">
+      <p class="text-purple-400 text-lg font-semibold mb-2">🧠 Consultando a los 4 LLMs...</p>
+      <p class="text-xs text-gray-500">Gemini · Claude · GPT-4 · Llama</p>
+      <div class="mt-4">
+        <div class="animate-pulse flex justify-center gap-2">
+          <div class="h-3 w-3 bg-purple-500 rounded-full"></div>
+          <div class="h-3 w-3 bg-purple-500 rounded-full animation-delay-200"></div>
+          <div class="h-3 w-3 bg-purple-500 rounded-full animation-delay-400"></div>
+        </div>
+      </div>
+      <p class="text-xs text-gray-600 mt-3">Esto puede tardar 30-60 segundos...</p>
+    </div>
+  `;
+  
+  try {
+    const r = await fetch('/api/insights/analyze', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ cycleIds: selectedCyclesForInsights, mode: currentMode })
+    });
+    
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    
+    currentInsightsResult = d;
+    renderInsightsResult(d);
+    
+  } catch(e) {
+    resultDiv.innerHTML = `<div class="bg-red-950 border border-red-800 rounded-xl p-4">
+      <p class="text-red-400 font-semibold">❌ Error en el análisis</p>
+      <p class="text-xs text-gray-400 mt-1">${e.message}</p>
+    </div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+function renderInsightsResult(data) {
+  const div = document.getElementById('insights-modal-result');
+  const responses = data.responses;
+  const consensus = data.consensus;
+  
+  // Contar modelos exitosos
+  const successful = Object.values(responses).filter(r => r.success);
+  const failed = Object.values(responses).filter(r => !r.success);
+  
+  let html = `
+    <div class="bg-gray-800 border border-purple-700 rounded-xl p-6">
+      <div class="flex justify-between items-center mb-4">
+        <h4 class="text-lg font-bold text-purple-400">📊 Resultados del Análisis</h4>
+        <div class="text-sm text-gray-400">${data.cyclesAnalyzed} ciclos · ${successful.length}/4 modelos exitosos</div>
+      </div>
+      
+      <!-- Tabla comparativa de respuestas -->
+      <div class="overflow-x-auto mb-6">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-900">
+            <tr>
+              <th class="px-3 py-2 text-left text-gray-400">Modelo</th>
+              <th class="px-3 py-2 text-left text-gray-400">Estado</th>
+              <th class="px-3 py-2 text-left text-gray-400">Evaluación</th>
+              <th class="px-3 py-2 text-left text-gray-400">Impacto Esperado</th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-700">
+  `;
+  
+  // Renderizar cada modelo
+  ['gemini', 'claude', 'openai', 'llama'].forEach(model => {
+    const r = responses[model];
+    const icon = { gemini: '🔷', claude: '🟣', openai: '🟢', llama: '🟠' }[model];
+    const name = { gemini: 'Gemini', claude: 'Claude', openai: 'GPT-4', llama: 'Llama' }[model];
+    
+    if (r.success) {
+      html += `
+        <tr class="hover:bg-gray-900/50">
+          <td class="px-3 py-3 font-semibold">${icon} ${name}</td>
+          <td class="px-3 py-3"><span class="pill bg-green-900 text-green-400 text-xs">✓ Exitoso</span></td>
+          <td class="px-3 py-3 text-xs text-gray-300">${(r.assessment || '').slice(0, 80)}${(r.assessment || '').length > 80 ? '...' : ''}</td>
+          <td class="px-3 py-3 text-xs text-blue-300">${(r.expectedImpact || '').slice(0, 60)}</td>
+        </tr>
+      `;
+    } else {
+      html += `
+        <tr class="hover:bg-gray-900/50 opacity-50">
+          <td class="px-3 py-3 font-semibold">${icon} ${name}</td>
+          <td class="px-3 py-3"><span class="pill bg-red-900 text-red-400 text-xs">✗ Error</span></td>
+          <td class="px-3 py-3 text-xs text-gray-500" colspan="2">${r.error || 'No disponible'}</td>
+        </tr>
+      `;
+    }
+  });
+  
+  html += `
+          </tbody>
+        </table>
+      </div>
+  `;
+  
+  // Consenso
+  if (consensus.hasConsensus) {
+    html += `
+      <div class="bg-green-950/30 border border-green-800 rounded-xl p-5">
+        <div class="flex justify-between items-center mb-3">
+          <h5 class="text-lg font-bold text-green-400">✨ Consenso Calculado</h5>
+          <button onclick="applyInsightsConsensus()" class="bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-semibold">
+            ✓ Aplicar Consenso
+          </button>
+        </div>
+        <p class="text-xs text-gray-400 mb-3">${consensus.message}</p>
+        
+        <!-- Ajustes sugeridos -->
+        <div class="grid grid-cols-2 gap-3">
+    `;
+    
+    // Renderizar ajustes del consenso
+    const categories = [
+      { key: 'metaWeights', label: '⚖️ Meta-ponderaciones', color: 'blue' },
+      { key: 'classification', label: '🏷️ Clasificación', color: 'yellow' },
+      { key: 'prediction', label: '🎯 Predicción', color: 'green' },
+      { key: 'potentialWeights', label: '📈 Potencial', color: 'purple' },
+      { key: 'resistanceWeights', label: '📉 Resistencia', color: 'red' }
+    ];
+    
+    categories.forEach(cat => {
+      const adjustments = consensus.consensus[cat.key];
+      if (adjustments && Object.keys(adjustments).length > 0) {
+        html += `
+          <div class="bg-gray-900 border border-${cat.color}-900 rounded-lg p-3">
+            <p class="text-sm font-semibold text-${cat.color}-400 mb-2">${cat.label}</p>
+            <div class="space-y-1">
+        `;
+        Object.entries(adjustments).forEach(([k, v]) => {
+          html += `<p class="text-xs text-gray-300"><span class="text-gray-500">${k}:</span> <span class="font-bold mono">${v}</span></p>`;
+        });
+        html += `
+            </div>
+          </div>
+        `;
+      }
+    });
+    
+    html += `
+        </div>
+      </div>
+    `;
+  } else {
+    html += `
+      <div class="bg-yellow-950/30 border border-yellow-800 rounded-xl p-4">
+        <p class="text-yellow-400 font-semibold">⚠️ No se pudo calcular consenso</p>
+        <p class="text-xs text-gray-400 mt-1">${consensus.message}</p>
+      </div>
+    `;
+  }
+  
+  html += `
+    </div>
+  `;
+  
+  div.innerHTML = html;
+  
+  // También mostrar en la página principal de análisis
+  document.getElementById('insights-result').classList.remove('hidden');
+  document.getElementById('insights-result').innerHTML = html;
+}
+
+async function applyInsightsConsensus() {
+  if (!currentInsightsResult || !currentInsightsResult.consensus?.hasConsensus) {
+    alert('No hay consenso disponible para aplicar');
+    return;
+  }
+  
+  if (!confirm(`¿Aplicar el consenso de ${currentInsightsResult.consensus.modelsUsed} modelos al algoritmo ${currentMode === 'speculative' ? 'Especulativo' : 'Generalista'}?\n\nEsto sobrescribirá la configuración actual.`)) {
+    return;
+  }
+  
+  try {
+    const r = await fetch('/api/insights/apply-consensus', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ 
+        consensus: currentInsightsResult.consensus.consensus, 
+        mode: currentMode 
+      })
+    });
+    
+    const d = await r.json();
+    if (d.success) {
+      config = d.applied;
+      applyConfigToUI();
+      buildFactorSliders();
+      alert(`✅ ${d.message}\n\nLa configuración ha sido actualizada. Puedes revisarla en la pestaña Config.`);
+      closeModal('modal-insights');
+    } else {
+      alert('❌ ' + d.error);
+    }
+  } catch(e) {
+    alert('❌ Error: ' + e.message);
+  }
+}
+
 </script>
 
 <!-- ══ MODAL: DETALLE ACTIVO PUMP ═══════════════════════════════════════════ -->
@@ -2680,6 +3127,46 @@ async function addPumpAssetToCycleFromDetail() {
       </div>
       <div id="pump-asset-detail-content" class="hidden">
         <!-- El contenido se renderiza dinámicamente -->
+      </div>
+    </div>
+  </div>
+</div>
+
+
+<!-- ══ MODAL: INSIGHTS CON LLMs ═════════════════════════════════════════════ -->
+<div id="modal-insights" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 overflow-y-auto">
+  <div class="bg-gray-900 rounded-2xl w-full max-w-5xl shadow-2xl my-8">
+    <div class="sticky top-0 bg-gray-900 border-b border-gray-800 px-6 py-4 flex justify-between items-center rounded-t-2xl">
+      <h3 class="text-xl font-bold text-purple-400">🧠 Análisis con 4 LLMs</h3>
+      <button onclick="closeModal('modal-insights')" class="text-gray-500 hover:text-white text-2xl">×</button>
+    </div>
+    <div class="p-6">
+      <!-- Estado de APIs -->
+      <div id="insights-api-status" class="bg-gray-800 border border-gray-700 rounded-xl p-4 mb-4">
+        <p class="text-sm text-gray-400 mb-2">⏳ Verificando APIs configuradas...</p>
+      </div>
+
+      <!-- Selector de ciclos -->
+      <div class="mb-5">
+        <h4 class="text-sm font-semibold text-gray-300 mb-2">Selecciona ciclos significativos (≥6h)</h4>
+        <div id="insights-cycles-list" class="bg-gray-800 border border-gray-700 rounded-xl p-4 max-h-64 overflow-y-auto">
+          <p class="text-gray-500 text-sm">Cargando ciclos...</p>
+        </div>
+      </div>
+
+      <!-- Botones -->
+      <div class="flex gap-3">
+        <button onclick="runInsightsAnalysis()" id="btn-run-insights" class="flex-1 bg-purple-700 hover:bg-purple-600 px-6 py-3 rounded-lg font-bold" disabled>
+          🚀 Analizar con LLMs (30-60s)
+        </button>
+        <button onclick="closeModal('modal-insights')" class="bg-gray-700 hover:bg-gray-600 px-6 py-3 rounded-lg font-semibold">
+          Cancelar
+        </button>
+      </div>
+
+      <!-- Resultado del análisis -->
+      <div id="insights-modal-result" class="hidden mt-6">
+        <!-- Se renderiza aquí -->
       </div>
     </div>
   </div>
