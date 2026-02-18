@@ -363,64 +363,6 @@
         </div>
       </div>
 
-      <!-- LLMs para Insights — configuración -->
-      <div>
-        <h3 class="text-sm font-semibold text-purple-400 mb-2">🧠 LLMs para Insights (Opcional)</h3>
-        <p class="text-xs text-gray-500 mb-3">Configura al menos 2 APIs para usar "3 Sabios Recomiendan"</p>
-        <div class="space-y-3">
-          <!-- Gemini -->
-          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-sm font-semibold">🔷 Google Gemini</span>
-              <span class="pill bg-blue-950 text-blue-400 text-xs">FREE</span>
-            </div>
-            <input type="password" id="api-key-gemini" placeholder="AIza..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
-            <div class="flex gap-2">
-              <button onclick="saveAPIKey('GEMINI_API_KEY', 'api-key-gemini')" class="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
-              <a href="https://aistudio.google.com/apikey" target="_blank" class="text-xs text-blue-400 hover:underline flex items-center">Obtener key →</a>
-            </div>
-          </div>
-          
-          <!-- Claude -->
-          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-sm font-semibold">🟣 Anthropic Claude</span>
-              <span class="pill bg-purple-950 text-purple-400 text-xs">PAID</span>
-            </div>
-            <input type="password" id="api-key-claude" placeholder="sk-ant-..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
-            <div class="flex gap-2">
-              <button onclick="saveAPIKey('ANTHROPIC_API_KEY', 'api-key-claude')" class="bg-purple-700 hover:bg-purple-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
-              <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-xs text-purple-400 hover:underline flex items-center">Obtener key →</a>
-            </div>
-          </div>
-          
-          <!-- OpenAI -->
-          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-sm font-semibold">🟢 OpenAI GPT-4</span>
-              <span class="pill bg-green-950 text-green-400 text-xs">PAID</span>
-            </div>
-            <input type="password" id="api-key-openai" placeholder="sk-proj-..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
-            <div class="flex gap-2">
-              <button onclick="saveAPIKey('OPENAI_API_KEY', 'api-key-openai')" class="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
-              <a href="https://platform.openai.com/api-keys" target="_blank" class="text-xs text-green-400 hover:underline flex items-center">Obtener key →</a>
-            </div>
-          </div>
-          
-          <!-- Groq Llama -->
-          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
-            <div class="flex items-center gap-2 mb-2">
-              <span class="text-sm font-semibold">🟠 Groq Llama</span>
-              <span class="pill bg-orange-950 text-orange-400 text-xs">FREE</span>
-            </div>
-            <input type="password" id="api-key-groq" placeholder="gsk_..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
-            <div class="flex gap-2">
-              <button onclick="saveAPIKey('GROQ_API_KEY', 'api-key-groq')" class="bg-orange-700 hover:bg-orange-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
-              <a href="https://console.groq.com/keys" target="_blank" class="text-xs text-orange-400 hover:underline flex items-center">Obtener key →</a>
-            </div>
-          </div>
-        </div>
-      </div>
     </div>
   </div>
 
@@ -860,6 +802,47 @@ const API_INFO = {
   glassnode:     { extract:'Direcciones activas únicas', indicators:'Network Growth Score', weight:'Factor premium: enriquece resistencia' },
   cryptoquant:   { extract:'Flujo neto de exchanges', indicators:'Exchange Net Flow (presión vendedora)', weight:'Factor premium: refinamiento resistencia' },
   whaleAlert:    { extract:'Movimientos >$1M de wallets', indicators:'Whale Activity Score', weight:'Factor premium: movimiento institucional' }
+};
+
+
+
+const API_CONFIG_URLS = {
+  coingecko: 'https://www.coingecko.com/en/api',
+  alternative: 'https://alternative.me/crypto/fear-and-greed-index/',
+  reddit: 'https://www.reddit.com/dev/api/',
+  blockchain: 'https://www.blockchain.com/explorer/api',
+  cryptocompare: 'https://www.cryptocompare.com/cryptopian/api-keys',
+  newsapi: 'https://newsapi.org/register',
+  coindesk: 'https://www.coindesk.com/arc/outboundfeeds/rss/',
+  cointelegraph: 'https://cointelegraph.com/rss',
+  lunarcrush: 'https://lunarcrush.com/developers',
+  santiment: 'https://app.santiment.net/api-access',
+  github: 'https://github.com/settings/tokens',
+  serpapi: 'https://serpapi.com/',
+  twitter: 'https://developer.x.com/en/docs/x-api',
+  glassnode: 'https://glassnode.com/',
+  cryptoquant: 'https://cryptoquant.com/',
+  whaleAlert: 'https://whale-alert.io/',
+  telegram: 'https://core.telegram.org/bots#how-do-i-create-a-bot'
+};
+
+const API_LIMITS_INFO = {
+  coingecko:     { limits: 'Plan público con límites variables por IP', cycleUsage: 'No disponible (sin endpoint oficial de uso)' },
+  alternative:   { limits: 'Sin key; uso público compartido', cycleUsage: 'No disponible' },
+  reddit:        { limits: 'Rate limit de Reddit para tráfico anónimo', cycleUsage: 'No disponible (backend con limitaciones)' },
+  blockchain:    { limits: 'Endpoint público con límites no documentados', cycleUsage: 'No disponible' },
+  cryptocompare: { limits: 'Free tier con límite diario', cycleUsage: 'No disponible (usar panel del proveedor)' },
+  newsapi:       { limits: 'Free: 100 req/día', cycleUsage: 'No disponible (uso por ciclo no expuesto)' },
+  coindesk:      { limits: 'RSS público', cycleUsage: 'No disponible' },
+  cointelegraph: { limits: 'RSS público', cycleUsage: 'No disponible' },
+  lunarcrush:    { limits: 'Gratis limitado / planes de pago', cycleUsage: 'No disponible (uso detallado en proveedor)' },
+  santiment:     { limits: 'Según plan contratado', cycleUsage: 'No disponible' },
+  github:        { limits: 'Rate limit REST según autenticación', cycleUsage: 'Visible en respuesta de estado' },
+  serpapi:       { limits: 'Cuota mensual según plan', cycleUsage: 'Visible en búsquedas restantes' },
+  twitter:       { limits: 'Cuota por plan X API v2', cycleUsage: 'No disponible (uso por ciclo no expuesto)' },
+  glassnode:     { limits: 'Cuota según plan contratado', cycleUsage: 'No disponible (ver panel Glassnode)' },
+  cryptoquant:   { limits: 'Cuota según plan contratado', cycleUsage: 'No disponible' },
+  whaleAlert:    { limits: 'Cuota según plan contratado', cycleUsage: 'No disponible' }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -1729,6 +1712,25 @@ async function renderLLMAgentsStatus() {
       cerebras: 'https://cloud.cerebras.ai/',
     };
 
+    const envNames = {
+      gemini: 'GEMINI_API_KEY',
+      claude: 'ANTHROPIC_API_KEY',
+      openai: 'OPENAI_API_KEY',
+      groq: 'GROQ_API_KEY',
+      mistral: 'MISTRAL_API_KEY',
+      cohere: 'COHERE_API_KEY',
+      cerebras: 'CEREBRAS_API_KEY'
+    };
+    const llmLimits = {
+      gemini: 'Free tier diario (según modelo)',
+      claude: 'Pago por uso / límites por cuenta',
+      openai: 'Pago por uso / límites por cuenta',
+      groq: 'Free tier con límite por minuto',
+      mistral: 'Free tier con límite de req/min',
+      cohere: 'Free tier con límite de req/min',
+      cerebras: 'Free tier con límite de req/min'
+    };
+
     grid.innerHTML = LLM_AGENTS_CATALOG.map(agent => {
       const ok = d.keys[agent.key];
       const border = ok ? 'border-green-800' : 'border-gray-800';
@@ -1737,6 +1739,11 @@ async function renderLLMAgentsStatus() {
              <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse inline-block"></span> Conectado
            </span>`
         : `<span class="text-xs text-gray-600 bg-gray-800 px-2 py-0.5 rounded-full">⚪ Sin key</span>`;
+
+      const cycleUsage = d.usageCurrentCycle?.[agent.key] || 'No disponible';
+      const configBtn = envNames[agent.key]
+        ? `<button onclick="openAPIKeyModal('${envNames[agent.key]}')" class="text-xs bg-gray-700 hover:bg-gray-600 px-2 py-1 rounded">⚙️ ${ok ? 'Cambiar' : 'Config'}</button>`
+        : '';
 
       return `
         <div class="bg-gray-800 border ${border} rounded-xl p-3">
@@ -1748,12 +1755,17 @@ async function renderLLMAgentsStatus() {
             </div>
             ${badgeHtml}
           </div>
-          ${!ok ? `<div class="mt-1.5">
+          <div class="text-xs text-gray-500 mt-1.5 space-y-0.5">
+            <p><span class="text-gray-400">⏱ Límite:</span> ${llmLimits[agent.key] || 'No disponible'}</p>
+            <p><span class="text-gray-400">📊 Consumo ciclo actual:</span> ${cycleUsage}</p>
+          </div>
+          <div class="mt-2 flex items-center gap-3">
+            ${configBtn}
             <a href="${docsUrls[agent.key]}" target="_blank"
               class="text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2">
-              → Obtener key gratis
+              → ${ok ? 'Gestionar key' : 'Obtener key gratis'}
             </a>
-          </div>` : ''}
+          </div>
         </div>`;
     }).join('');
 
@@ -1792,11 +1804,19 @@ function buildAPICard(api) {
   const icons={operational:'✅',error:'❌',not_configured:'⚪',limited:'⚠️',unknown:'❓'};
   const borders={operational:'border-green-800',error:'border-red-800',not_configured:'border-gray-700',limited:'border-yellow-800'};
   const info=API_INFO[api.key]||{};
+  const limitsInfo = API_LIMITS_INFO[api.key] || {};
   const envMap={cryptocompare:'CRYPTOCOMPARE_API_KEY',newsapi:'NEWSAPI_KEY',github:'GITHUB_TOKEN',telegram:'TELEGRAM_BOT_TOKEN',
     serpapi:'SERPAPI_KEY',twitter:'TWITTER_BEARER_TOKEN',glassnode:'GLASSNODE_API_KEY',cryptoquant:'CRYPTOQUANT_API_KEY',
     whaleAlert:'WHALE_ALERT_API_KEY',lunarcrush:'LUNARCRUSH_API_KEY',santiment:'SANTIMENT_API_KEY',
     coindesk:'',cointelegraph:''};
   const envName=envMap[api.key];
+  const configUrl = api.configInstructions || API_CONFIG_URLS[api.key] || '';
+  const hasExternalConfig = !!configUrl;
+  const configBtn = envName
+    ? `<button onclick="openAPIKeyModal('${envName}')" class="ml-3 bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded flex-shrink-0">⚙️ ${api.configured?'Cambiar':'Config'}</button>`
+    : hasExternalConfig
+      ? `<button onclick="openConfigInstructions('${configUrl}')" class="ml-3 bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded flex-shrink-0">⚙️ Config</button>`
+      : `<button class="ml-3 bg-gray-800 text-gray-500 text-xs px-2 py-1 rounded flex-shrink-0 cursor-not-allowed" disabled>⚙️ Sin config</button>`;
   return `<div class="bg-gray-900 rounded-xl border-l-4 ${borders[api.status]||'border-gray-700'} border border-gray-800 p-4">
     <div class="flex justify-between items-start">
       <div class="flex gap-3 items-start flex-1">
@@ -1814,15 +1834,25 @@ function buildAPICard(api) {
             <p class="text-xs text-gray-600"><span class="text-gray-500">📐 Construye:</span> ${info.indicators}</p>
             <p class="text-xs text-gray-600"><span class="text-gray-500">⚖️ Peso:</span> ${info.weight}</p>
           </div>`:''}
+          <div class="mt-2 pt-2 border-t border-gray-800 space-y-0.5">
+            <p class="text-xs text-gray-600"><span class="text-gray-500">⏱ Límites:</span> ${api.limits || limitsInfo.limits || 'No disponible'}</p>
+            <p class="text-xs text-gray-600"><span class="text-gray-500">📊 Consumo ciclo actual:</span> ${api.currentCycleUsage || limitsInfo.cycleUsage || 'No disponible'}</p>
+          </div>
         </div>
       </div>
-      ${envName?`<button onclick="openAPIKeyModal('${envName}')" class="ml-3 bg-gray-700 hover:bg-gray-600 text-xs px-2 py-1 rounded flex-shrink-0">⚙️ ${api.configured?'Cambiar':'Config'}</button>`:''}
+      ${configBtn}
     </div>
   </div>`;
 }
 
+function openConfigInstructions(url) {
+  if (!url) return;
+  window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 function openAPIKeyModal(name) {
   currentApiKeyName = name;
+  window.currentApiKeyName = name;
   document.getElementById('apikey-name').textContent = name;
   document.getElementById('apikey-input').value = '';
   document.getElementById('apikey-msg').innerHTML = '';
@@ -3073,7 +3103,7 @@ const LLM_AGENTS_CATALOG = [
   { key: 'gemini',   icon: '🔷', name: 'Google Gemini',         tier: 'PAID', tierCss: 'bg-blue-900 text-blue-300' },
   { key: 'claude',   icon: '🟣', name: 'Anthropic Claude',      tier: 'PAID', tierCss: 'bg-purple-900 text-purple-300' },
   { key: 'openai',   icon: '🟢', name: 'OpenAI GPT-4',          tier: 'PAID', tierCss: 'bg-green-900 text-green-300' },
-  { key: 'llama',    icon: '🟠', name: 'Groq Llama',            tier: 'FREE', tierCss: 'bg-orange-900 text-orange-300' },
+  { key: 'groq',     icon: '🟠', name: 'Groq Llama',            tier: 'FREE', tierCss: 'bg-orange-900 text-orange-300' },
   { key: 'mistral',  icon: '🔵', name: 'Mistral AI',            tier: 'FREE', tierCss: 'bg-sky-900 text-sky-300' },
   { key: 'cohere',   icon: '🟤', name: 'Cohere Command-R',      tier: 'FREE', tierCss: 'bg-amber-900 text-amber-300' },
   { key: 'cerebras', icon: '⚡', name: 'Cerebras Llama',        tier: 'FREE', tierCss: 'bg-cyan-900 text-cyan-300' },
@@ -3380,7 +3410,6 @@ async function applyInsightsConsensus() {
   </div>
 </div>
 
-  <script src="/patch-llm-keys.js"></script>
 
 </body>
 </html>
