@@ -2007,9 +2007,7 @@ ${JSON.stringify(open.map(p=>({symbol:p.symbol,capitalUSD:p.capitalUSD,entryPric
     }
     function parseResp(text, model) {
       try {
-        const clean = text.trim().replace(/```json
-?/g,'').replace(/```
-?/g,'').trim();
+        const clean = text.trim().replace(/```json[\r\n]?/g,'').replace(/```[\r\n]?/g,'').trim();
         const parsed = JSON.parse(clean);
         return { success: true, model, data: parsed, rawResponse: text.slice(0,200) };
       } catch(e) { return { success: false, model, error: `Parse failed: ${e.message}`, rawResponse: text.slice(0,300) }; }
