@@ -30,6 +30,8 @@ const algorithmConfig = require('./algorithm-config');
 const boostPowerCalc    = require('./boost-power-calculator');
 const cyclesManager     = require('./cycles-manager');
 const reportGenerator   = require('./report-generator');
+const enhancedReportGen = require('./enhanced-report-generator');
+const llmInsights       = require('./llm-insights');
 const apiHealthCheck    = require('./api-health-check');
 const investManager     = require('./investment-manager');
 const exchangeConnector = require('./exchange-connector');
@@ -581,7 +583,8 @@ app.post('/api/config/api-key', async (req, res) => {
     const { apiName, apiKey } = req.body;
     const allowed = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN',
                      'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY',
-                     'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY'];
+                     'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY',
+                     'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY'];
     if (!allowed.includes(apiName)) return res.status(400).json({ success: false, error: 'API name no permitida' });
     await redisSet(`apikey:${apiName}`, apiKey?.trim() || '');
     res.json({ success: true, message: `Key guardada para ${apiName}` });
@@ -592,7 +595,8 @@ app.get('/api/config/api-keys', async (_req, res) => {
   try {
     const names = ['CRYPTOCOMPARE_API_KEY','NEWSAPI_KEY','GITHUB_TOKEN','TELEGRAM_BOT_TOKEN',
                    'SERPAPI_KEY','TWITTER_BEARER_TOKEN','GLASSNODE_API_KEY','CRYPTOQUANT_API_KEY',
-                   'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY'];
+                   'WHALE_ALERT_API_KEY','LUNARCRUSH_API_KEY','SANTIMENT_API_KEY',
+                   'GEMINI_API_KEY','ANTHROPIC_API_KEY','OPENAI_API_KEY','GROQ_API_KEY'];
     const keys = {};
     for (const n of names) {
       const v = await redisGet(`apikey:${n}`);
@@ -874,7 +878,9 @@ function analyzeSimulations(cycles, config, mode = 'normal') {
   const factorDeviations = {}; // acumular desviaciones por categoría
 
   significant.forEach(cycle => {
-    (cycle.results || []).forEach(r => {
+    // Filtrar excludedResults — no contar activos marcados como excluidos
+    const validResults = (cycle.results || []).filter(r => !(cycle.excludedResults || []).includes(r.id));
+    validResults.forEach(r => {
       const cat = r.classification || 'RUIDOSO';
       if (catStats[cat]) {
         catStats[cat].total++;
@@ -1036,19 +1042,41 @@ app.post('/api/cycles/:cycleId/complete', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-app.get('/api/cycles/history', async (_req, res) => {
-  if (!redis) return res.json({ success: true, cycles: [] });
+app.get('/api/cycles/history', async (req, res) => {
+  if (!redis) return res.json({ success: true, cycles: [], mode: 'all' });
   try {
+    const mode   = req.query?.mode || 'all';  // 'all', 'normal', 'speculative'
     const ids    = await cyclesManager.getCompletedCycles(redis);
-    const cycles = await cyclesManager.getCyclesDetails(redis, ids);
-    res.json({ success: true, cycles });
+    const allCycles = await cyclesManager.getCyclesDetails(redis, ids);
+    const cycles = mode === 'all'
+      ? allCycles
+      : allCycles.filter(c => (c.mode || 'normal') === mode);
+    res.json({ success: true, cycles, mode, totalCycles: allCycles.length });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-app.get('/api/cycles/stats/global', async (_req, res) => {
-  if (!redis) return res.json({ success: true, stats: { totalCycles: 0, totalPredictions: 0, avgSuccessRate: '0.00' } });
+app.get('/api/cycles/stats/global', async (req, res) => {
+  if (!redis) return res.json({ success: true, stats: { totalCycles: 0, totalPredictions: 0, avgSuccessRate: '0.00' }, mode: 'all' });
   try {
-    const stats = await cyclesManager.getGlobalStats(redis);
+    const mode   = req.query?.mode || 'all';
+    const ids    = await cyclesManager.getCompletedCycles(redis);
+    const allCycles = await cyclesManager.getCyclesDetails(redis, ids);
+    const cycles = mode === 'all'
+      ? allCycles
+      : allCycles.filter(c => (c.mode || 'normal') === mode);
+    
+    // Recalcular stats solo con los ciclos del modo seleccionado
+    let totalCorrect = 0, totalPredictions = 0;
+    cycles.forEach(c => {
+      if (c.status === 'completed' && c.metrics) {
+        const validResults = (c.results || []).filter(r => !(c.excludedResults || []).includes(r.id));
+        totalPredictions += validResults.length;
+        totalCorrect += validResults.filter(r => r.correct).length;
+      }
+    });
+    const avgSuccessRate = totalPredictions > 0 ? (totalCorrect / totalPredictions * 100).toFixed(2) : '0.00';
+    
+    const stats = { totalCycles: cycles.length, totalPredictions, avgSuccessRate, mode };
     res.json({ success: true, stats });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -1093,6 +1121,170 @@ app.get('/api/cycles/:cycleId/report', async (req, res) => {
     res.send(buffer);
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
+// ── GET /api/cycles/:cycleId/enhanced-report ───────────────────────────────
+// Informe paramétrico completo: factores por activo, predicción vs real,
+// contexto de mercado, tendencias, parámetros compra/venta y conclusiones LLM
+app.get('/api/cycles/:cycleId/enhanced-report', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cycle = await cyclesManager.getCycle(redis, req.params.cycleId);
+    if (!cycle)                       return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+    if (cycle.status !== 'completed') return res.status(400).json({ success: false, error: 'Ciclo aún no completado' });
+
+    const mode   = cycle.mode || 'normal';
+    const config = await getConfig(mode);
+
+    // API keys de LLMs (para "Los 3 Sabios" dentro del informe)
+    const apiKeys = {
+      gemini:   await getRedisKey('GEMINI_API_KEY'),
+      claude:   await getRedisKey('ANTHROPIC_API_KEY'),
+      openai:   await getRedisKey('OPENAI_API_KEY'),
+      groq:     await getRedisKey('GROQ_API_KEY'),
+      mistral:  await getRedisKey('MISTRAL_API_KEY'),
+      cohere:   await getRedisKey('COHERE_API_KEY'),
+      cerebras: await getRedisKey('CEREBRAS_API_KEY'),
+    };
+
+    // Configuración del módulo de inversión durante el ciclo
+    const investConfig = await getInvestConfig();
+
+    // generateEnhancedReport ahora es async (llama a LLMs internamente)
+    const doc    = await enhancedReportGen.generateEnhancedReport(
+      cycle,
+      cycle.fullSnapshot || cycle.snapshot,
+      config,
+      apiKeys,
+      investConfig
+    );
+    const buffer = await Packer.toBuffer(doc);
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename=Informe_${mode}_${req.params.cycleId}.docx`);
+    res.send(buffer);
+  } catch(e) {
+    console.error('enhanced-report error:', e.message, e.stack);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+// ════════════════════════════════════════════════════════════════════════════
+// INSIGHTS CON 4 LLMs — "3 Sabios Recomiendan"
+// ════════════════════════════════════════════════════════════════════════════
+
+// ── GET /api/insights/keys-status ────────────────────────────────────────────
+app.get('/api/insights/keys-status', async (_req, res) => {
+  try {
+    const keys = {
+      gemini: !!(await getRedisKey('GEMINI_API_KEY')),
+      claude: !!(await getRedisKey('ANTHROPIC_API_KEY')),
+      openai: !!(await getRedisKey('OPENAI_API_KEY')),
+      groq:   !!(await getRedisKey('GROQ_API_KEY'))
+    };
+    const configured = Object.values(keys).filter(Boolean).length;
+    res.json({ success: true, keys, configured, total: 4 });
+  } catch(e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── POST /api/insights/analyze ───────────────────────────────────────────────
+// Analizar ciclos seleccionados con los 4 LLMs
+app.post('/api/insights/analyze', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const { cycleIds, mode } = req.body;
+    if (!cycleIds || !Array.isArray(cycleIds) || cycleIds.length === 0) {
+      return res.status(400).json({ success: false, error: 'cycleIds array requerido' });
+    }
+    
+    const cycleMode = mode || 'normal';
+    const config    = await getConfig(cycleMode);
+    
+    // Obtener ciclos
+    const cycles = await cyclesManager.getCyclesDetails(redis, cycleIds);
+    if (cycles.length === 0) {
+      return res.status(404).json({ success: false, error: 'Ningún ciclo encontrado' });
+    }
+    
+    // Obtener API keys
+    const apiKeys = {
+      gemini: await getRedisKey('GEMINI_API_KEY'),
+      claude: await getRedisKey('ANTHROPIC_API_KEY'),
+      openai: await getRedisKey('OPENAI_API_KEY'),
+      groq:   await getRedisKey('GROQ_API_KEY')
+    };
+    
+    const configuredCount = Object.values(apiKeys).filter(Boolean).length;
+    if (configuredCount === 0) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'No hay API keys configuradas. Configure al menos 2 LLMs en la pestaña APIs.' 
+      });
+    }
+    
+    // Analizar con LLMs (30-60s)
+    const responses = await llmInsights.analyzeWithLLMs(cycles, config, cycleMode, apiKeys);
+    
+    // Calcular consenso
+    const consensusResult = llmInsights.calculateConsensus(responses);
+    
+    res.json({
+      success: true,
+      cyclesAnalyzed: cycles.length,
+      mode: cycleMode,
+      responses,
+      consensus: consensusResult,
+      analyzedAt: new Date().toISOString()
+    });
+    
+  } catch(e) {
+    console.error('insights/analyze error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── POST /api/insights/apply-consensus ───────────────────────────────────────
+// Aplicar ajustes del consenso al modelo
+app.post('/api/insights/apply-consensus', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const { consensus, mode } = req.body;
+    if (!consensus) {
+      return res.status(400).json({ success: false, error: 'consensus object requerido' });
+    }
+    
+    const cycleMode = mode || 'normal';
+    const current   = await getConfig(cycleMode);
+    
+    // Aplicar ajustes del consenso
+    const updated = JSON.parse(JSON.stringify(current));
+    
+    if (consensus.metaWeights)        Object.assign(updated.metaWeights,        consensus.metaWeights);
+    if (consensus.classification)     Object.assign(updated.classification,     consensus.classification);
+    if (consensus.prediction)         Object.assign(updated.prediction,         consensus.prediction);
+    if (consensus.potentialWeights)   Object.assign(updated.potentialWeights,   consensus.potentialWeights);
+    if (consensus.resistanceWeights)  Object.assign(updated.resistanceWeights,  consensus.resistanceWeights);
+    
+    updated.lastModified = new Date().toISOString();
+    updated.source = 'llm-consensus';
+    
+    // Guardar
+    const key = cycleMode === 'speculative' ? 'algorithm-config:speculative' : 'algorithm-config:normal';
+    await redisSet(key, updated);
+    
+    res.json({ 
+      success: true, 
+      applied: updated, 
+      mode: cycleMode,
+      message: `Configuración actualizada con consenso de LLMs para modelo ${cycleMode}` 
+    });
+    
+  } catch(e) {
+    console.error('insights/apply-consensus error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+
 
 // ════════════════════════════════════════════════════════════════════════════
 // MÓDULO DE INVERSIÓN v4

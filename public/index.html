@@ -296,14 +296,40 @@
   <div id="content-analysis" class="tab-content">
     <div class="flex justify-between items-center mb-4">
       <h2 class="text-xl font-semibold">🔬 Análisis de Simulaciones</h2>
-      <button onclick="loadAnalysis()" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold">🔄 Analizar</button>
+      <div class="flex items-center gap-3">
+        <span class="text-sm text-gray-500">Modelo:</span>
+        <select id="analysis-mode-select" onchange="switchAnalysisMode(this.value)" class="bg-gray-800 border border-gray-700 rounded px-3 py-1.5 text-sm">
+          <option value="normal">📊 Generalista</option>
+          <option value="speculative">🎯 Especulativo</option>
+        </select>
+        <button onclick="loadAnalysis()" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold">🔄 Analizar</button>
+      </div>
     </div>
-    <div class="bg-gray-900 border border-blue-900 rounded-xl p-4 mb-5 text-sm">
-      <p class="text-blue-400 font-semibold mb-1">📌 Cómo funciona</p>
-      <p class="text-gray-400">Solo simulaciones <strong class="text-white">≥6 horas</strong> calibran el algoritmo. Las ejecuciones cortas (&lt;6h) validan la tendencia proporcionalmente pero <strong class="text-yellow-400">no corrigen los pesos</strong>. Las predicciones se escalan automáticamente a la ventana temporal del ciclo.</p>
+    <div id="analysis-mode-info" class="bg-blue-950 border border-blue-800 rounded-lg p-3 mb-4">
+      <p class="text-sm text-blue-300">Analizando ciclos del modelo <span id="analysis-mode-label" class="font-bold">Generalista</span></p>
+    </div>
+    <div class="bg-gray-900 border border-gray-700 rounded-xl p-4 mb-5 text-sm">
+      <p class="text-gray-400 font-semibold mb-1">📌 Cómo funciona</p>
+      <p class="text-gray-500">Solo simulaciones <strong class="text-white">≥6 horas</strong> calibran el algoritmo. Las ejecuciones cortas (&lt;6h) validan la tendencia proporcionalmente pero <strong class="text-yellow-400">no corrigen los pesos</strong>. Las predicciones se escalan automáticamente a la ventana temporal del ciclo.</p>
     </div>
     <div id="analysis-content">
       <p class="text-gray-500 text-sm">Haz click en "Analizar" para procesar los resultados.</p>
+    </div>
+
+    <!-- ══ INSIGHTS — LOS N SABIOS ═══════════════════════════════════════════════ -->
+    <div class="mt-8 pt-6 border-t border-gray-800">
+      <div class="flex justify-between items-center mb-4">
+        <div>
+          <h3 class="text-lg font-bold text-purple-400">🧠 Los N Sabios — Consenso de Agentes IA</h3>
+          <p class="text-xs text-gray-500 mt-1">Analiza ciclos históricos con Gemini, Claude, GPT-4 y Llama para obtener recomendaciones de consenso</p>
+        </div>
+        <button onclick="openInsightsModal()" class="bg-purple-700 hover:bg-purple-600 px-4 py-2 rounded-lg text-sm font-semibold">
+          🚀 Analizar con LLMs
+        </button>
+      </div>
+      <div id="insights-result" class="hidden">
+        <!-- El resultado del análisis se renderiza aquí -->
+      </div>
     </div>
   </div>
 
@@ -323,6 +349,78 @@
       <div><h3 class="text-sm font-semibold text-yellow-400 mb-2">🟡 FREEMIUM</h3><div id="apis-freemium" class="space-y-2"></div></div>
       <div><h3 class="text-sm font-semibold text-orange-400 mb-2">🟠 PAID</h3><div id="apis-paid" class="space-y-2"></div></div>
       <div><h3 class="text-sm font-semibold text-red-400 mb-2">🔴 PREMIUM</h3><div id="apis-premium" class="space-y-2"></div></div>
+
+      <!-- ═══ AGENTES IA — Estado de conexión ═══ -->
+      <div class="bg-gray-900 border border-purple-900/40 rounded-2xl p-5">
+        <div class="flex items-center justify-between mb-1">
+          <h3 class="text-sm font-bold text-purple-400">🧠 Agentes IA — "Los N Sabios"</h3>
+          <div id="llm-global-badge" class="text-xs"></div>
+        </div>
+        <p class="text-xs text-gray-500 mb-4">Agentes de inteligencia artificial para consenso de análisis. Se necesitan ≥2 para calcular consenso.</p>
+        <div id="llm-agents-status-grid" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+          <!-- Renderizado dinámicamente por renderLLMAgentsStatus() -->
+          <p class="text-gray-600 text-sm col-span-3">⏳ Verificando agentes...</p>
+        </div>
+      </div>
+
+      <!-- LLMs para Insights — configuración -->
+      <div>
+        <h3 class="text-sm font-semibold text-purple-400 mb-2">🧠 LLMs para Insights (Opcional)</h3>
+        <p class="text-xs text-gray-500 mb-3">Configura al menos 2 APIs para usar "3 Sabios Recomiendan"</p>
+        <div class="space-y-3">
+          <!-- Gemini -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold">🔷 Google Gemini</span>
+              <span class="pill bg-blue-950 text-blue-400 text-xs">FREE</span>
+            </div>
+            <input type="password" id="api-key-gemini" placeholder="AIza..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
+            <div class="flex gap-2">
+              <button onclick="saveAPIKey('GEMINI_API_KEY', 'api-key-gemini')" class="bg-blue-700 hover:bg-blue-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
+              <a href="https://aistudio.google.com/apikey" target="_blank" class="text-xs text-blue-400 hover:underline flex items-center">Obtener key →</a>
+            </div>
+          </div>
+          
+          <!-- Claude -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold">🟣 Anthropic Claude</span>
+              <span class="pill bg-purple-950 text-purple-400 text-xs">PAID</span>
+            </div>
+            <input type="password" id="api-key-claude" placeholder="sk-ant-..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
+            <div class="flex gap-2">
+              <button onclick="saveAPIKey('ANTHROPIC_API_KEY', 'api-key-claude')" class="bg-purple-700 hover:bg-purple-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
+              <a href="https://console.anthropic.com/settings/keys" target="_blank" class="text-xs text-purple-400 hover:underline flex items-center">Obtener key →</a>
+            </div>
+          </div>
+          
+          <!-- OpenAI -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold">🟢 OpenAI GPT-4</span>
+              <span class="pill bg-green-950 text-green-400 text-xs">PAID</span>
+            </div>
+            <input type="password" id="api-key-openai" placeholder="sk-proj-..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
+            <div class="flex gap-2">
+              <button onclick="saveAPIKey('OPENAI_API_KEY', 'api-key-openai')" class="bg-green-700 hover:bg-green-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
+              <a href="https://platform.openai.com/api-keys" target="_blank" class="text-xs text-green-400 hover:underline flex items-center">Obtener key →</a>
+            </div>
+          </div>
+          
+          <!-- Groq Llama -->
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+            <div class="flex items-center gap-2 mb-2">
+              <span class="text-sm font-semibold">🟠 Groq Llama</span>
+              <span class="pill bg-orange-950 text-orange-400 text-xs">FREE</span>
+            </div>
+            <input type="password" id="api-key-groq" placeholder="gsk_..." class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-sm mb-2">
+            <div class="flex gap-2">
+              <button onclick="saveAPIKey('GROQ_API_KEY', 'api-key-groq')" class="bg-orange-700 hover:bg-orange-600 px-3 py-1 rounded text-xs">💾 Guardar</button>
+              <a href="https://console.groq.com/keys" target="_blank" class="text-xs text-orange-400 hover:underline flex items-center">Obtener key →</a>
+            </div>
+          </div>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -788,7 +886,10 @@ function setTab(tab) {
   if (btnEl) btnEl.classList.add('tab-active','text-white');
   if (tab === 'validation') loadValidation();
   if (tab === 'status')     loadAPIStatus();
-  if (tab === 'analysis')   loadAnalysis();
+  if (tab === 'analysis')   { 
+    switchAnalysisMode(currentMode); 
+    loadAnalysis(); 
+  }
   if (tab === 'invest')     loadInvestData();
   if (tab === 'pump')       { loadPumpSettings(); loadPumpScan(); }
   if (tab === 'config')     switchConfigModel(configEditMode || 'normal');
@@ -1352,7 +1453,7 @@ async function completeCycle(cycleId) {
 async function loadCompletedCycles() {
   const div = document.getElementById('completed-cycles');
   try {
-    const r=await fetch('/api/cycles/history'); const d=await r.json();
+    const r=await fetch(`/api/cycles/history?mode=${currentMode}`); const d=await r.json();
     if(!d.success||d.cycles.length===0){div.innerHTML='<p class="text-gray-500 text-sm">Sin ciclos completados.</p>';return;}
     div.innerHTML='';
     d.cycles.slice(0,10).forEach(c => {
@@ -1375,6 +1476,7 @@ async function loadCompletedCycles() {
             </div>
             <button onclick="toggleDetail('${c.id}')" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-xs">📋 Ver</button>
             <button onclick="downloadReport('${c.id}')" class="bg-blue-900 hover:bg-blue-800 px-3 py-1 rounded text-xs">📄 Word</button>
+            ${sig ? `<button onclick="downloadEnhancedReport('${c.id}')" class="bg-green-900 hover:bg-green-800 px-3 py-1 rounded text-xs" title="Informe con análisis de oportunidades perdidas">📊 Mejorado</button>` : ''}
           </div>
         </div>
         <div id="cdetail-${c.id}" class="hidden mt-3 border-t border-gray-800 pt-3">
@@ -1409,13 +1511,20 @@ function toggleDetail(id) { document.getElementById('cdetail-'+id)?.classList.to
 async function toggleExclude(cycleId, assetId) {
   try {
     const r=await fetch(`/api/cycles/${cycleId}/results/${assetId}/toggle-exclude`,{method:'POST'}); const d=await r.json();
-    if(d.success) await loadCompletedCycles();
+    if(d.success) {
+      await loadCompletedCycles();
+      await loadGlobalStats();
+      // Si la pestaña análisis está abierta, recargarla también
+      if (document.getElementById('content-analysis')?.style.display !== 'none') {
+        await loadAnalysis();
+      }
+    }
   } catch(e){}
 }
 async function loadGlobalStats() {
   const div=document.getElementById('global-stats');
   try {
-    const r=await fetch('/api/cycles/stats/global'); const d=await r.json();
+    const r=await fetch(`/api/cycles/stats/global?mode=${currentMode}`); const d=await r.json();
     if(!d.success) return;
     const s=d.stats;
     div.innerHTML=`<div class="grid grid-cols-3 gap-3">
@@ -1426,6 +1535,7 @@ async function loadGlobalStats() {
   } catch(e){}
 }
 function downloadReport(id) { window.location.href='/api/cycles/'+id+'/report'; }
+function downloadEnhancedReport(id) { window.location.href='/api/cycles/'+id+'/enhanced-report'; }
 
 // Auto-completar ciclos pendientes
 setInterval(async ()=>{
@@ -1441,6 +1551,23 @@ setInterval(async ()=>{
 // ═══════════════════════════════════════════════════════════
 // ANÁLISIS DE SIMULACIONES
 // ═══════════════════════════════════════════════════════════
+
+function switchAnalysisMode(mode) {
+  currentMode = mode;
+  const label = document.getElementById('analysis-mode-label');
+  const info  = document.getElementById('analysis-mode-info');
+  if (mode === 'speculative') {
+    label.textContent = 'Especulativo';
+    info.className = 'bg-yellow-950 border border-yellow-800 rounded-lg p-3 mb-4';
+    info.querySelector('p').className = 'text-sm text-yellow-300';
+  } else {
+    label.textContent = 'Generalista';
+    info.className = 'bg-blue-950 border border-blue-800 rounded-lg p-3 mb-4';
+    info.querySelector('p').className = 'text-sm text-blue-300';
+  }
+  document.getElementById('analysis-mode-select').value = mode;
+}
+
 async function loadAnalysis() {
   const div = document.getElementById('analysis-content');
   div.innerHTML = '<p class="text-gray-400 text-sm">⏳ Analizando simulaciones...</p>';
@@ -1464,10 +1591,18 @@ function renderAnalysis(d) {
   }
 
   const accColor = parseFloat(d.overallAccuracy) > 60 ? 'text-green-400' : parseFloat(d.overallAccuracy) > 40 ? 'text-yellow-400' : 'text-red-400';
+  const modeLabel = d.mode === 'speculative' ? 'Especulativo' : 'Generalista';
+  const modeColor = d.mode === 'speculative' ? 'yellow' : 'blue';
+  
   let html = `
+    <div class="bg-gray-900 border border-${modeColor}-900 rounded-xl p-4 mb-4">
+      <p class="text-sm text-gray-400 mb-2">📋 Fuente de datos</p>
+      <p class="text-sm text-${modeColor}-300"><span class="font-bold">${d.cyclesThisMode || 0}</span> ciclos completados del modelo <span class="font-bold">${modeLabel}</span> (${d.significantCount} significativos, ${d.testingCount} de testing)</p>
+      <p class="text-xs text-gray-500 mt-1">${d.note || ''}</p>
+    </div>
     <div class="grid grid-cols-3 gap-3 mb-5">
       <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold ${accColor}">${d.overallAccuracy}%</div><div class="text-xs text-gray-500 mt-1">Accuracy Global</div></div>
-      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-blue-400">${d.significantCount}</div><div class="text-xs text-gray-500 mt-1">Significativas (≥6h)</div></div>
+      <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-${modeColor}-400">${d.significantCount}</div><div class="text-xs text-gray-500 mt-1">Significativas (≥6h)</div></div>
       <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 text-center"><div class="text-2xl font-bold text-gray-400">${d.testingCount}</div><div class="text-xs text-gray-500 mt-1">Testing (&lt;6h)</div></div>
     </div>
     <div class="grid grid-cols-3 gap-3 mb-5">`;
@@ -1516,12 +1651,25 @@ function renderAnalysis(d) {
 }
 
 async function applySuggestion() {
-  if (!confirm('¿Aplicar la configuración sugerida por el análisis de simulaciones?')) return;
+  if (!confirm(`¿Aplicar la configuración sugerida al modelo ${currentMode === 'speculative' ? 'Especulativo' : 'Generalista'}?`)) return;
   try {
-    const r = await fetch('/api/simulations/apply-suggestion',{method:'POST'}); const d = await r.json();
-    if (d.success) { config=d.applied; applyConfigToUI(); alert('✅ Configuración aplicada.'); loadAnalysis(); }
-    else alert('❌ '+d.error);
-  } catch(e){ alert('❌ '+e.message); }
+    const r = await fetch('/api/simulations/apply-suggestion', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ mode: currentMode })
+    });
+    const d = await r.json();
+    if (d.success) { 
+      config = d.applied; 
+      applyConfigToUI(); 
+      alert(`✅ Configuración aplicada al modelo ${currentMode === 'speculative' ? 'Especulativo' : 'Generalista'}`); 
+      loadAnalysis(); 
+    } else {
+      alert('❌ ' + d.error);
+    }
+  } catch(e) { 
+    alert('❌ ' + e.message); 
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1531,6 +1679,8 @@ async function loadAPIStatus() {
   ['apis-free','apis-freemium','apis-paid','apis-premium'].forEach(id => {
     document.getElementById(id).innerHTML = '<p class="text-gray-600 text-sm">Verificando...</p>';
   });
+  // Cargar estado de agentes LLM en paralelo
+  renderLLMAgentsStatus();
   try {
     const r=await fetch('/api/status/complete'); const d=await r.json();
     if(!d.success) throw new Error(d.error);
@@ -1548,6 +1698,94 @@ async function loadAPIStatus() {
         : '<p class="text-gray-700 text-sm">—</p>';
     });
   } catch(e){ document.getElementById('api-summary').innerHTML=`<div class="col-span-4 text-red-400 text-sm">❌ ${e.message}</div>`; }
+}
+
+async function renderLLMAgentsStatus() {
+  const grid = document.getElementById('llm-agents-status-grid');
+  const globalBadge = document.getElementById('llm-global-badge');
+  if (!grid) return;
+
+  try {
+    const r = await fetch('/api/insights/keys-status');
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error);
+
+    const n = d.configured;
+    const total = d.total || 7;
+    if (globalBadge) {
+      globalBadge.innerHTML = n >= 2
+        ? `<span class="text-green-400 font-semibold">✅ ${n}/${total} activos</span>`
+        : `<span class="text-yellow-400">⚠️ ${n}/${total} — necesitas ≥2</span>`;
+    }
+
+    const docsUrls = {
+      gemini:   'https://aistudio.google.com/apikey',
+      claude:   'https://console.anthropic.com/settings/keys',
+      openai:   'https://platform.openai.com/api-keys',
+      groq:     'https://console.groq.com/keys',
+      mistral:  'https://console.mistral.ai/api-keys',
+      cohere:   'https://dashboard.cohere.com/api-keys',
+      cerebras: 'https://cloud.cerebras.ai/',
+    };
+
+    grid.innerHTML = LLM_AGENTS_CATALOG.map(agent => {
+      const ok = d.keys[agent.key];
+      const border = ok ? 'border-green-800' : 'border-gray-800';
+      const badgeHtml = ok
+        ? `<span class="inline-flex items-center gap-1 text-xs text-green-300 bg-green-950 px-2 py-0.5 rounded-full font-semibold">
+             <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse inline-block"></span> Conectado
+           </span>`
+        : `<span class="text-xs text-gray-600 bg-gray-800 px-2 py-0.5 rounded-full">⚪ Sin key</span>`;
+
+      return `
+        <div class="bg-gray-800 border ${border} rounded-xl p-3">
+          <div class="flex items-center justify-between mb-1">
+            <div class="flex items-center gap-2">
+              <span>${agent.icon}</span>
+              <span class="text-sm font-semibold">${agent.name}</span>
+              <span class="text-xs px-1.5 py-0.5 rounded ${agent.tierCss}">${agent.tier}</span>
+            </div>
+            ${badgeHtml}
+          </div>
+          ${!ok ? `<div class="mt-1.5">
+            <a href="${docsUrls[agent.key]}" target="_blank"
+              class="text-xs text-blue-400 hover:text-blue-300 underline underline-offset-2">
+              → Obtener key gratis
+            </a>
+          </div>` : ''}
+        </div>`;
+    }).join('');
+
+  } catch(e) {
+    grid.innerHTML = `<p class="text-red-400 text-xs col-span-3">❌ Error al verificar agentes: ${e.message}</p>`;
+  }
+}
+
+async function loadLLMStatus() {
+  try {
+    const r = await fetch('/api/insights/keys-status');
+    if (!r.ok) return;
+    const d = await r.json();
+    if (!d.success) return;
+    // Actualizar badges en los cards de configuración
+    const ids = ['gemini','claude','openai','groq','mistral','cohere','cerebras'];
+    ids.forEach(id => {
+      const badge = document.getElementById('llm-badge-' + id);
+      if (!badge) return;
+      badge.innerHTML = d.keys[id]
+        ? `<span class="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-green-900 text-green-300 text-xs font-semibold">
+             <span class="w-1.5 h-1.5 rounded-full bg-green-400 animate-pulse inline-block"></span> Conectado
+           </span>`
+        : `<span class="px-2 py-0.5 rounded-full bg-gray-800 text-gray-500 text-xs">⚪ Sin configurar</span>`;
+    });
+    const gb = document.getElementById('llm-global-badge');
+    if (gb) gb.innerHTML = d.configured >= 2
+      ? `<span class="text-green-400 text-xs font-semibold">✅ ${d.configured}/${d.total||7} agentes activos</span>`
+      : `<span class="text-yellow-400 text-xs">⚠️ ${d.configured}/${d.total||7} — necesitas al menos 2</span>`;
+    // Actualizar también el grid de status si está visible
+    renderLLMAgentsStatus();
+  } catch(e) { console.warn('[loadLLMStatus]', e.message); }
 }
 
 function buildAPICard(api) {
@@ -2664,6 +2902,423 @@ async function addPumpAssetToCycleFromDetail() {
   closeModal('modal-pump-asset-detail');
 }
 
+
+// ═══════════════════════════════════════════════════════════════
+// INSIGHTS CON 4 LLMs
+// ═══════════════════════════════════════════════════════════════
+
+let selectedCyclesForInsights = [];
+let currentInsightsResult = null;
+
+async function openInsightsModal() {
+  showModal('modal-insights');
+  selectedCyclesForInsights = [];
+  document.getElementById('btn-run-insights').disabled = true;
+  
+  // Verificar estado de APIs
+  try {
+    const r = await fetch('/api/insights/keys-status');
+    const d = await r.json();
+    const statusDiv = document.getElementById('insights-api-status');
+    if (d.success) {
+      const ALL_LLM_AGENTS = [
+        { key: 'gemini',   icon: '🔷', label: 'Gemini',   tier: 'PAID' },
+        { key: 'claude',   icon: '🟣', label: 'Claude',   tier: 'PAID' },
+        { key: 'openai',   icon: '🟢', label: 'GPT-4',    tier: 'PAID' },
+        { key: 'groq',     icon: '🟠', label: 'Llama',    tier: 'FREE' },
+        { key: 'mistral',  icon: '🔵', label: 'Mistral',  tier: 'FREE' },
+        { key: 'cohere',   icon: '🟤', label: 'Cohere',   tier: 'FREE' },
+        { key: 'cerebras', icon: '⚡', label: 'Cerebras', tier: 'FREE' },
+      ];
+      const total = d.total || 7;
+      const configured = d.configured || 0;
+      const badges = ALL_LLM_AGENTS.map(a =>
+        `<span class="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-semibold ${d.keys[a.key] ? 'bg-green-900 text-green-300' : 'bg-gray-800 text-gray-500'}">
+          ${a.icon} ${a.label}${d.keys[a.key] ? ' ✓' : ''}
+        </span>`
+      ).join('');
+      statusDiv.innerHTML = `
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-semibold text-sm ${configured >= 2 ? 'text-green-400' : 'text-yellow-400'}">
+            ${configured >= 2 ? '✅' : '⚠️'} ${configured}/${total} agentes configurados
+          </span>
+          ${configured < 2 ? '<span class="text-xs text-yellow-400">Se necesitan al menos 2 para consenso</span>' : `<span class="text-xs text-green-400">Listo para generar consenso</span>`}
+        </div>
+        <div class="flex flex-wrap gap-1.5">${badges}</div>
+        ${configured < 2 ? '<p class="text-xs text-yellow-500 mt-2">→ Ve a la pestaña Config → APIs para añadir keys gratuitas (Mistral, Cohere, Cerebras)</p>' : ''}
+      `;
+    }
+  } catch(e) {
+    console.error('Error verificando APIs:', e);
+  }
+  
+  // Cargar ciclos significativos del modo actual
+  await loadInsightsCycles();
+}
+
+async function loadInsightsCycles() {
+  const div = document.getElementById('insights-cycles-list');
+  try {
+    const r = await fetch(`/api/cycles/history?mode=${currentMode}`);
+    const d = await r.json();
+    if (!d.success || d.cycles.length === 0) {
+      div.innerHTML = '<p class="text-gray-500 text-sm">Sin ciclos completados en este modo.</p>';
+      return;
+    }
+    
+    // Filtrar solo significativos (≥6h)
+    const significant = d.cycles.filter(c => (c.durationMs || 0) >= 21600000);
+    if (significant.length === 0) {
+      div.innerHTML = '<p class="text-gray-500 text-sm">Sin ciclos significativos (≥6h) en este modo.</p>';
+      return;
+    }
+    
+    div.innerHTML = '<div class="space-y-2"></div>';
+    const container = div.querySelector('div');
+    
+    significant.slice(0, 20).forEach(c => {
+      const card = document.createElement('div');
+      card.className = 'bg-gray-900 border border-gray-700 rounded-lg p-3 cursor-pointer hover:border-purple-600 transition-colors';
+      card.innerHTML = `
+        <div class="flex items-center gap-3">
+          <input type="checkbox" id="cycle-${c.id}" class="w-4 h-4" onchange="toggleCycleSelection('${c.id}')">
+          <label for="cycle-${c.id}" class="flex-1 cursor-pointer text-sm">
+            <div class="flex justify-between items-center">
+              <span class="font-semibold">${new Date(c.completedAt).toLocaleDateString('es-ES')} ${new Date(c.completedAt).toLocaleTimeString('es-ES', {hour:'2-digit',minute:'2-digit'})}</span>
+              <div class="flex items-center gap-2">
+                <span class="text-xs text-gray-500">${c.snapshot?.length || 0} activos</span>
+                <span class="text-xs font-bold ${parseFloat(c.metrics?.successRate || 0) > 60 ? 'text-green-400' : parseFloat(c.metrics?.successRate || 0) > 40 ? 'text-yellow-400' : 'text-red-400'}">${c.metrics?.successRate || '0'}%</span>
+              </div>
+            </div>
+            <p class="text-xs text-gray-600 mt-0.5">${fmtDur(c.durationMs || 0)} · ${c.metrics?.correct || 0}/${c.metrics?.total || 0} correctas</p>
+          </label>
+        </div>
+      `;
+      container.appendChild(card);
+    });
+    
+  } catch(e) {
+    div.innerHTML = `<p class="text-red-400 text-sm">Error: ${e.message}</p>`;
+  }
+}
+
+function toggleCycleSelection(cycleId) {
+  const checkbox = document.getElementById('cycle-' + cycleId);
+  if (checkbox.checked) {
+    if (!selectedCyclesForInsights.includes(cycleId)) {
+      selectedCyclesForInsights.push(cycleId);
+    }
+  } else {
+    selectedCyclesForInsights = selectedCyclesForInsights.filter(id => id !== cycleId);
+  }
+  
+  // Habilitar botón si hay al menos 1 ciclo seleccionado
+  document.getElementById('btn-run-insights').disabled = selectedCyclesForInsights.length === 0;
+}
+
+async function runInsightsAnalysis() {
+  if (selectedCyclesForInsights.length === 0) {
+    alert('Selecciona al menos 1 ciclo para analizar');
+    return;
+  }
+  
+  const btn = document.getElementById('btn-run-insights');
+  const originalText = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = '⏳ Analizando con LLMs... (30-60s)';
+  
+  const resultDiv = document.getElementById('insights-modal-result');
+  resultDiv.classList.remove('hidden');
+  resultDiv.innerHTML = `
+    <div class="bg-gray-800 border border-purple-700 rounded-xl p-6 text-center">
+      <p class="text-purple-400 text-lg font-semibold mb-2">🧠 Consultando a los agentes IA...</p>
+      <p class="text-xs text-gray-500">Gemini · Claude · GPT-4 · Llama</p>
+      <div class="mt-4">
+        <div class="animate-pulse flex justify-center gap-2">
+          <div class="h-3 w-3 bg-purple-500 rounded-full"></div>
+          <div class="h-3 w-3 bg-purple-500 rounded-full animation-delay-200"></div>
+          <div class="h-3 w-3 bg-purple-500 rounded-full animation-delay-400"></div>
+        </div>
+      </div>
+      <p class="text-xs text-gray-600 mt-3">Esto puede tardar 30-60 segundos...</p>
+    </div>
+  `;
+  
+  try {
+    const r = await fetch('/api/insights/analyze', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ cycleIds: selectedCyclesForInsights, mode: currentMode })
+    });
+    
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error);
+    
+    currentInsightsResult = d;
+    renderInsightsResult(d);
+    
+  } catch(e) {
+    resultDiv.innerHTML = `<div class="bg-red-950 border border-red-800 rounded-xl p-4">
+      <p class="text-red-400 font-semibold">❌ Error en el análisis</p>
+      <p class="text-xs text-gray-400 mt-1">${e.message}</p>
+    </div>`;
+  } finally {
+    btn.disabled = false;
+    btn.textContent = originalText;
+  }
+}
+
+// Catálogo completo de agentes — mismo orden que el backend
+const LLM_AGENTS_CATALOG = [
+  { key: 'gemini',   icon: '🔷', name: 'Google Gemini',         tier: 'PAID', tierCss: 'bg-blue-900 text-blue-300' },
+  { key: 'claude',   icon: '🟣', name: 'Anthropic Claude',      tier: 'PAID', tierCss: 'bg-purple-900 text-purple-300' },
+  { key: 'openai',   icon: '🟢', name: 'OpenAI GPT-4',          tier: 'PAID', tierCss: 'bg-green-900 text-green-300' },
+  { key: 'llama',    icon: '🟠', name: 'Groq Llama',            tier: 'FREE', tierCss: 'bg-orange-900 text-orange-300' },
+  { key: 'mistral',  icon: '🔵', name: 'Mistral AI',            tier: 'FREE', tierCss: 'bg-sky-900 text-sky-300' },
+  { key: 'cohere',   icon: '🟤', name: 'Cohere Command-R',      tier: 'FREE', tierCss: 'bg-amber-900 text-amber-300' },
+  { key: 'cerebras', icon: '⚡', name: 'Cerebras Llama',        tier: 'FREE', tierCss: 'bg-cyan-900 text-cyan-300' },
+];
+
+function renderInsightsResult(data) {
+  const div = document.getElementById('insights-modal-result');
+  const responses = data.responses || {};
+  const consensus = data.consensus || {};
+
+  const successful = LLM_AGENTS_CATALOG.filter(a => responses[a.key]?.success);
+  const failed     = LLM_AGENTS_CATALOG.filter(a => responses[a.key] && !responses[a.key].success);
+  const notQueried = LLM_AGENTS_CATALOG.filter(a => !responses[a.key]);
+  const totalAgents = LLM_AGENTS_CATALOG.length;
+
+  // ── Cabecera ──────────────────────────────────────────────────────────────
+  let html = `
+    <div class="bg-gray-800 border border-purple-700 rounded-xl overflow-hidden">
+      <!-- Header -->
+      <div class="bg-gray-900 border-b border-gray-700 px-6 py-4 flex flex-wrap items-center justify-between gap-2">
+        <div>
+          <h4 class="text-lg font-bold text-purple-400">📊 Los ${successful.length} Sabios — Resultados del Análisis</h4>
+          <p class="text-xs text-gray-400 mt-0.5">${data.cyclesAnalyzed} ciclo(s) analizados · ${successful.length} de ${totalAgents} agentes respondieron · ${failed.length} fallidos · ${notQueried.length} sin key</p>
+        </div>
+        ${consensus.hasConsensus ? `
+          <button onclick="applyInsightsConsensus()"
+            class="bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-bold whitespace-nowrap">
+            ✓ Aplicar consenso al algoritmo
+          </button>` : ''}
+      </div>
+
+      <div class="p-6 space-y-6">
+  `;
+
+  // ── Respuestas individuales de cada agente ─────────────────────────────────
+  html += `<div>
+    <h5 class="text-sm font-bold text-gray-300 mb-3 flex items-center gap-2">
+      🤖 Respuesta de cada agente IA
+      <span class="text-xs text-gray-500 font-normal">— conclusión completa y razonamiento</span>
+    </h5>
+    <div class="space-y-3">`;
+
+  LLM_AGENTS_CATALOG.forEach(agent => {
+    const r = responses[agent.key];
+
+    if (!r) {
+      // No consultado (sin key)
+      html += `
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-4 opacity-40">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-base">${agent.icon}</span>
+            <span class="font-semibold text-sm text-gray-400">${agent.name}</span>
+            <span class="text-xs px-1.5 py-0.5 rounded ${agent.tierCss}">${agent.tier}</span>
+            <span class="ml-auto text-xs text-gray-600 bg-gray-800 px-2 py-0.5 rounded-full">⚪ Sin key configurada</span>
+          </div>
+        </div>`;
+      return;
+    }
+
+    if (!r.success) {
+      html += `
+        <div class="bg-red-950/20 border border-red-900/50 rounded-xl p-4">
+          <div class="flex items-center gap-2 mb-1">
+            <span class="text-base">${agent.icon}</span>
+            <span class="font-semibold text-sm">${agent.name}</span>
+            <span class="text-xs px-1.5 py-0.5 rounded ${agent.tierCss}">${agent.tier}</span>
+            <span class="ml-auto text-xs text-red-400 bg-red-950 px-2 py-0.5 rounded-full">✗ Error</span>
+          </div>
+          <p class="text-xs text-red-400 mt-1 ml-7">${r.error || 'Sin respuesta'}</p>
+        </div>`;
+      return;
+    }
+
+    // Respuesta exitosa — mostrar todo
+    const modelUsed = r.modelUsed ? `<span class="text-xs text-gray-500 mono ml-1">(${r.modelUsed})</span>` : '';
+    html += `
+      <div class="bg-gray-900 border border-green-900/40 rounded-xl p-4">
+        <div class="flex items-center gap-2 mb-3">
+          <span class="text-base">${agent.icon}</span>
+          <span class="font-semibold text-sm">${agent.name}</span>${modelUsed}
+          <span class="text-xs px-1.5 py-0.5 rounded ${agent.tierCss}">${agent.tier}</span>
+          <span class="ml-auto text-xs text-green-400 bg-green-950 px-2 py-0.5 rounded-full">✓ Exitoso</span>
+        </div>
+
+        ${r.assessment ? `
+          <div class="mb-2">
+            <p class="text-xs text-gray-500 uppercase tracking-wide mb-1 font-semibold">📋 Evaluación general</p>
+            <p class="text-sm text-gray-200 leading-relaxed ml-1">${r.assessment}</p>
+          </div>` : ''}
+
+        ${r.reasoning ? `
+          <div class="mb-2 border-t border-gray-800 pt-2 mt-2">
+            <p class="text-xs text-gray-500 uppercase tracking-wide mb-1 font-semibold">💡 Razonamiento</p>
+            <p class="text-sm text-gray-300 leading-relaxed ml-1">${r.reasoning}</p>
+          </div>` : ''}
+
+        ${r.expectedImpact ? `
+          <div class="border-t border-gray-800 pt-2 mt-2">
+            <p class="text-xs text-gray-500 uppercase tracking-wide mb-1 font-semibold">📈 Impacto esperado</p>
+            <p class="text-sm text-blue-300 ml-1">${r.expectedImpact}</p>
+          </div>` : ''}
+      </div>`;
+  });
+
+  html += `</div></div>`;  // cierre space-y-3 y div respuestas
+
+  // ── Bloque de consenso ─────────────────────────────────────────────────────
+  if (consensus.hasConsensus) {
+    const cats = [
+      { key: 'metaWeights',       label: '⚖️ Meta-pesos',          color: 'blue',   desc: 'Potencial vs Resistencia' },
+      { key: 'classification',    label: '🏷️ Clasificación',       color: 'yellow', desc: 'Umbrales INVERTIBLE / APALANCADO' },
+      { key: 'prediction',        label: '🎯 Predicción',          color: 'green',  desc: 'Target y tolerancia de magnitud' },
+      { key: 'potentialWeights',  label: '📈 Factores Potencial',  color: 'purple', desc: 'ATL, Volume, Social, News, Rebound' },
+      { key: 'resistanceWeights', label: '📉 Factores Resistencia',color: 'red',    desc: 'Leverage, MCap, Volatility, Fear' },
+    ];
+
+    // Explicación del cálculo de consenso
+    const modelNames = (consensus.modelNames || []).join(', ');
+    const n = consensus.modelsUsed;
+
+    html += `
+      <div class="bg-green-950/20 border border-green-800 rounded-xl overflow-hidden">
+        <div class="bg-green-950/40 px-5 py-3 border-b border-green-900">
+          <h5 class="font-bold text-green-400 text-base">✨ Consenso de ${n} agente${n > 1 ? 's' : ''}</h5>
+          <p class="text-xs text-gray-400 mt-0.5">
+            Participantes: <span class="text-green-300">${modelNames}</span>
+          </p>
+          <p class="text-xs text-gray-500 mt-1">
+            Método: media aritmética de los valores sugeridos por cada agente para cada parámetro
+            (solo se incluyen parámetros donde ≥2 agentes coincidieron en sugerir un valor).
+          </p>
+        </div>
+        <div class="p-5">
+          <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">`;
+
+    cats.forEach(cat => {
+      const adj = consensus.consensus?.[cat.key];
+      if (!adj || Object.keys(adj).length === 0) return;
+      html += `
+        <div class="bg-gray-900 border border-${cat.color}-900/60 rounded-lg p-3">
+          <p class="text-xs font-bold text-${cat.color}-400 mb-0.5">${cat.label}</p>
+          <p class="text-xs text-gray-600 mb-2">${cat.desc}</p>
+          <div class="space-y-1">`;
+      Object.entries(adj).forEach(([k, v]) => {
+        const display = typeof v === 'number' && v <= 1 && v > 0
+          ? `${(v * 100).toFixed(0)}% <span class="text-gray-600">(${v})</span>`
+          : `<span class="font-bold">${v}</span>`;
+        html += `<div class="flex justify-between items-center text-xs">
+          <span class="text-gray-400 mono">${k}</span>
+          <span class="text-white font-bold ml-2">${display}</span>
+        </div>`;
+      });
+      html += `</div></div>`;
+    });
+
+    html += `
+          </div>
+
+          <!-- Bloque de razonamientos del consenso -->
+          <div class="mt-4 bg-gray-900 rounded-lg p-4 border border-gray-800">
+            <p class="text-xs text-gray-500 uppercase tracking-wide font-semibold mb-2">🧠 ¿Por qué estos ajustes?</p>
+            <div class="space-y-2">`;
+
+    // Mostrar el reasoning de cada agente exitoso como justificación del consenso
+    LLM_AGENTS_CATALOG.forEach(agent => {
+      const r = responses[agent.key];
+      if (!r?.success || !r.reasoning) return;
+      html += `
+        <div class="text-xs leading-relaxed">
+          <span class="font-semibold text-gray-300">${agent.icon} ${agent.name}:</span>
+          <span class="text-gray-400 ml-1">${r.reasoning}</span>
+        </div>`;
+    });
+
+    html += `
+            </div>
+          </div>
+
+          <div class="mt-4 flex justify-end">
+            <button onclick="applyInsightsConsensus()"
+              class="bg-green-700 hover:bg-green-600 px-5 py-2.5 rounded-lg text-sm font-bold">
+              ✓ Aplicar este consenso al algoritmo
+            </button>
+          </div>
+        </div>
+      </div>`;
+
+  } else {
+    html += `
+      <div class="bg-yellow-950/20 border border-yellow-800 rounded-xl p-4">
+        <p class="text-yellow-400 font-semibold mb-1">⚠️ Consenso no alcanzado</p>
+        <p class="text-sm text-gray-400">${consensus.message || 'Se necesitan al menos 2 agentes con respuesta exitosa para calcular el consenso.'}</p>
+        ${successful.length === 1 ? `<p class="text-xs text-gray-500 mt-2">Solo respondió 1 agente. Configura más modelos gratuitos (Mistral, Cohere, Cerebras) en la pestaña Config → APIs.</p>` : ''}
+        ${successful.length === 0 ? `<p class="text-xs text-gray-500 mt-2">Ningún agente respondió. Verifica que las API keys estén correctamente configuradas.</p>` : ''}
+      </div>`;
+  }
+
+  html += `</div></div>`;  // cierre space-y-6 y div principal
+
+  div.innerHTML = html;
+  div.classList.remove('hidden');
+
+  // También actualizar la vista de la pestaña de análisis si existe
+  const insightsResult = document.getElementById('insights-result');
+  if (insightsResult) {
+    insightsResult.classList.remove('hidden');
+    insightsResult.innerHTML = html;
+  }
+}
+
+async function applyInsightsConsensus() {
+  if (!currentInsightsResult || !currentInsightsResult.consensus?.hasConsensus) {
+    alert('No hay consenso disponible para aplicar');
+    return;
+  }
+  
+  if (!confirm(`¿Aplicar el consenso de ${currentInsightsResult.consensus.modelsUsed} modelos al algoritmo ${currentMode === 'speculative' ? 'Especulativo' : 'Generalista'}?\n\nEsto sobrescribirá la configuración actual.`)) {
+    return;
+  }
+  
+  try {
+    const r = await fetch('/api/insights/apply-consensus', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ 
+        consensus: currentInsightsResult.consensus.consensus, 
+        mode: currentMode 
+      })
+    });
+    
+    const d = await r.json();
+    if (d.success) {
+      config = d.applied;
+      applyConfigToUI();
+      buildFactorSliders();
+      alert(`✅ ${d.message}\n\nLa configuración ha sido actualizada. Puedes revisarla en la pestaña Config.`);
+      closeModal('modal-insights');
+    } else {
+      alert('❌ ' + d.error);
+    }
+  } catch(e) {
+    alert('❌ Error: ' + e.message);
+  }
+}
+
 </script>
 
 <!-- ══ MODAL: DETALLE ACTIVO PUMP ═══════════════════════════════════════════ -->
@@ -2684,6 +3339,48 @@ async function addPumpAssetToCycleFromDetail() {
     </div>
   </div>
 </div>
+
+
+<!-- ══ MODAL: INSIGHTS CON LLMs ═════════════════════════════════════════════ -->
+<div id="modal-insights" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4 overflow-y-auto">
+  <div class="bg-gray-900 rounded-2xl w-full max-w-5xl shadow-2xl my-8">
+    <div class="sticky top-0 bg-gray-900 border-b border-gray-800 px-6 py-4 flex justify-between items-center rounded-t-2xl">
+      <h3 class="text-xl font-bold text-purple-400">🧠 Los N Sabios — Consenso de Agentes IA</h3>
+      <button onclick="closeModal('modal-insights')" class="text-gray-500 hover:text-white text-2xl">×</button>
+    </div>
+    <div class="p-6">
+      <!-- Estado de APIs -->
+      <div id="insights-api-status" class="bg-gray-800 border border-gray-700 rounded-xl p-4 mb-4">
+        <p class="text-sm text-gray-400 mb-2">⏳ Verificando APIs configuradas...</p>
+      </div>
+
+      <!-- Selector de ciclos -->
+      <div class="mb-5">
+        <h4 class="text-sm font-semibold text-gray-300 mb-2">Selecciona ciclos significativos (≥6h)</h4>
+        <div id="insights-cycles-list" class="bg-gray-800 border border-gray-700 rounded-xl p-4 max-h-64 overflow-y-auto">
+          <p class="text-gray-500 text-sm">Cargando ciclos...</p>
+        </div>
+      </div>
+
+      <!-- Botones -->
+      <div class="flex gap-3">
+        <button onclick="runInsightsAnalysis()" id="btn-run-insights" class="flex-1 bg-purple-700 hover:bg-purple-600 px-6 py-3 rounded-lg font-bold" disabled>
+          🚀 Analizar con LLMs (30-60s)
+        </button>
+        <button onclick="closeModal('modal-insights')" class="bg-gray-700 hover:bg-gray-600 px-6 py-3 rounded-lg font-semibold">
+          Cancelar
+        </button>
+      </div>
+
+      <!-- Resultado del análisis -->
+      <div id="insights-modal-result" class="hidden mt-6">
+        <!-- Se renderiza aquí -->
+      </div>
+    </div>
+  </div>
+</div>
+
+  <script src="/patch-llm-keys.js"></script>
 
 </body>
 </html>
