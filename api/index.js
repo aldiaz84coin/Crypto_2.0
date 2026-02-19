@@ -1323,8 +1323,11 @@ async function getInvestLog() {
 
 async function appendInvestLog(entry) {
   const log = await getInvestLog();
+  // Añadir metadatos comunes de auditoría a cada entrada
+  entry._logId   = `log_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
+  entry._version = 2; // versión del schema de log
   log.unshift(entry); // más reciente primero
-  await redisSet(INVEST_LOG_KEY, log.slice(0, 50)); // max 50 entradas
+  await redisSet(INVEST_LOG_KEY, log.slice(0, 200)); // max 200 entradas (subido de 50)
 }
 
 // Obtener keys de exchange desde Redis
@@ -1527,9 +1530,60 @@ app.post('/api/invest/execute', async (req, res) => {
 
     const decision = investManager.selectInvestmentTargets(snapshot, cfg, positions);
     if (!decision.shouldInvest) {
+      // === LOG DETALLADO: no_invest ===
+      const _allPos = await getPositions();
       const logEntry = {
-        type: 'no_invest', cycleId, timestamp: new Date().toISOString(),
-        reason: decision.reason, capitalAvailable: available
+        type:      'no_invest',
+        subtype:   'decision',
+        cycleId:   cycleId || null,
+        timestamp: new Date().toISOString(),
+        config: {
+          mode:            cfg.mode,
+          exchange:        cfg.exchange,
+          capitalTotal:    cfg.capitalTotal,
+          capitalPerCycle: cfg.capitalPerCycle,
+          maxPositions:    cfg.maxPositions,
+          minBoostPower:   cfg.minBoostPower,
+          minSignals:      cfg.minSignals,
+          takeProfitPct:   cfg.takeProfitPct,
+          stopLossPct:     cfg.stopLossPct,
+          maxHoldCycles:   cfg.maxHoldCycles,
+        },
+        capital: {
+          total:          cfg.capitalTotal,
+          available:      parseFloat(available.toFixed(2)),
+          invested:       parseFloat((cfg.capitalTotal - available).toFixed(2)),
+          utilizationPct: parseFloat(((cfg.capitalTotal - available) / cfg.capitalTotal * 100).toFixed(1)),
+          openPositions:  _allPos.filter(p => p.status === 'open').length,
+        },
+        snapshot: {
+          totalAssets:        snapshot.length,
+          invertibles:        snapshot.filter(a => a.classification === 'INVERTIBLE').length,
+          apalancados:        snapshot.filter(a => a.classification === 'APALANCADO').length,
+          ruidosos:           snapshot.filter(a => a.classification === 'RUIDOSO').length,
+          candidatesEval:     snapshot.filter(a => a.classification === 'INVERTIBLE' && (a.boostPower||0) > 0).length,
+          topBoostPower:      snapshot.length ? parseFloat(Math.max(...snapshot.map(a => a.boostPower || 0)).toFixed(3)) : 0,
+          avgPredictedChange: snapshot.length ? parseFloat((snapshot.reduce((s,a) => s + (a.predictedChange||0), 0) / snapshot.length).toFixed(2)) : 0,
+        },
+        decision: {
+          shouldInvest:       false,
+          reason:             decision.reason,
+          candidatesFound:    decision.selected?.length || 0,
+          minSignalsRequired: cfg.minSignals,
+          minBoostRequired:   cfg.minBoostPower,
+          topCandidates: snapshot
+            .filter(a => a.classification === 'INVERTIBLE')
+            .sort((a,b) => (b.boostPower||0) - (a.boostPower||0))
+            .slice(0, 5)
+            .map(a => ({
+              symbol:          a.symbol,
+              boostPower:      parseFloat((a.boostPower||0).toFixed(3)),
+              boostPowerPct:   parseFloat(((a.boostPower||0)*100).toFixed(1)),
+              predictedChange: a.predictedChange,
+              classification:  a.classification,
+              meetsThreshold:  (a.boostPower||0) >= cfg.minBoostPower,
+            })),
+        },
       };
       await appendInvestLog(logEntry);
       return res.json({ success: true, invested: false, reason: decision.reason, capitalAvailable: available });
@@ -1554,15 +1608,74 @@ app.post('/api/invest/execute', async (req, res) => {
     const allPositions = [...positions, ...newPositions];
     await savePositions(allPositions);
 
-    // Log de ciclo de inversión
-    const logEntry = {
-      type: 'invest', cycleId, timestamp: new Date().toISOString(),
-      mode: cfg.mode, exchange: cfg.exchange,
-      positionsOpened: newPositions.length,
-      totalInvested:   newPositions.reduce((s,p) => s + p.capitalUSD, 0),
-      positions:       newPositions.map(p => ({ id:p.id, symbol:p.symbol, capitalUSD:p.capitalUSD, entryPrice:p.entryPrice }))
+    // === LOG DETALLADO: invest ===
+    const _capitalAfter = investManager.calculateAvailableCapital([...positions, ...newPositions], cfg.capitalTotal);
+    const investLogEntry = {
+      type:      'invest',
+      subtype:   'execution',
+      cycleId:   cycleId || null,
+      timestamp: new Date().toISOString(),
+      config: {
+        mode:            cfg.mode,
+        exchange:        cfg.exchange,
+        capitalTotal:    cfg.capitalTotal,
+        capitalPerCycle: cfg.capitalPerCycle,
+        maxPositions:    cfg.maxPositions,
+        minBoostPower:   cfg.minBoostPower,
+        takeProfitPct:   cfg.takeProfitPct,
+        stopLossPct:     cfg.stopLossPct,
+        maxHoldCycles:   cfg.maxHoldCycles,
+        feePct:          cfg.feePct,
+        diversification: cfg.diversification,
+      },
+      capital: {
+        before: {
+          available: parseFloat(available.toFixed(2)),
+          invested:  parseFloat((cfg.capitalTotal - available).toFixed(2)),
+        },
+        after: {
+          available: parseFloat(_capitalAfter.toFixed(2)),
+          invested:  parseFloat((cfg.capitalTotal - _capitalAfter).toFixed(2)),
+        },
+        deployedThisCycle: parseFloat(newPositions.reduce((s,p) => s + p.capitalUSD, 0).toFixed(2)),
+        utilizationPct:    parseFloat(((cfg.capitalTotal - _capitalAfter) / cfg.capitalTotal * 100).toFixed(1)),
+      },
+      snapshot: {
+        totalAssets:    snapshot.length,
+        invertibles:    snapshot.filter(a => a.classification === 'INVERTIBLE').length,
+        apalancados:    snapshot.filter(a => a.classification === 'APALANCADO').length,
+        ruidosos:       snapshot.filter(a => a.classification === 'RUIDOSO').length,
+        candidatesEval: decision.selected?.length || 0,
+      },
+      execution: {
+        positionsOpened:  newPositions.length,
+        totalInvestedUSD: parseFloat(newPositions.reduce((s,p) => s + p.capitalUSD, 0).toFixed(2)),
+        totalFeesEstUSD:  parseFloat(newPositions.reduce((s,p) => s + (p.entryFeeUSD||0), 0).toFixed(4)),
+        ordersPlaced:     orders.length,
+        allOrdersOk:      orders.every(o => o.order?.success !== false),
+      },
+      positions: newPositions.map((p, i) => ({
+        id:              p.id,
+        symbol:          p.symbol,
+        name:            p.name,
+        assetId:         p.assetId,
+        capitalUSD:      p.capitalUSD,
+        units:           p.units,
+        entryPrice:      p.entryPrice,
+        takeProfitPrice: p.takeProfitPrice,
+        stopLossPrice:   p.stopLossPrice,
+        boostPower:      parseFloat((p.boostPower||0).toFixed(3)),
+        boostPowerPct:   parseFloat(((p.boostPower||0)*100).toFixed(1)),
+        predictedChange: p.predictedChange,
+        entryFeeUSD:     p.entryFeeUSD,
+        orderSimulated:  cfg.mode === 'simulated',
+        openedAt:        p.openedAt,
+        maxHoldCycles:   p.maxHoldCycles,
+        selectionRank:   i + 1,
+      })),
+      decisionReason: decision.reason,
     };
-    await appendInvestLog(logEntry);
+    await appendInvestLog(investLogEntry);
 
     res.json({
       success:          true,
@@ -1632,16 +1745,77 @@ app.post('/api/invest/evaluate', async (req, res) => {
 
     const summary = investManager.buildCycleSummary(positions, cycleId, cfg);
 
-    // Registrar en log
-    const logEntry = {
-      type: 'evaluate', cycleId, timestamp: new Date().toISOString(),
-      evaluations: evaluations.length,
-      sells:       evaluations.filter(e => e.sold).length,
-      holds:       evaluations.filter(e => !e.sold).length,
-      netReturnUSD: summary.netReturnUSD,
-      netReturnPct: summary.netReturnPct
+    // === LOG DETALLADO: evaluate ===
+    const _soldEvals  = evaluations.filter(e => e.sold);
+    const _winsEvals  = _soldEvals.filter(e => (e.pnlPct||0) > 0);
+    const evalLogEntry = {
+      type:      'evaluate',
+      subtype:   'cycle_evaluation',
+      cycleId:   cycleId || null,
+      timestamp: new Date().toISOString(),
+      config: {
+        mode:          cfg.mode,
+        exchange:      cfg.exchange,
+        takeProfitPct: cfg.takeProfitPct,
+        stopLossPct:   cfg.stopLossPct,
+        maxHoldCycles: cfg.maxHoldCycles,
+        feePct:        cfg.feePct,
+      },
+      summary: {
+        evaluated:    evaluations.length,
+        sells:        _soldEvals.length,
+        holds:        evaluations.filter(e => !e.sold).length,
+        wins:         _winsEvals.length,
+        losses:       _soldEvals.filter(e => (e.pnlPct||0) <= 0).length,
+        netReturnUSD: summary.netReturnUSD,
+        netReturnPct: summary.netReturnPct,
+        totalPnLUSD:  summary.totalPnLUSD,
+        totalFeesUSD: summary.totalFeesUSD,
+        winRate:      _soldEvals.length > 0 ? parseFloat((_winsEvals.length / _soldEvals.length * 100).toFixed(1)) : null,
+      },
+      capital: {
+        total:        cfg.capitalTotal,
+        available:    parseFloat(investManager.calculateAvailableCapital(positions, cfg.capitalTotal).toFixed(2)),
+        openRemaining: positions.filter(p => p.status === 'open').length,
+      },
+      evaluations: evaluations.map(e => {
+        const pos = openPositions.find(p => p.id === e.positionId) || {};
+        return {
+          positionId:        e.positionId,
+          symbol:            e.symbol,
+          assetId:           pos.assetId,
+          entryPrice:        pos.entryPrice,
+          currentPrice:      e.currentPrice,
+          takeProfitPrice:   pos.takeProfitPrice,
+          stopLossPrice:     pos.stopLossPrice,
+          pnlPct:            e.pnlPct,
+          pnlUSD:            e.pnlUSD,
+          netPnL:            e.netPnL,
+          exitFeeUSD:        e.exitFeeUSD,
+          decision:          e.decision,
+          reason:            e.reason,
+          sold:              e.sold,
+          holdCycles:        e.holdCycles || pos.holdCycles,
+          maxHoldCycles:     pos.maxHoldCycles,
+          predictedChange:   pos.predictedChange,
+          boostPower:        pos.boostPower,
+          algorithmFeedback: e.feedback || null,
+          predictionCorrect: e.feedback?.predictionCorrect ?? null,
+          predictionError:   e.feedback?.errorMagnitude ?? null,
+          orderOk:           e.orderOk,
+        };
+      }),
+      algorithmFeedback: evaluations.filter(e => e.feedback).map(e => ({
+        symbol:            e.symbol,
+        predictionCorrect: e.feedback.predictionCorrect,
+        predictedChange:   e.feedback.predictedChange,
+        actualChange:      e.feedback.actualChange,
+        errorMagnitude:    e.feedback.errorMagnitude,
+        closeReason:       e.feedback.closeReason,
+        suggestion:        e.feedback.suggestion,
+      })),
     };
-    await appendInvestLog(logEntry);
+    await appendInvestLog(evalLogEntry);
 
     res.json({
       success: true,
@@ -1680,6 +1854,51 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
     investManager.closePosition(position, evaluation);
     await savePositions(positions);
 
+    // === LOG DETALLADO: manual_close ===
+    const _holdMs = position.openedAt ? Date.now() - new Date(position.openedAt).getTime() : null;
+    await appendInvestLog({
+      type:      'manual_close',
+      subtype:   'user_action',
+      cycleId:   position.cycleId || null,
+      timestamp: new Date().toISOString(),
+      config: { mode: cfg.mode, exchange: cfg.exchange },
+      capital: {
+        total:     cfg.capitalTotal,
+        available: parseFloat(investManager.calculateAvailableCapital(positions, cfg.capitalTotal).toFixed(2)),
+      },
+      position: {
+        id:              position.id,
+        symbol:          position.symbol,
+        name:            position.name,
+        assetId:         position.assetId,
+        capitalUSD:      position.capitalUSD,
+        units:           position.units,
+        entryPrice:      position.entryPrice,
+        exitPrice:       currentPrice,
+        takeProfitPrice: position.takeProfitPrice,
+        stopLossPrice:   position.stopLossPrice,
+        openedAt:        position.openedAt,
+        closedAt:        new Date().toISOString(),
+        holdDurationMs:  _holdMs,
+        holdDurationHrs: _holdMs ? parseFloat((_holdMs / 3600000).toFixed(2)) : null,
+        holdCycles:      position.holdCycles,
+        boostPower:      position.boostPower,
+        predictedChange: position.predictedChange,
+      },
+      result: {
+        pnlPct:            evaluation.pnlPct,
+        pnlUSD:            evaluation.pnlUSD,
+        netPnL:            evaluation.netPnL,
+        exitFeeUSD:        evaluation.exitFeeUSD,
+        totalFees:         (position.entryFeeUSD||0) + (evaluation.exitFeeUSD||0),
+        isProfit:          (evaluation.pnlUSD||0) > 0,
+        closeReason:       'manual',
+        reason:            'Cierre manual por el usuario',
+        predictionCorrect: (position.predictedChange||0) > 0 && (evaluation.pnlPct||0) > 0,
+        algorithmFeedback: evaluation.algorithmFeedback,
+      },
+    });
+
     res.json({ success: true, position, evaluation, order });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -1689,6 +1908,235 @@ app.get('/api/invest/log', async (_req, res) => {
   try {
     const log = await getInvestLog();
     res.json({ success: true, log });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/log/analyze ────────────────────────────────────────────
+// Envía el log completo + posiciones + performance a los N Sabios para análisis
+app.post('/api/invest/log/analyze', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const { limit = 50 } = req.body;
+    const [log, positions, cfg] = await Promise.all([getInvestLog(), getPositions(), getInvestConfig()]);
+
+    if (!log.length) return res.status(400).json({ success: false, error: 'El log está vacío. Sin datos para analizar.' });
+
+    const apiKeys = {
+      gemini:   await getRedisKey('GEMINI_API_KEY'),
+      claude:   await getRedisKey('ANTHROPIC_API_KEY'),
+      openai:   await getRedisKey('OPENAI_API_KEY'),
+      groq:     await getRedisKey('GROQ_API_KEY'),
+      mistral:  await getRedisKey('MISTRAL_API_KEY'),
+      cohere:   await getRedisKey('COHERE_API_KEY'),
+      cerebras: await getRedisKey('CEREBRAS_API_KEY'),
+    };
+    if (!Object.values(apiKeys).filter(Boolean).length) {
+      return res.status(400).json({ success: false, error: 'No hay API keys de LLMs configuradas. Configura al menos 1 en la pestaña APIs.' });
+    }
+
+    const closed  = positions.filter(p => p.status === 'closed');
+    const open    = positions.filter(p => p.status === 'open');
+    const recent  = log.slice(0, Math.min(limit, log.length));
+
+    const totalInvested = closed.reduce((s,p) => s + (p.capitalUSD||0), 0);
+    const totalPnL      = closed.reduce((s,p) => s + (p.realizedPnL||0), 0);
+    const totalFees     = closed.reduce((s,p) => s + (p.totalFeesUSD||0), 0);
+    const netReturn     = totalPnL - totalFees;
+    const wins          = closed.filter(p => (p.realizedPnL||0) > 0);
+    const closeReasons  = {};
+    closed.forEach(p => { const r = p.closeReason || 'unknown'; closeReasons[r] = (closeReasons[r]||0) + 1; });
+    const badPreds      = closed.filter(p => p.algorithmFeedback && !p.algorithmFeedback.predictionCorrect);
+
+    const performance = {
+      totalOperations:   closed.length,
+      openPositions:     open.length,
+      totalInvestedUSD:  parseFloat(totalInvested.toFixed(2)),
+      totalPnLUSD:       parseFloat(totalPnL.toFixed(4)),
+      totalFeesUSD:      parseFloat(totalFees.toFixed(4)),
+      netReturnUSD:      parseFloat(netReturn.toFixed(4)),
+      netReturnPct:      totalInvested > 0 ? parseFloat((netReturn/totalInvested*100).toFixed(2)) : 0,
+      winCount:          wins.length,
+      lossCount:         closed.length - wins.length,
+      winRate:           closed.length > 0 ? parseFloat((wins.length/closed.length*100).toFixed(1)) : null,
+      closeReasons,
+      badPredictions:    badPreds.length,
+      badPredictionRate: closed.length > 0 ? parseFloat((badPreds.length/closed.length*100).toFixed(1)) : 0,
+    };
+
+    const prompt = `Eres un experto analista cuantitativo de trading de criptomonedas.
+Analiza el rendimiento del módulo de inversión automático y proporciona un análisis pormenorizado.
+Responde EXCLUSIVAMENTE con JSON válido (sin markdown, sin texto extra) con esta estructura:
+{
+  "overallAssessment": "Evaluación global (2-3 párrafos)",
+  "strengths": ["punto fuerte 1", "..."],
+  "weaknesses": ["debilidad 1", "..."],
+  "keyFindings": [{"finding": "...", "evidence": "...", "impact": "high|medium|low"}],
+  "parameterRecommendations": {
+    "takeProfitPct":  {"current": ${cfg.takeProfitPct},  "suggested": null, "reason": ""},
+    "stopLossPct":    {"current": ${cfg.stopLossPct},    "suggested": null, "reason": ""},
+    "minBoostPower":  {"current": ${cfg.minBoostPower},  "suggested": null, "reason": ""},
+    "maxHoldCycles":  {"current": ${cfg.maxHoldCycles},  "suggested": null, "reason": ""},
+    "capitalPerCycle":{"current": ${cfg.capitalPerCycle},"suggested": null, "reason": ""},
+    "minSignals":     {"current": ${cfg.minSignals},     "suggested": null, "reason": ""}
+  },
+  "riskAssessment": "Evaluación del riesgo",
+  "actionPlan": ["Acción 1", "Acción 2", "Acción 3"],
+  "predictionQuality": "Análisis de la calidad predictiva del BoostPower",
+  "summary": "Conclusión en 1 párrafo"
+}
+
+=== CONFIG ===
+${JSON.stringify({mode:cfg.mode,exchange:cfg.exchange,capitalTotal:cfg.capitalTotal,capitalPerCycle:cfg.capitalPerCycle,maxPositions:cfg.maxPositions,minBoostPower:cfg.minBoostPower,minSignals:cfg.minSignals,takeProfitPct:cfg.takeProfitPct,stopLossPct:cfg.stopLossPct,maxHoldCycles:cfg.maxHoldCycles})}
+
+=== MÉTRICAS GLOBALES ===
+${JSON.stringify(performance)}
+
+=== LOG RECIENTE (${recent.length} entradas) ===
+${JSON.stringify(recent)}
+
+=== POSICIONES CERRADAS ===
+${JSON.stringify(closed.slice(0,30).map(p=>({symbol:p.symbol,capitalUSD:p.capitalUSD,entryPrice:p.entryPrice,exitPrice:p.currentPrice,pnlPct:p.realizedPnLPct,pnlUSD:p.realizedPnL,fees:p.totalFeesUSD,closeReason:p.closeReason,holdCycles:p.holdCycles,boostPower:p.boostPower,predictedChange:p.predictedChange,predictionCorrect:p.algorithmFeedback?.predictionCorrect})))}
+
+=== POSICIONES ABIERTAS ===
+${JSON.stringify(open.map(p=>({symbol:p.symbol,capitalUSD:p.capitalUSD,entryPrice:p.entryPrice,currentPrice:p.currentPrice,unrealizedPnLPct:p.unrealizedPnLPct,holdCycles:p.holdCycles,maxHoldCycles:p.maxHoldCycles})))}`;
+
+    // Llamar a LLMs en paralelo con axios directamente
+    async function callLLM(name, fn) {
+      try { return await fn(); }
+      catch(e) { return { success: false, model: name, error: e.message }; }
+    }
+    function parseResp(text, model) {
+      try {
+        const clean = text.trim().replace(/```json
+?/g,'').replace(/```
+?/g,'').trim();
+        const parsed = JSON.parse(clean);
+        return { success: true, model, data: parsed, rawResponse: text.slice(0,200) };
+      } catch(e) { return { success: false, model, error: `Parse failed: ${e.message}`, rawResponse: text.slice(0,300) }; }
+    }
+
+    const llmCalls = [];
+    if (apiKeys.gemini) llmCalls.push(callLLM('Gemini', async () => {
+      for (const m of ['gemini-2.0-flash','gemini-1.5-flash-latest']) {
+        try {
+          const r = await axios.post(`https://generativelanguage.googleapis.com/v1beta/models/${m}:generateContent?key=${apiKeys.gemini}`,
+            { contents:[{parts:[{text:prompt}]}], generationConfig:{temperature:0.3,maxOutputTokens:2048} }, {timeout:30000});
+          const t = r.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+          const res = parseResp(t, 'Gemini'); if (res.success) { res.modelUsed=m; return res; }
+        } catch(e) { if (e.response?.status===404) continue; throw e; }
+      }
+      return { success:false, model:'Gemini', error:'No model available' };
+    }));
+    if (apiKeys.claude) llmCalls.push(callLLM('Claude', async () => {
+      for (const m of ['claude-sonnet-4-5','claude-3-5-sonnet-20241022','claude-3-5-haiku-20241022']) {
+        try {
+          const r = await axios.post('https://api.anthropic.com/v1/messages',
+            { model:m, max_tokens:2048, temperature:0.3, messages:[{role:'user',content:prompt}] },
+            { headers:{'x-api-key':apiKeys.claude,'anthropic-version':'2023-06-01','content-type':'application/json'}, timeout:30000 });
+          const t = r.data?.content?.[0]?.text || '';
+          const res = parseResp(t, 'Claude'); if (res.success) { res.modelUsed=m; return res; }
+        } catch(e) { if (e.response?.status===400) continue; throw e; }
+      }
+      return { success:false, model:'Claude', error:'No model available' };
+    }));
+    if (apiKeys.openai) llmCalls.push(callLLM('OpenAI', async () => {
+      for (const m of ['gpt-4o','gpt-4o-mini']) {
+        try {
+          const r = await axios.post('https://api.openai.com/v1/chat/completions',
+            { model:m, messages:[{role:'user',content:prompt}], temperature:0.3, max_tokens:2048 },
+            { headers:{'Authorization':`Bearer ${apiKeys.openai}`,'Content-Type':'application/json'}, timeout:30000 });
+          const t = r.data?.choices?.[0]?.message?.content || '';
+          const res = parseResp(t, 'OpenAI'); if (res.success) { res.modelUsed=m; return res; }
+        } catch(e) { if ([429,404].includes(e.response?.status)) continue; throw e; }
+      }
+      return { success:false, model:'OpenAI', error:'No quota' };
+    }));
+    if (apiKeys.groq) llmCalls.push(callLLM('Llama', async () => {
+      const r = await axios.post('https://api.groq.com/openai/v1/chat/completions',
+        { model:'llama-3.3-70b-versatile', messages:[{role:'user',content:prompt}], temperature:0.3, max_tokens:2048 },
+        { headers:{'Authorization':`Bearer ${apiKeys.groq}`,'Content-Type':'application/json'}, timeout:30000 });
+      const t = r.data?.choices?.[0]?.message?.content || '';
+      return parseResp(t, 'Llama');
+    }));
+    if (apiKeys.mistral) llmCalls.push(callLLM('Mistral', async () => {
+      const r = await axios.post('https://api.mistral.ai/v1/chat/completions',
+        { model:'mistral-small-latest', messages:[{role:'user',content:prompt}], temperature:0.3, max_tokens:2048 },
+        { headers:{'Authorization':`Bearer ${apiKeys.mistral}`,'Content-Type':'application/json'}, timeout:30000 });
+      const t = r.data?.choices?.[0]?.message?.content || '';
+      return parseResp(t, 'Mistral');
+    }));
+    if (apiKeys.cerebras) llmCalls.push(callLLM('Cerebras', async () => {
+      const r = await axios.post('https://api.cerebras.ai/v1/chat/completions',
+        { model:'llama-3.3-70b', messages:[{role:'user',content:prompt}], temperature:0.3, max_tokens:2048 },
+        { headers:{'Authorization':`Bearer ${apiKeys.cerebras}`,'Content-Type':'application/json'}, timeout:20000 });
+      const t = r.data?.choices?.[0]?.message?.content || '';
+      return parseResp(t, 'Cerebras');
+    }));
+
+    const llmResults = {};
+    const results = await Promise.allSettled(llmCalls);
+    results.forEach(r => {
+      const val = r.status === 'fulfilled' ? r.value : { success:false, error:'Promise rejected' };
+      llmResults[val.model || 'unknown'] = val;
+    });
+
+    // Consenso básico de parámetros
+    const successful = Object.values(llmResults).filter(r => r.success);
+    const paramKeys  = ['takeProfitPct','stopLossPct','minBoostPower','maxHoldCycles','capitalPerCycle','minSignals'];
+    const paramConsensus = {};
+    paramKeys.forEach(param => {
+      const suggestions = successful.map(r => r.data?.parameterRecommendations?.[param]?.suggested).filter(v => v !== null && v !== undefined);
+      if (suggestions.length > 0) {
+        paramConsensus[param] = {
+          suggestions,
+          avg:   parseFloat((suggestions.reduce((s,v) => s+parseFloat(v),0)/suggestions.length).toFixed(3)),
+          agree: suggestions.length >= 2 && (Math.max(...suggestions)-Math.min(...suggestions)) < Math.max(...suggestions)*0.15,
+        };
+      }
+    });
+
+    res.json({
+      success:         true,
+      analyzedEntries: recent.length,
+      performance,
+      llmResults,
+      consensus: {
+        respondedCount:           successful.length,
+        totalCalled:              Object.keys(llmResults).length,
+        models:                   successful.map(r => r.model || r.modelUsed),
+        parameterRecommendations: paramConsensus,
+      },
+      generatedAt: new Date().toISOString(),
+    });
+  } catch(e) {
+    console.error('invest/log/analyze error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── GET /api/invest/log/export ───────────────────────────────────────────────
+app.get('/api/invest/log/export', async (_req, res) => {
+  try {
+    const [log, positions, cfg] = await Promise.all([getInvestLog(), getPositions(), getInvestConfig()]);
+    const closed = positions.filter(p => p.status === 'closed');
+    const exportData = {
+      exportedAt:    new Date().toISOString(),
+      schemaVersion: 2,
+      config:        cfg,
+      summary: {
+        totalLogEntries:  log.length,
+        totalPositions:   positions.length,
+        openPositions:    positions.filter(p => p.status === 'open').length,
+        closedPositions:  closed.length,
+        totalNetPnL:      parseFloat(closed.reduce((s,p) => s+(p.realizedPnL||0),0).toFixed(4)),
+        totalFees:        parseFloat(closed.reduce((s,p) => s+(p.totalFeesUSD||0),0).toFixed(4)),
+      },
+      log,
+      positions,
+    };
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Content-Disposition', `attachment; filename=invest-log-${new Date().toISOString().slice(0,10)}.json`);
+    res.json(exportData);
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
