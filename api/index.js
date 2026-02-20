@@ -2597,6 +2597,99 @@ app.get('/api/pump/asset/:id', async (req, res) => {
 });
 
 
+// ── GET /api/pump/sources-status ──────────────────────────────────────────
+// Devuelve el estado de cada señal del detector según las keys configuradas
+app.get('/api/pump/sources-status', async (_req, res) => {
+  try {
+    // Leer keys configuradas
+    const [telegramKey, glassnodeKey, cryptoquantKey, lunarKey, ccKey] = await Promise.all([
+      getRedisKey('TELEGRAM_BOT_TOKEN'),
+      getRedisKey('GLASSNODE_API_KEY'),
+      getRedisKey('CRYPTOQUANT_API_KEY'),
+      getRedisKey('LUNARCRUSH_API_KEY'),
+      getRedisKey('CRYPTOCOMPARE_API_KEY'),
+    ]);
+
+    const hasTelegram   = !!(telegramKey && telegramKey.trim());
+    const hasGlassnode  = !!(glassnodeKey && glassnodeKey.trim());
+    const hasCryptoQ    = !!(cryptoquantKey && cryptoquantKey.trim());
+    const hasLunar      = !!(lunarKey && lunarKey.trim());
+    const hasCC         = !!(ccKey && ccKey.trim());
+
+    const sources = [
+      {
+        key:       'social',
+        active:    true,
+        partial:   false,
+        statusMsg: 'Reddit API pública — sin key requerida',
+      },
+      {
+        key:       'cloned',
+        active:    true,
+        partial:   false,
+        statusMsg: 'Derivado del análisis social (Reddit)',
+      },
+      {
+        key:       'volume',
+        active:    true,
+        partial:   false,
+        statusMsg: 'CoinGecko API pública — sin key requerida',
+      },
+      {
+        key:       'orderbook',
+        active:    true,
+        partial:   false,
+        statusMsg: 'Binance API pública — sin key requerida',
+      },
+      {
+        key:       'timing',
+        active:    true,
+        partial:   false,
+        statusMsg: 'Derivado del patrón de señales simultáneas',
+      },
+      {
+        key:       'news',
+        active:    hasCC,
+        partial:   !hasCC, // CoinDesk/CT scraping funciona sin key
+        statusMsg: hasCC
+          ? 'CryptoCompare + CoinDesk + CoinTelegraph — cobertura completa'
+          : 'Sin key: CoinDesk + CoinTelegraph scraping (cobertura reducida)',
+      },
+      {
+        key:       'telegram',
+        active:    hasTelegram,
+        partial:   false,
+        statusMsg: hasTelegram
+          ? 'Telegram Bot API configurada ✓'
+          : 'Requiere TELEGRAM_BOT_TOKEN — crea un bot en @BotFather (gratuito)',
+      },
+      {
+        key:       'whale',
+        active:    hasGlassnode || hasCryptoQ,
+        partial:   false,
+        statusMsg: hasGlassnode
+          ? 'Glassnode API configurada ✓'
+          : hasCryptoQ
+            ? 'CryptoQuant API configurada ✓'
+            : 'Requiere Glassnode API Key (plan Advanced) o CryptoQuant API Key',
+      },
+      {
+        key:       'lunarcrush',
+        active:    hasLunar,
+        partial:   false,
+        statusMsg: hasLunar
+          ? 'LunarCrush API v4 configurada ✓'
+          : 'Requiere LUNARCRUSH_API_KEY — plan gratuito disponible en lunarcrush.com',
+      },
+    ];
+
+    const activeCount  = sources.filter(s => s.active).length;
+    const partialCount = sources.filter(s => s.partial).length;
+
+    res.json({ success: true, sources, activeCount, partialCount, totalSources: sources.length });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 // ── GET /api/pump/settings ────────────────────────────────────────────────
 
 // ── POST /api/cycles/add-asset ───────────────────────────────────────────────
