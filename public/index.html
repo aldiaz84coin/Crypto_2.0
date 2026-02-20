@@ -3013,12 +3013,15 @@ function renderDetectionCard(d) {
       ${clonesHTML ? `<div class="bg-orange-950/30 border border-orange-900 rounded-lg p-3 mb-3"><p class="text-xs font-semibold text-orange-400 mb-2">Mensajes clonados detectados</p><div class="space-y-1">${clonesHTML}</div></div>` : ''}
 
       <!-- Botones de acción -->
-      <div class="flex gap-2 mt-4">
+      <div class="flex gap-2 mt-4 flex-wrap">
         <button onclick="viewPumpAssetDetail('${d.assetId}')" class="flex-1 bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
-          🔍 Ver análisis completo
+          🔍 Ver análisis
         </button>
-        <button onclick="addPumpAssetToCycle('${d.assetId}', '${d.symbol}')" class="flex-1 bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
+        <button onclick="addPumpAssetToCycle('${d.assetId}', '${d.symbol}')" class="flex-1 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
           ➕ Añadir a ciclo
+        </button>
+        <button onclick="openPumpBuyModal('${d.assetId}', '${d.symbol}', ${d.current_price || 0}, null)" class="flex-1 bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors">
+          💰 Comprar
         </button>
       </div>
     </div>`;
@@ -3339,10 +3342,15 @@ function renderPumpAssetDetail(asset) {
           </div>
         </div>` : ''}
 
-      <!-- Botón añadir a ciclo -->
-      <button onclick="addPumpAssetToCycleFromDetail()" class="w-full bg-green-700 hover:bg-green-600 py-3 rounded-lg font-bold text-lg">
-        ➕ Añadir a ciclo especulativo
-      </button>
+      <!-- Botones de acción -->
+      <div class="flex gap-3">
+        <button onclick="addPumpAssetToCycleFromDetail()" class="flex-1 bg-gray-700 hover:bg-gray-600 py-3 rounded-lg font-semibold">
+          ➕ Añadir a ciclo
+        </button>
+        <button onclick="openPumpBuyModal(currentPumpAssetDetail.id, currentPumpAssetDetail.symbol, currentPumpAssetDetail.current_price, currentPumpAssetDetail)" class="flex-1 bg-emerald-700 hover:bg-emerald-600 py-3 rounded-lg font-bold text-lg">
+          💰 Comprar ahora
+        </button>
+      </div>
     </div>
   `;
 }
@@ -3383,9 +3391,155 @@ async function addPumpAssetToCycleFromDetail() {
 }
 
 
+async function addPumpAssetToCycleFromDetail() {
+  if (!currentPumpAssetDetail) return;
+  // Pasamos el objeto completo para que el backend no tenga que re-fetchear CoinGecko
+  await addPumpAssetToCycle(currentPumpAssetDetail.id, currentPumpAssetDetail.symbol, currentPumpAssetDetail);
+  closeModal('modal-pump-asset-detail');
+}
+
 // ═══════════════════════════════════════════════════════════════
-// INSIGHTS CON 4 LLMs
+// COMPRA MANUAL DESDE DETECTOR DE PUMP
 // ═══════════════════════════════════════════════════════════════
+
+let _pumpBuyAsset = null;
+
+async function openPumpBuyModal(assetId, symbol, price, preloadedAsset) {
+  _pumpBuyAsset = preloadedAsset || pumpAssetCache[assetId]?.data || null;
+
+  let cfg = null;
+  try {
+    const r = await fetch('/api/invest/config');
+    const d = await r.json();
+    if (d.success) cfg = d.config;
+  } catch(_) {}
+
+  const capitalTotal    = cfg?.capitalTotal    || 1000;
+  const capitalPerCycle = cfg?.capitalPerCycle || 0.30;
+  const maxPositions    = cfg?.maxPositions    || 3;
+  const tpPct           = cfg?.takeProfitPct   || 10;
+  const slPct           = cfg?.stopLossPct     || 5;
+  const feePct          = cfg?.feePct          || 0.10;
+  const mode            = cfg?.mode            || 'simulated';
+  const defaultCapital  = parseFloat((capitalTotal * capitalPerCycle / maxPositions).toFixed(2));
+  const currentPrice    = parseFloat(price) || _pumpBuyAsset?.current_price || 0;
+  const tpPrice         = currentPrice > 0 ? (currentPrice * (1 + tpPct / 100)).toFixed(8) : '—';
+  const slPrice         = currentPrice > 0 ? (currentPrice * (1 - slPct / 100)).toFixed(8) : '—';
+  const symUpper        = (symbol || '').toUpperCase();
+
+  const modeBadge = mode === 'simulated'
+    ? '<span class="pill bg-blue-950 text-blue-400">⚗️ SIMULADO</span>'
+    : mode === 'testnet'
+      ? '<span class="pill bg-yellow-950 text-yellow-400">🧪 TESTNET</span>'
+      : '<span class="pill bg-red-950 text-red-400">💵 REAL</span>';
+
+  document.getElementById('pump-buy-modal-body').innerHTML = `
+    <div class="space-y-4">
+      <div class="flex justify-between items-center pb-3 border-b border-gray-800">
+        <div>
+          <p class="text-xl font-bold">${_pumpBuyAsset?.name || symUpper} <span class="text-gray-500 text-base">${symUpper}</span></p>
+          <p class="text-sm text-gray-400 mono">Precio: <span class="text-white font-semibold">$${currentPrice < 0.01 ? currentPrice.toFixed(8) : currentPrice.toFixed(4)}</span></p>
+        </div>
+        <div>${modeBadge}</div>
+      </div>
+
+      <div>
+        <label class="block text-xs text-gray-400 mb-1">Capital a invertir (USD)</label>
+        <div class="flex gap-2 items-center">
+          <input id="pump-buy-capital" type="number" min="1" step="1" value="${defaultCapital}"
+            class="flex-1 bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-white mono text-sm focus:border-emerald-500 focus:outline-none"
+            oninput="updatePumpBuyPreview(${currentPrice}, ${tpPct}, ${slPct}, ${feePct})" />
+          <span class="text-gray-500 text-sm">USD</span>
+        </div>
+        <p class="text-xs text-gray-500 mt-1">Capital por defecto: ${capitalPerCycle*100}% del total ÷ ${maxPositions} posiciones</p>
+      </div>
+
+      <div class="bg-gray-800 rounded-xl p-4 space-y-2 text-sm">
+        <div class="flex justify-between">
+          <span class="text-gray-400">Unidades estimadas</span>
+          <span id="pbp-units" class="mono text-white font-semibold">${currentPrice > 0 ? (defaultCapital / currentPrice).toFixed(6) : '—'}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-green-400">🎯 Take Profit (+${tpPct}%)</span>
+          <span id="pbp-tp" class="mono text-green-400 font-semibold">$${tpPrice}</span>
+        </div>
+        <div class="flex justify-between">
+          <span class="text-red-400">🛑 Stop Loss (-${slPct}%)</span>
+          <span id="pbp-sl" class="mono text-red-400 font-semibold">$${slPrice}</span>
+        </div>
+        <div class="flex justify-between border-t border-gray-700 pt-2">
+          <span class="text-gray-400">Comisión estimada (${feePct.toFixed(2)}%)</span>
+          <span id="pbp-fee" class="mono text-gray-400">$${(defaultCapital * feePct / 100).toFixed(4)}</span>
+        </div>
+      </div>
+
+      ${mode === 'real' ? `
+        <div class="bg-red-950 border border-red-700 rounded-lg p-3">
+          <p class="text-red-300 text-xs font-semibold">⚠️ MODO REAL — Esto ejecutará una orden real con dinero real en el exchange.</p>
+        </div>` : ''}
+
+      <div class="flex gap-3 pt-2">
+        <button onclick="closeModal('modal-pump-buy')" class="flex-1 bg-gray-800 hover:bg-gray-700 py-3 rounded-lg font-semibold">
+          Cancelar
+        </button>
+        <button id="pump-buy-confirm-btn" onclick="confirmPumpBuy('${assetId}')"
+          class="flex-1 ${mode === 'real' ? 'bg-red-700 hover:bg-red-600' : 'bg-emerald-700 hover:bg-emerald-600'} py-3 rounded-lg font-bold text-lg transition-colors">
+          💰 Confirmar ${mode === 'real' ? 'orden REAL' : 'compra'}
+        </button>
+      </div>
+      <div id="pump-buy-result" class="text-center text-sm mt-1 min-h-5"></div>
+    </div>`;
+
+  showModal('modal-pump-buy');
+}
+
+function updatePumpBuyPreview(price, tpPct, slPct, feePct) {
+  const capital = parseFloat(document.getElementById('pump-buy-capital')?.value || 0);
+  if (!capital || !price) return;
+  const u = document.getElementById('pbp-units'); if(u) u.textContent = (capital / price).toFixed(6);
+  const t = document.getElementById('pbp-tp');    if(t) t.textContent = `$${(price * (1 + tpPct / 100)).toFixed(8)}`;
+  const s = document.getElementById('pbp-sl');    if(s) s.textContent = `$${(price * (1 - slPct / 100)).toFixed(8)}`;
+  const f = document.getElementById('pbp-fee');   if(f) f.textContent = `$${(capital * feePct / 100).toFixed(4)}`;
+}
+
+async function confirmPumpBuy(assetId) {
+  const capitalUSD = parseFloat(document.getElementById('pump-buy-capital')?.value || 0);
+  const resultDiv  = document.getElementById('pump-buy-result');
+  if (!capitalUSD || capitalUSD < 1) {
+    resultDiv.innerHTML = '<span class="text-red-400">❌ Capital mínimo $1</span>';
+    return;
+  }
+  const assetData = (currentPumpAssetDetail?.id === assetId ? currentPumpAssetDetail : null)
+    || pumpAssetCache[assetId]?.data || _pumpBuyAsset;
+
+  resultDiv.innerHTML = '<span class="text-blue-400">⏳ Enviando orden...</span>';
+  document.querySelectorAll('#modal-pump-buy button').forEach(b => b.disabled = true);
+
+  try {
+    const r = await fetch('/api/invest/buy-manual', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ assetData, capitalUSD })
+    });
+    const d = await r.json();
+    if (d.success) {
+      resultDiv.innerHTML = `<span class="text-emerald-400 font-semibold">✅ ${d.message}</span>`;
+      setTimeout(() => {
+        closeModal('modal-pump-buy');
+        closeModal('modal-pump-asset-detail');
+        if (document.getElementById('content-invest')?.style.display !== 'none') loadInvestData();
+      }, 2200);
+    } else {
+      resultDiv.innerHTML = `<span class="text-red-400">❌ ${d.error}</span>`;
+      document.querySelectorAll('#modal-pump-buy button').forEach(b => b.disabled = false);
+    }
+  } catch(e) {
+    resultDiv.innerHTML = `<span class="text-red-400">❌ ${e.message}</span>`;
+    document.querySelectorAll('#modal-pump-buy button').forEach(b => b.disabled = false);
+  }
+}
+
+
 
 let selectedCyclesForInsights = [];
 let currentInsightsResult = null;
@@ -3861,6 +4015,19 @@ async function applyInsightsConsensus() {
 </div>
 
   <script src="/patch-llm-keys.js"></script>
+
+<!-- ══ MODAL: COMPRA MANUAL DESDE DETECTOR PUMP ══════════════════════════════ -->
+<div id="modal-pump-buy" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+  <div class="bg-gray-900 rounded-2xl w-full max-w-lg shadow-2xl">
+    <div class="flex justify-between items-center px-6 py-4 border-b border-gray-800">
+      <h3 class="text-lg font-bold">💰 Orden de Compra</h3>
+      <button onclick="closeModal('modal-pump-buy')" class="text-gray-500 hover:text-white text-2xl leading-none">×</button>
+    </div>
+    <div class="p-6" id="pump-buy-modal-body">
+      <p class="text-gray-400 text-sm">Cargando configuración...</p>
+    </div>
+  </div>
+</div>
 
 </body>
 </html>
