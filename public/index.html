@@ -701,7 +701,8 @@
     <div class="flex gap-1 mb-5 bg-gray-900 p-1 rounded-xl border border-gray-800">
       <button onclick="openPumpTab('pump-results')"  id="pumptab-pump-results"  class="pumptab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">🔍 Detecciones</button>
       <button onclick="openPumpTab('pump-history')"  id="pumptab-pump-history"  class="pumptab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">📜 Historial</button>
-      <button onclick="openPumpTab('pump-config')"   id="pumptab-pump-config"   class="pumptab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">⚙️ Config & Email</button>
+      <button onclick="openPumpTab('pump-sources')"  id="pumptab-pump-sources"  class="pumptab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">🔌 Fuentes</button>
+      <button onclick="openPumpTab('pump-config')"   id="pumptab-pump-config"   class="pumptab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">⚙️ Config</button>
     </div>
 
     <!-- Detecciones -->
@@ -738,6 +739,57 @@
     <div id="pump-history" class="pumptab-content hidden">
       <div id="pump-history-list"><p class="text-gray-500 text-sm">Cargando historial...</p></div>
     </div>
+
+
+    <!-- ═══ FUENTES DEL DETECTOR ═══ -->
+    <div id="pump-sources" class="pumptab-content hidden">
+
+      <!-- Header con resumen de cobertura -->
+      <div id="pump-sources-summary" class="bg-gray-900 border border-gray-800 rounded-xl p-4 mb-4">
+        <div class="flex justify-between items-center mb-3">
+          <div>
+            <h3 class="font-semibold text-white">🔌 Estado de Fuentes Externas</h3>
+            <p class="text-xs text-gray-500 mt-0.5">Señales activas · Cobertura de scoring · Configuración de API keys</p>
+          </div>
+          <button onclick="loadPumpSourcesStatus()" class="bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg text-xs font-semibold text-gray-300">
+            🔄 Actualizar
+          </button>
+        </div>
+        <div class="grid grid-cols-3 gap-3">
+          <div class="bg-gray-800 rounded-xl p-3 text-center">
+            <div id="psrc-active-count" class="text-2xl font-bold text-green-400">—</div>
+            <div class="text-xs text-gray-500 mt-1">Fuentes activas</div>
+          </div>
+          <div class="bg-gray-800 rounded-xl p-3 text-center">
+            <div id="psrc-max-score" class="text-2xl font-bold text-blue-400">—</div>
+            <div class="text-xs text-gray-500 mt-1">Score máx. posible</div>
+          </div>
+          <div class="bg-gray-800 rounded-xl p-3 text-center">
+            <div id="psrc-coverage" class="text-2xl font-bold text-purple-400">—</div>
+            <div class="text-xs text-gray-500 mt-1">Cobertura total</div>
+          </div>
+        </div>
+        <!-- Barra de cobertura -->
+        <div class="mt-3">
+          <div class="flex justify-between text-xs text-gray-500 mb-1">
+            <span>Cobertura de señales</span>
+            <span id="psrc-coverage-label">Cargando...</span>
+          </div>
+          <div class="w-full bg-gray-800 rounded-full h-2.5">
+            <div id="psrc-coverage-bar" class="h-2.5 rounded-full bg-gradient-to-r from-blue-600 to-purple-500 transition-all duration-500" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Lista de señales / fuentes -->
+      <div id="pump-sources-list" class="space-y-3">
+        <div class="text-center py-8 text-gray-500 text-sm">
+          <div class="text-3xl mb-2">🔌</div>
+          Cargando estado de fuentes...
+        </div>
+      </div>
+
+    </div><!-- /pump-sources -->
 
     <!-- Config & Email -->
     <div id="pump-config" class="pumptab-content hidden">
@@ -805,42 +857,16 @@
           <div id="pump-email-msg" class="text-sm mt-2"></div>
         </div>
 
-        <!-- Info señales -->
+        <!-- Link a tab fuentes -->
         <div class="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <h3 class="font-semibold text-gray-400 mb-3">📊 Señales analizadas</h3>
-          <div class="grid grid-cols-2 gap-2 text-sm">
-            <div class="bg-gray-800 rounded-lg p-3">
-              <p class="text-orange-400 font-semibold mb-1">📱 Spike Social (+2)</p>
-              <p class="text-xs text-gray-400">Reddit multi-subreddit: posts hoy vs. media 7 días. Umbral: ×5.</p>
+          <div class="flex justify-between items-center">
+            <div>
+              <h3 class="font-semibold text-gray-300 mb-1">🔌 Estado de Fuentes Externas</h3>
+              <p class="text-xs text-gray-500">Consulta el estado, relevancia y configuración de las 9 señales del detector.</p>
             </div>
-            <div class="bg-gray-800 rounded-lg p-3">
-              <p class="text-orange-400 font-semibold mb-1">🗣️ Mensajes Clonados (+2)</p>
-              <p class="text-xs text-gray-400">Similitud Jaccard entre títulos. Alerta si >40% son similares.</p>
-            </div>
-            <div class="bg-gray-800 rounded-lg p-3">
-              <p class="text-orange-400 font-semibold mb-1">📊 Volumen Anómalo (+2)</p>
-              <p class="text-xs text-gray-400">Historial 7 días CoinGecko. Alerta si volumen ×4 sobre media.</p>
-            </div>
-            <div class="bg-gray-800 rounded-lg p-3">
-              <p class="text-orange-400 font-semibold mb-1">🐋 Ballenas (+2)</p>
-              <p class="text-xs text-gray-400">Glassnode: inflows a exchanges ×3. Requiere API key.</p>
-            </div>
-            <div class="bg-gray-800 rounded-lg p-3">
-              <p class="text-orange-400 font-semibold mb-1">📰 Noticias Vacías (+1)</p>
-              <p class="text-xs text-gray-400">Keywords de pump en CryptoCompare/CoinDesk/CoinTelegraph.</p>
-            </div>
-            <div class="bg-gray-800 rounded-lg p-3">
-              <p class="text-orange-400 font-semibold mb-1">🌙 LunarCrush (+2)</p>
-              <p class="text-xs text-gray-400">Galaxy Score >75, Alt Rank <15, Social Volume >10K. Requiere key.</p>
-            </div>
-            <div class="bg-gray-800 rounded-lg p-3">
-              <p class="text-orange-400 font-semibold mb-1">⏱️ Timing Sincronizado (+1)</p>
-              <p class="text-xs text-gray-400">≥5 posts Reddit en ventana de 3h con spike simultáneo.</p>
-            </div>
-            <div class="bg-gray-800 rounded-lg p-3">
-              <p class="text-gray-500 font-semibold mb-1">🔜 FUD Internacional</p>
-              <p class="text-xs text-gray-500">Próximamente — detección de FUD coordinado.</p>
-            </div>
+            <button onclick="openPumpTab('pump-sources')" class="bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold flex-shrink-0 ml-4">
+              Ver fuentes →
+            </button>
           </div>
         </div>
 
@@ -914,6 +940,7 @@ function setTab(tab) {
   }
   if (tab === 'invest')     loadInvestData();
   if (tab === 'pump')       { loadPumpSettings(); loadPumpScan(); }
+  if (tab === 'pump-sources' || tab === 'pump') { /* lazy load */ }
   if (tab === 'config')     switchConfigModel(configEditMode || 'normal');
 }
 
@@ -2888,6 +2915,7 @@ let currentPumpSubtab = 'pump-results';
 
 function openPumpTab(tab) {
   document.querySelectorAll('.pumptab-content').forEach(el => el.classList.add('hidden'));
+  if (tab === 'pump-sources') loadPumpSourcesStatus();
   document.querySelectorAll('.pumptab').forEach(el => {
     el.classList.remove('bg-gray-800','text-white'); el.classList.add('text-gray-400');
   });
@@ -3143,6 +3171,281 @@ async function testPumpEmail() {
     else msg.innerHTML = `<span class="text-red-400">❌ ${d.error}</span>`;
   } catch(e) { msg.innerHTML = `<span class="text-red-400">❌ ${e.message}</span>`; }
   setTimeout(() => { if(msg) msg.innerHTML = ''; }, 5000);
+}
+
+// ═══════════════════════════════════════════════════════════════
+// FUENTES DEL DETECTOR DE PUMP
+// ═══════════════════════════════════════════════════════════════
+
+// Definición estática de las 9 señales del detector
+const PUMP_SOURCES_DEF = [
+  {
+    key: 'social',
+    label: '📱 Spike Social',
+    maxScore: 2,
+    tier: 'free',
+    apiKey: null,
+    source: 'Reddit API',
+    description: 'Detecta spikes en menciones de Reddit: posts hoy vs. media 7 días. Activa con ×5 de incremento.',
+    howItWorks: 'Consulta múltiples subreddits (r/CryptoMoonShots, r/SatoshiStreetBets, r/altcoin...). Spike ≥×5 = +2pts.',
+    importance: 'Alta — primer indicador de manipulación coordinada',
+    alwaysActive: true,
+  },
+  {
+    key: 'cloned',
+    label: '🗣️ Mensajes Clonados',
+    maxScore: 2,
+    tier: 'free',
+    apiKey: null,
+    source: 'Reddit API',
+    description: 'Detecta mensajes sospechosamente similares usando similitud Jaccard entre títulos de posts.',
+    howItWorks: 'Compara pares de posts. Si similitud >65% en >40% de pares → patrón de bots coordinados.',
+    importance: 'Alta — señal muy específica de coordinación artificial',
+    alwaysActive: true,
+  },
+  {
+    key: 'volume',
+    label: '📊 Volumen Anómalo',
+    maxScore: 2,
+    tier: 'free',
+    apiKey: null,
+    source: 'CoinGecko',
+    description: 'Compara volumen actual con la media de 7 días. Volumen ×4 sobre media = señal crítica.',
+    howItWorks: 'Descarga historial diario de CoinGecko. ×2 media = +1pt, ×4 media = +2pts.',
+    importance: 'Muy alta — volumen sin causa orgánica es la señal más fiable de pump',
+    alwaysActive: true,
+  },
+  {
+    key: 'orderbook',
+    label: '📉 Order Book Manip.',
+    maxScore: 1,
+    tier: 'free',
+    apiKey: null,
+    source: 'Binance API pública',
+    description: 'Detecta buy walls y sell walls artificiales en el libro de órdenes de Binance.',
+    howItWorks: 'Analiza ratio Bids/Asks. Imbalance >5× o <0.2× + una orden que representa >30% del libro.',
+    importance: 'Media — complemento que confirma manipulación coordinada',
+    alwaysActive: true,
+  },
+  {
+    key: 'timing',
+    label: '⏱️ Timing Sincronizado',
+    maxScore: 1,
+    tier: 'free',
+    apiKey: null,
+    source: 'Derivado (otras señales)',
+    description: 'Bonus si ≥3 señales independientes se activan simultáneamente: social + volumen + ballenas/noticias.',
+    howItWorks: 'No consulta APIs externas. Evalúa si el patrón de disparo múltiple simultáneo es no-orgánico.',
+    importance: 'Muy alta como confirmación — un pump real rara vez activa solo una señal',
+    alwaysActive: true,
+  },
+  {
+    key: 'news',
+    label: '📰 Noticias Vacías',
+    maxScore: 1,
+    tier: 'freemium',
+    apiKey: 'CRYPTOCOMPARE_API_KEY',
+    apiKeyLabel: 'CryptoCompare API Key',
+    source: 'CoinDesk + CoinTelegraph + CryptoCompare',
+    description: 'Detecta noticias con lenguaje de pump coordinado: "moon", "100x", "last chance", "big announcement"...',
+    howItWorks: 'Scraping de CoinDesk/CT gratuito + CryptoCompare news con key. Detecta 30+ keywords de pump.',
+    importance: 'Media — señal confirmatoria, especialmente útil en combinación con spike social',
+    fallback: 'Sin key usa solo CoinDesk/CoinTelegraph scraping (cobertura reducida)',
+    alwaysActive: false,
+    freePartial: true,
+  },
+  {
+    key: 'telegram',
+    label: '💬 Telegram Growth',
+    maxScore: 1,
+    tier: 'free-key',
+    apiKey: 'TELEGRAM_BOT_TOKEN',
+    apiKeyLabel: 'Telegram Bot Token',
+    source: 'Telegram Bot API',
+    description: 'Detecta grupos de Telegram del activo con >5.000 miembros — comunidades grandes son objetivo de pumps.',
+    howItWorks: 'Busca grupos @{symbol}official, @{symbol}token, @{symbol}coin vía Bot API. Miembros >5K = señal.',
+    importance: 'Media — específica para tokens con comunidad activa en Telegram',
+    setupGuide: 'Crea un bot en @BotFather (Telegram) y copia el token. Es gratuito.',
+    alwaysActive: false,
+  },
+  {
+    key: 'whale',
+    label: '🐋 Whale Activity',
+    maxScore: 2,
+    tier: 'premium',
+    apiKey: 'GLASSNODE_API_KEY',
+    apiKeyLabel: 'Glassnode API Key',
+    source: 'Glassnode (premium)',
+    description: 'Detecta inflows masivos a exchanges: grandes poseedores moviendo fondos hacia venta antes del dump.',
+    howItWorks: 'Glassnode exchange_net_flow ×3 sobre media = +1pt. Transaction count spike = +1pt adicional.',
+    importance: 'Muy alta — indica preparación para dump coordinado post-pump',
+    setupGuide: 'Requiere plan Glassnode Advanced ($99/mes). Registra en glassnode.com.',
+    altKey: 'CRYPTOQUANT_API_KEY',
+    altKeyLabel: 'CryptoQuant API Key (alternativa)',
+    alwaysActive: false,
+  },
+  {
+    key: 'lunarcrush',
+    label: '🌙 LunarCrush',
+    maxScore: 1,
+    tier: 'premium',
+    apiKey: 'LUNARCRUSH_API_KEY',
+    apiKeyLabel: 'LunarCrush API Key',
+    source: 'LunarCrush API v4',
+    description: 'Galaxy Score >80, Alt Rank <10 o Social Volume >50K: indica trending artificial en redes sociales.',
+    howItWorks: 'LunarCrush agrega señales de Twitter, Reddit, YouTube, TikTok. Thresholds configurados para pumps.',
+    importance: 'Alta — confirma coordinación cross-platform que Reddit solo no detecta',
+    setupGuide: 'Plan gratuito disponible en lunarcrush.com. Límite 100 req/día.',
+    alwaysActive: false,
+  },
+];
+
+async function loadPumpSourcesStatus() {
+  const listDiv = document.getElementById('pump-sources-list');
+  if (!listDiv) return;
+  listDiv.innerHTML = '<div class="text-center py-6 text-gray-500 text-sm">⏳ Consultando estado...</div>';
+
+  try {
+    const r = await fetch('/api/pump/sources-status');
+    const d = await r.json();
+    if (!d.success) throw new Error(d.error);
+
+    renderPumpSources(d.sources);
+    updatePumpSourcesSummary(d.sources);
+  } catch(e) {
+    listDiv.innerHTML = `<div class="text-red-400 text-sm p-4">❌ Error: ${e.message}</div>`;
+  }
+}
+
+function updatePumpSourcesSummary(sources) {
+  const active = sources.filter(s => s.active);
+  const maxPossible = active.reduce((t, s) => t + (PUMP_SOURCES_DEF.find(d => d.key === s.key)?.maxScore || 0), 0);
+  const totalMax = 13; // cap del sistema
+  const coverage = Math.round(maxPossible / totalMax * 100);
+
+  const eActive   = document.getElementById('psrc-active-count');
+  const eMax      = document.getElementById('psrc-max-score');
+  const eCoverage = document.getElementById('psrc-coverage');
+  const eBar      = document.getElementById('psrc-coverage-bar');
+  const eLabel    = document.getElementById('psrc-coverage-label');
+
+  if (eActive)   eActive.textContent   = `${active.length}/${sources.length}`;
+  if (eMax)      eMax.textContent      = `${maxPossible}/13`;
+  if (eCoverage) eCoverage.textContent = `${coverage}%`;
+  if (eBar)      eBar.style.width      = coverage + '%';
+  if (eLabel) {
+    const label = coverage >= 80 ? '🟢 Cobertura excelente' : coverage >= 50 ? '🟡 Cobertura media' : '🔴 Cobertura baja';
+    eLabel.textContent = `${coverage}% — ${label}`;
+    eLabel.className = coverage >= 80 ? 'text-green-400' : coverage >= 50 ? 'text-yellow-400' : 'text-red-400';
+  }
+}
+
+function renderPumpSources(sources) {
+  const listDiv = document.getElementById('pump-sources-list');
+  if (!listDiv) return;
+
+  // Agrupar por tier
+  const groups = [
+    { title: '🟢 Siempre Activas (Gratuitas)', keys: ['social','cloned','volume','orderbook','timing'], color: 'green' },
+    { title: '🟡 Activas con API Key (Gratuita/Freemium)', keys: ['news','telegram'], color: 'yellow' },
+    { title: '🔴 Activas con API Key (Premium)', keys: ['whale','lunarcrush'], color: 'red' },
+  ];
+
+  listDiv.innerHTML = groups.map(group => {
+    const srcs = sources.filter(s => group.keys.includes(s.key));
+    if (!srcs.length) return '';
+    return \`
+      <div class="mb-4">
+        <h4 class="text-xs font-bold text-\${group.color}-400 uppercase tracking-wider mb-2 px-1">\${group.title}</h4>
+        <div class="space-y-2">
+          \${srcs.map(s => renderPumpSourceCard(s)).join('')}
+        </div>
+      </div>\`;
+  }).join('');
+}
+
+function renderPumpSourceCard(src) {
+  const def = PUMP_SOURCES_DEF.find(d => d.key === src.key) || {};
+  const isActive   = src.active;
+  const isPartial  = src.partial;
+  const maxScore   = def.maxScore || 0;
+  const relevancePct = Math.round(maxScore / 13 * 100);
+
+  // Color del estado
+  const statusColor  = isActive ? 'text-green-400' : isPartial ? 'text-yellow-400' : 'text-red-400';
+  const statusBg     = isActive ? 'bg-green-950 border-green-900' : isPartial ? 'bg-yellow-950 border-yellow-900' : 'bg-gray-900 border-gray-800';
+  const statusLabel  = isActive ? '✅ Activa' : isPartial ? '⚡ Parcial' : '⭕ Inactiva';
+  const statusDesc   = isActive ? src.statusMsg || 'Funcionando correctamente' : isPartial ? src.statusMsg || 'Sin key — usando fallback gratuito' : src.statusMsg || 'Requiere configuración';
+
+  // Barra de relevancia
+  const relBar = maxScore >= 2 ? 'bg-red-500' : maxScore === 1 ? 'bg-yellow-500' : 'bg-gray-600';
+
+  // Botón config
+  const configBtn = def.apiKey
+    ? \`<button onclick="openAPIKeyModal('\${def.apiKey}')" class="bg-gray-700 hover:bg-gray-600 text-xs px-3 py-1.5 rounded-lg font-semibold transition-colors">
+        ⚙️ \${isActive ? 'Cambiar key' : 'Configurar'}
+      </button>\`
+    : '<span class="text-xs text-gray-600 px-2">Sin key requerida</span>';
+
+  // Badge de API alternativa
+  const altKeyBadge = def.altKey && !isActive
+    ? \`<button onclick="openAPIKeyModal('\${def.altKey}')" class="text-xs text-blue-400 hover:text-blue-300 px-2">+ \${def.altKeyLabel}</button>\`
+    : '';
+
+  // Setup guide
+  const setupHint = !isActive && def.setupGuide
+    ? \`<p class="text-xs text-blue-400 mt-2">💡 \${def.setupGuide}</p>\`
+    : '';
+
+  return \`
+    <div class="\${statusBg} border rounded-xl p-4 transition-all">
+      <!-- Fila principal -->
+      <div class="flex justify-between items-start gap-3">
+        <div class="flex-1 min-w-0">
+          <div class="flex items-center gap-2 mb-1 flex-wrap">
+            <span class="font-semibold text-sm">\${def.label || src.key}</span>
+            <span class="\${statusColor} text-xs font-bold">\${statusLabel}</span>
+            \${isPartial ? '<span class="text-xs text-yellow-500 bg-yellow-950 px-1.5 py-0.5 rounded">Parcial</span>' : ''}
+          </div>
+          <p class="text-xs text-gray-400 leading-relaxed">\${def.description || ''}</p>
+          <p class="text-xs \${statusColor} mt-1">\${statusDesc}</p>
+          \${setupHint}
+        </div>
+        <!-- Score + Config -->
+        <div class="flex flex-col items-end gap-2 flex-shrink-0">
+          <div class="text-right">
+            <div class="text-lg font-bold mono \${isActive || isPartial ? 'text-white' : 'text-gray-600'}">+\${maxScore}</div>
+            <div class="text-xs text-gray-500">puntos máx.</div>
+          </div>
+          \${configBtn}
+          \${altKeyBadge}
+        </div>
+      </div>
+
+      <!-- Barra de relevancia -->
+      <div class="mt-3 pt-3 border-t border-gray-800/50">
+        <div class="flex justify-between text-xs text-gray-500 mb-1">
+          <span>Relevancia en scoring · <span class="text-gray-400">\${def.source || '—'}</span></span>
+          <span>\${maxScore}/13 pts (\${relevancePct}%)</span>
+        </div>
+        <div class="w-full bg-gray-800 rounded-full h-1.5">
+          <div class="h-1.5 rounded-full \${isActive || isPartial ? relBar : 'bg-gray-700'} transition-all"
+               style="width:\${isActive || isPartial ? relevancePct : relevancePct * 0.3}%"></div>
+        </div>
+      </div>
+
+      <!-- Detalles expandibles -->
+      <details class="mt-2">
+        <summary class="text-xs text-gray-500 hover:text-gray-300 cursor-pointer select-none">
+          ▸ Ver cómo funciona
+        </summary>
+        <div class="mt-2 text-xs text-gray-400 space-y-1 pl-2 border-l border-gray-700">
+          <p><span class="text-gray-500">⚙️ Algoritmo:</span> \${def.howItWorks || '—'}</p>
+          <p><span class="text-gray-500">⚖️ Importancia:</span> \${def.importance || '—'}</p>
+          \${def.fallback ? \`<p><span class="text-yellow-500">⚡ Fallback:</span> \${def.fallback}</p>\` : ''}
+        </div>
+      </details>
+    </div>\`;
 }
 
 window.onload = () => { init(); };
