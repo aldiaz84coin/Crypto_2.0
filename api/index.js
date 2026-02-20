@@ -1909,9 +1909,14 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
 app.post('/api/invest/buy-manual', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
-    const { assetData, capitalUSD: overrideCapital } = req.body;
+    let { assetData, capitalUSD: overrideCapital } = req.body;
+
+    // Normalizar assetData: puede llegar con 'assetId' en vez de 'id' (objetos del detector PUMP)
+    if (assetData && !assetData.id && assetData.assetId) assetData.id = assetData.assetId;
+    if (assetData && !assetData.symbol && assetData.id)  assetData.symbol = assetData.id;
+
     if (!assetData?.id || !assetData?.symbol) {
-      return res.status(400).json({ success: false, error: 'assetData con id y symbol requerido' });
+      return res.status(400).json({ success: false, error: 'assetData con id y symbol requerido', received: JSON.stringify(assetData) });
     }
 
     const cfg       = await getInvestConfig();
