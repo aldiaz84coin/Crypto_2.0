@@ -2952,6 +2952,8 @@ function renderPumpDetections(detections) {
     div.innerHTML = '<div class="text-center py-10"><p class="text-5xl mb-3">✅</p><p class="text-green-400 font-semibold">Sin anomalías detectadas</p><p class="text-gray-500 text-sm mt-1">No se observan patrones de pump coordinado en small-caps</p></div>';
     return;
   }
+  // Guardar datos de cada detección para uso posterior (compra manual)
+  detections.forEach(d => { if (d.assetId) pumpDetectionMap[d.assetId] = d; });
   div.innerHTML = detections.map(d => renderDetectionCard(d)).join('');
 }
 
@@ -3151,6 +3153,7 @@ window.onload = () => { init(); };
 
 let currentPumpAssetDetail = null;
 const pumpAssetCache = {}; // caché en memoria por assetId
+const pumpDetectionMap = {}; // datos básicos de cada detección renderizada
 
 async function viewPumpAssetDetail(assetId) {
   try {
@@ -3405,7 +3408,23 @@ async function addPumpAssetToCycleFromDetail() {
 let _pumpBuyAsset = null;
 
 async function openPumpBuyModal(assetId, symbol, price, preloadedAsset) {
-  _pumpBuyAsset = preloadedAsset || pumpAssetCache[assetId]?.data || null;
+  // Prioridad: datos precargados > caché de detalle > mapa de detecciones > mínimo construido
+  const fromDetectionMap = pumpDetectionMap[assetId];
+  _pumpBuyAsset = preloadedAsset
+    || pumpAssetCache[assetId]?.data
+    || (fromDetectionMap ? {
+        id:            fromDetectionMap.assetId,
+        symbol:        fromDetectionMap.symbol,
+        name:          fromDetectionMap.name || fromDetectionMap.symbol,
+        current_price: fromDetectionMap.current_price || parseFloat(price) || 0,
+        market_cap:    fromDetectionMap.market_cap || 0,
+        boostPower:    0,
+        boostPowerPercent: 0,
+        predictedChange: 0,
+        classification: 'PUMP',
+       } : null)
+    // Último recurso: construir objeto mínimo con los parámetros del onclick
+    || { id: assetId, symbol, name: symbol, current_price: parseFloat(price) || 0, classification: 'PUMP' };
 
   let cfg = null;
   try {
@@ -3510,7 +3529,15 @@ async function confirmPumpBuy(assetId) {
     return;
   }
   const assetData = (currentPumpAssetDetail?.id === assetId ? currentPumpAssetDetail : null)
-    || pumpAssetCache[assetId]?.data || _pumpBuyAsset;
+    || pumpAssetCache[assetId]?.data
+    || _pumpBuyAsset
+    || pumpDetectionMap[assetId]
+    // Mínimo absoluto — el backend solo necesita id y symbol para operar
+    || { id: assetId, symbol: assetId, current_price: 0, classification: 'PUMP' };
+
+  // Normalizar id siempre presente
+  if (!assetData.id) assetData.id = assetId;
+  if (!assetData.symbol) assetData.symbol = assetId;
 
   resultDiv.innerHTML = '<span class="text-blue-400">⏳ Enviando orden...</span>';
   document.querySelectorAll('#modal-pump-buy button').forEach(b => b.disabled = true);
