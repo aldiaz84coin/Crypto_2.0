@@ -1439,28 +1439,13 @@ function renderActiveCycleCard(c) {
   const now=Date.now(), total=c.durationMs||(c.endTime-c.startTime);
   const remaining=Math.max(0,c.endTime-now), pct=Math.min(100,Math.round((now-c.startTime)/total*100));
   const ready=remaining===0, sig=total>=SIGNIFICANT_MS;
-
-  const isSpec = c.mode === 'speculative';
-  const modeBadge = isSpec
-    ? '<span class="pill bg-orange-900 text-orange-300">🎯 Especulativo</span>'
-    : '<span class="pill bg-blue-900 text-blue-300">📊 Generalista</span>';
-  const scaleFactor = c.predictionScaleFactor
-    ? `<span class="text-xs text-gray-400">Escala: <span class="text-white mono">×${parseFloat(c.predictionScaleFactor).toFixed(2)}</span></span>`
-    : '';
-  const startedAt = c.startTime
-    ? `<span class="text-xs text-gray-500">Iniciado: ${new Date(c.startTime).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>`
-    : '';
-
   card.innerHTML = `
     <div class="flex justify-between items-center mb-3">
       <div>
         <p class="font-semibold text-sm">${ready?'✅ Listo para validar':'🔄 Ciclo activo'} · ${c.snapshot?.length||0} activos · ${fmtDur(total)}</p>
-        <div class="flex items-center gap-2 mt-0.5 flex-wrap">
-          ${modeBadge}
+        <div class="flex items-center gap-2 mt-0.5">
           <span class="pill ${sig?'bg-green-900 text-green-300':'bg-gray-800 text-gray-400'}">${sig?'⭐⭐ Significativo':'⚗️ Testing'}</span>
-          ${scaleFactor}
-          ${startedAt}
-          <span class="text-xs text-gray-600 mono">${c.id}</span>
+          <span class="text-xs text-gray-500 mono">${c.id}</span>
         </div>
       </div>
       <div class="text-right">
@@ -3101,6 +3086,7 @@ window.onload = () => { init(); };
 // ═══════════════════════════════════════════════════════════════
 
 let currentPumpAssetDetail = null;
+const pumpAssetCache = {}; // caché en memoria por assetId
 
 async function viewPumpAssetDetail(assetId) {
   try {
@@ -3108,12 +3094,22 @@ async function viewPumpAssetDetail(assetId) {
     document.getElementById('pump-asset-detail-content').classList.add('hidden');
     showModal('modal-pump-asset-detail');
 
-    const r = await fetch(`/api/pump/asset/${assetId}?mode=speculative`);
-    const d = await r.json();
-    if (!d.success) throw new Error(d.error);
+    // Usar caché si ya fue cargado recientemente (< 5 min)
+    const cached = pumpAssetCache[assetId];
+    const now = Date.now();
+    let asset;
+    if (cached && (now - cached.ts) < 5 * 60 * 1000) {
+      asset = cached.data;
+    } else {
+      const r = await fetch(`/api/pump/asset/${assetId}?mode=speculative`);
+      const d = await r.json();
+      if (!d.success) throw new Error(d.error);
+      asset = d.asset;
+      pumpAssetCache[assetId] = { data: asset, ts: now };
+    }
 
-    currentPumpAssetDetail = d.asset;
-    renderPumpAssetDetail(d.asset);
+    currentPumpAssetDetail = asset;
+    renderPumpAssetDetail(asset);
     document.getElementById('pump-asset-detail-loading').classList.add('hidden');
     document.getElementById('pump-asset-detail-content').classList.remove('hidden');
   } catch(e) {
@@ -3122,26 +3118,87 @@ async function viewPumpAssetDetail(assetId) {
   }
 }
 
+// Etiquetas legibles para cada factor del breakdown
+const FACTOR_LABELS = {
+  atlProximity:    'Proximidad ATL',
+  volumeSurge:     'Volumen relativo',
+  socialMomentum:  'Momentum social',
+  trendMomentum:   'Tendencia de precio',
+  marketCapTier:   'Tier de capitalización',
+  liquidityScore:  'Liquidez',
+  volatilityRisk:  'Volatilidad',
+  concentrationRisk:'Concentración',
+  drawdownRisk:    'Drawdown reciente',
+  lowLiquidityRisk:'Riesgo de baja liquidez',
+};
+
 function renderPumpAssetDetail(asset) {
   const div = document.getElementById('pump-asset-detail-content');
   const p = asset.pumpAnalysis || {};
   const cl = asset.classification || {};
   const pumpColor = { red:'red', orange:'orange', green:'green' }[p.riskColor] || 'gray';
 
-  // Breakdown del algoritmo principal
-  const breakdownBars = Object.entries(asset.breakdown || {}).map(([key, val]) => {
-    const pct = val.potential !== undefined ? Math.round(val.potential * 100) : 0;
-    const barColor = pct >= 70 ? 'bg-green-500' : pct >= 40 ? 'bg-yellow-500' : 'bg-gray-600';
-    return `<div class="mb-3">
+  // ── FIX: leer correctamente la estructura anidada del breakdown ──────────
+  // breakdown = { potential: { score, weighted, factors:{...} }, resistance: { score, weighted, factors:{...} }, indicators:{...} }
+  const potFactors = asset.breakdown?.potential?.factors || {};
+  const resFactors = asset.breakdown?.resistance?.factors || {};
+  const potScore   = Math.round((asset.breakdown?.potential?.score  || 0) * 100);
+  const resScore   = Math.round((asset.breakdown?.resistance?.score || 0) * 100);
+
+  // Barra resumen: Potencial vs Resistencia
+  const summaryBars = `
+    <div class="mb-3">
       <div class="flex justify-between text-xs mb-1">
-        <span class="text-gray-400">${val.label || key}</span>
-        <span class="mono font-medium text-gray-300">${pct}%</span>
+        <span class="text-green-400 font-semibold">⬆ Potencial</span>
+        <span class="mono font-bold text-green-400">${potScore}%</span>
       </div>
-      <div class="w-full bg-gray-800 rounded-full h-2">
-        <div class="h-2 rounded-full ${barColor}" style="width:${pct}%"></div>
+      <div class="w-full bg-gray-700 rounded-full h-2.5">
+        <div class="h-2.5 rounded-full ${potScore >= 70 ? 'bg-green-500' : potScore >= 40 ? 'bg-yellow-500' : 'bg-gray-500'}" style="width:${potScore}%"></div>
+      </div>
+    </div>
+    <div class="mb-4">
+      <div class="flex justify-between text-xs mb-1">
+        <span class="text-red-400 font-semibold">⬇ Resistencia</span>
+        <span class="mono font-bold text-red-400">${resScore}%</span>
+      </div>
+      <div class="w-full bg-gray-700 rounded-full h-2.5">
+        <div class="h-2.5 rounded-full ${resScore >= 70 ? 'bg-red-500' : resScore >= 40 ? 'bg-orange-500' : 'bg-green-600'}" style="width:${resScore}%"></div>
+      </div>
+    </div>`;
+
+  // Factores individuales de potencial
+  const potBars = Object.entries(potFactors).map(([key, val]) => {
+    const pct = Math.round((typeof val === 'number' ? val : 0) * 100);
+    const barColor = pct >= 70 ? 'bg-green-500' : pct >= 40 ? 'bg-yellow-500' : 'bg-gray-600';
+    return `<div class="mb-2">
+      <div class="flex justify-between text-xs mb-0.5">
+        <span class="text-gray-400">${FACTOR_LABELS[key] || key}</span>
+        <span class="mono text-gray-300">${pct}%</span>
+      </div>
+      <div class="w-full bg-gray-700 rounded-full h-1.5">
+        <div class="h-1.5 rounded-full ${barColor}" style="width:${pct}%"></div>
       </div>
     </div>`;
   }).join('');
+
+  // Factores individuales de resistencia
+  const resBars = Object.entries(resFactors).map(([key, val]) => {
+    const pct = Math.round((typeof val === 'number' ? val : 0) * 100);
+    const barColor = pct >= 70 ? 'bg-red-500' : pct >= 40 ? 'bg-orange-500' : 'bg-green-600';
+    return `<div class="mb-2">
+      <div class="flex justify-between text-xs mb-0.5">
+        <span class="text-gray-400">${FACTOR_LABELS[key] || key}</span>
+        <span class="mono text-gray-300">${pct}%</span>
+      </div>
+      <div class="w-full bg-gray-700 rounded-full h-1.5">
+        <div class="h-1.5 rounded-full ${barColor}" style="width:${pct}%"></div>
+      </div>
+    </div>`;
+  }).join('');
+
+  const breakdownBars = summaryBars +
+    (potBars ? `<p class="text-xs text-green-400 font-semibold mb-2 mt-1">Factores de Potencial</p>${potBars}` : '') +
+    (resBars ? `<p class="text-xs text-red-400 font-semibold mb-2 mt-3">Factores de Resistencia</p>${resBars}` : '');
 
   // Breakdown del pump detector
   const pumpBreakdownBars = Object.entries(p.breakdown || {}).map(([key, val]) => {
@@ -3229,19 +3286,22 @@ function renderPumpAssetDetail(asset) {
   `;
 }
 
-async function addPumpAssetToCycle(assetId, symbol) {
+async function addPumpAssetToCycle(assetId, symbol, preloadedAsset) {
   if (!confirm(`¿Añadir ${symbol} a un ciclo especulativo?\n\nSe añadirá al ciclo activo o se creará uno nuevo de 12h.`)) return;
   try {
+    const body = { assetId, mode: 'speculative' };
+    // Si tenemos los datos ya cargados, los enviamos para evitar un re-fetch a CoinGecko
+    if (preloadedAsset) body.assetData = preloadedAsset;
+
     const r = await fetch('/api/cycles/add-asset', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({ assetId, mode: 'speculative' })
+      body: JSON.stringify(body)
     });
     const d = await r.json();
     if (d.success) {
       alert(`✅ ${d.message}`);
       if (d.newCycle) {
-        // Recargar validación para mostrar el nuevo ciclo
         if (document.getElementById('content-validation').style.display !== 'none') {
           await loadValidation();
         }
@@ -3256,7 +3316,8 @@ async function addPumpAssetToCycle(assetId, symbol) {
 
 async function addPumpAssetToCycleFromDetail() {
   if (!currentPumpAssetDetail) return;
-  await addPumpAssetToCycle(currentPumpAssetDetail.id, currentPumpAssetDetail.symbol);
+  // Pasamos el objeto completo para que el backend no tenga que re-fetchear CoinGecko
+  await addPumpAssetToCycle(currentPumpAssetDetail.id, currentPumpAssetDetail.symbol, currentPumpAssetDetail);
   closeModal('modal-pump-asset-detail');
 }
 
