@@ -1903,6 +1903,134 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ── POST /api/invest/buy-manual ─────────────────────────────────────────────
+// Lanza una orden de compra manual desde el Detector de Especulaciones Externas
+// El activo entra directamente en el algoritmo de inversión (posición abierta)
+app.post('/api/invest/buy-manual', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const { assetData, capitalUSD: overrideCapital } = req.body;
+    if (!assetData?.id || !assetData?.symbol) {
+      return res.status(400).json({ success: false, error: 'assetData con id y symbol requerido' });
+    }
+
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+
+    // Verificar que no hay posición abierta ya para este activo
+    const alreadyOpen = positions.find(p => p.assetId === assetData.id && p.status === 'open');
+    if (alreadyOpen) {
+      return res.status(400).json({ success: false, error: `Ya existe una posición abierta para ${assetData.symbol.toUpperCase()}` });
+    }
+
+    // Capital disponible
+    const available = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
+    if (available <= 0) {
+      return res.status(400).json({ success: false, error: 'Sin capital disponible. Cierra alguna posición primero.' });
+    }
+
+    // Capital a asignar: override manual o capital por posición calculado
+    const cycleCapital = cfg.capitalTotal * cfg.capitalPerCycle;
+    const defaultCapital = cfg.diversification ? cycleCapital / cfg.maxPositions : cycleCapital;
+    const capitalToUse = Math.min(
+      overrideCapital ? parseFloat(overrideCapital) : defaultCapital,
+      available
+    );
+
+    if (capitalToUse < 1) {
+      return res.status(400).json({ success: false, error: 'Capital insuficiente (mínimo $1)' });
+    }
+
+    // Obtener precio actual actualizado si el frontend no lo envía con timestamp reciente
+    let entryPrice = assetData.current_price;
+    try {
+      const pRes = await axios.get(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${assetData.id}&vs_currencies=usd`,
+        { timeout: 5000 }
+      );
+      entryPrice = pRes.data?.[assetData.id]?.usd || entryPrice;
+    } catch(_) { /* usar precio del frontend */ }
+
+    // Construir objeto target compatible con createPosition
+    const target = {
+      assetId:         assetData.id,
+      symbol:          assetData.symbol,
+      name:            assetData.name || assetData.symbol,
+      boostPower:      assetData.boostPower || 0,
+      boostPowerPct:   assetData.boostPowerPercent || Math.round((assetData.boostPower || 0) * 100),
+      classification:  typeof assetData.classification === 'object'
+                         ? assetData.classification?.category || 'PUMP'
+                         : assetData.classification || 'PUMP',
+      entryPrice,
+      predictedChange: assetData.predictedChange || 0,
+      capitalUSD:      parseFloat(capitalToUse.toFixed(2)),
+      weight:          parseFloat((capitalToUse / cfg.capitalTotal * 100).toFixed(1)),
+      rank:            1,
+      takeProfitPrice: parseFloat((entryPrice * (1 + cfg.takeProfitPct / 100)).toFixed(8)),
+      stopLossPrice:   parseFloat((entryPrice * (1 - cfg.stopLossPct   / 100)).toFixed(8)),
+      expectedFeeUSD:  parseFloat((capitalToUse * cfg.feePct / 100).toFixed(4)),
+    };
+
+    // Ejecutar orden en exchange (simulada/testnet/real según config)
+    const keys  = await getExchangeKeys(cfg.exchange);
+    const order = await exchangeConnector.placeOrder(target.symbol, 'BUY', target.capitalUSD, cfg, keys);
+
+    // Crear posición con cycleId especial para identificar origen PUMP
+    const cycleId  = `pump_manual_${Date.now()}`;
+    const position = investManager.createPosition(target, cycleId, cfg);
+    position.exchangeOrderId = order.orderId || position.exchangeOrderId;
+    position.orderDetails    = order;
+    position.executedAt      = new Date().toISOString();
+    position.source          = 'pump_detector'; // marcar origen
+
+    const allPositions = [...positions, position];
+    await savePositions(allPositions);
+
+    // Log de la operación
+    await appendInvestLog({
+      type:      'invest',
+      subtype:   'pump_manual_buy',
+      cycleId,
+      timestamp: new Date().toISOString(),
+      config:    { mode: cfg.mode, exchange: cfg.exchange },
+      capital: {
+        total:     cfg.capitalTotal,
+        before:    parseFloat(available.toFixed(2)),
+        after:     parseFloat(investManager.calculateAvailableCapital(allPositions, cfg.capitalTotal).toFixed(2)),
+        used:      target.capitalUSD,
+      },
+      position: {
+        id:              position.id,
+        symbol:          position.symbol,
+        name:            position.name,
+        assetId:         position.assetId,
+        source:          'pump_detector',
+        capitalUSD:      position.capitalUSD,
+        units:           position.units,
+        entryPrice:      position.entryPrice,
+        takeProfitPrice: position.takeProfitPrice,
+        stopLossPrice:   position.stopLossPrice,
+        boostPower:      position.boostPower,
+        predictedChange: position.predictedChange,
+        classification:  target.classification,
+      },
+      order: { success: order.success, orderId: order.orderId, simulated: cfg.mode === 'simulated' },
+    });
+
+    res.json({
+      success:  true,
+      position,
+      order,
+      capitalRemaining: parseFloat(investManager.calculateAvailableCapital(allPositions, cfg.capitalTotal).toFixed(2)),
+      message: `✅ Orden de compra ejecutada: ${target.capitalUSD.toFixed(2)} USD en ${position.symbol.toUpperCase()} · TP: $${target.takeProfitPrice} · SL: $${target.stopLossPrice}`
+    });
+
+  } catch(e) {
+    console.error('buy-manual error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ── GET /api/invest/log ──────────────────────────────────────────────────────
 app.get('/api/invest/log', async (_req, res) => {
   try {
@@ -2471,66 +2599,40 @@ app.get('/api/pump/asset/:id', async (req, res) => {
 app.post('/api/cycles/add-asset', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
-    const { assetId, mode, assetData: providedData } = req.body;
+    const { assetId, mode } = req.body;
     if (!assetId) return res.status(400).json({ success: false, error: 'assetId requerido' });
 
-    const cycleMode = mode || 'speculative';
+    const cycleMode = mode || 'speculative'; // pumps detectados son especulativos por defecto
     const config    = await getConfig(cycleMode);
 
-    let crypto;
-    if (providedData?.id) {
-      // ── Datos ya disponibles desde el frontend (evita re-fetch a CoinGecko) ──
-      crypto = {
-        id:                          providedData.id,
-        symbol:                      providedData.symbol,
-        name:                        providedData.name,
-        current_price:               providedData.current_price,
-        market_cap:                  providedData.market_cap,
-        total_volume:                providedData.total_volume,
-        price_change_percentage_24h: providedData.price_change_percentage_24h,
-        ath:                         providedData.ath,
-        atl:                         providedData.atl,
-      };
-    } else {
-      // ── Fallback: obtener datos desde CoinGecko ──────────────────────────────
-      const r = await axios.get(
-        `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${assetId}` +
-        `&order=market_cap_desc&per_page=1&sparkline=false&price_change_percentage=24h,7d,30d`,
-        { timeout: 6000 }
-      );
-      crypto = r.data?.[0];
-      if (!crypto) return res.status(404).json({ success: false, error: `Activo ${assetId} no encontrado en CoinGecko` });
-    }
+    // Obtener datos del activo
+    const r = await axios.get(
+      `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${assetId}` +
+      `&order=market_cap_desc&per_page=1&sparkline=false&price_change_percentage=24h,7d,30d`,
+      { timeout: 6000 }
+    );
+    const crypto = r.data?.[0];
+    if (!crypto) return res.status(404).json({ success: false, error: `Activo ${assetId} no encontrado` });
 
-    // Obtener noticias y reddit básicos para el análisis (solo si no vienen precalculados)
-    let result;
-    if (providedData?.boostPower !== undefined && providedData?.predictedChange !== undefined) {
-      // ── Reutilizar el cálculo ya hecho en el análisis PUMP ───────────────────
-      result = {
-        boostPower:        providedData.boostPower,
-        boostPowerPercent: providedData.boostPowerPercent,
-        classification:    { category: providedData.classification },
-        predictedChange:   providedData.predictedChange,
-      };
-    } else {
-      // ── Recalcular desde cero ────────────────────────────────────────────────
-      const [newsRes, redditRes, fgRes] = await Promise.allSettled([
-        getAssetNews(crypto.symbol, crypto.name),
-        getAssetReddit(crypto.symbol, crypto.name, crypto.market_cap),
-        getFearGreedIndex()
-      ]);
-      const assetNews   = newsRes.status === 'fulfilled'   ? newsRes.value   : { success: false, count: 0 };
-      const assetReddit = redditRes.status === 'fulfilled' ? redditRes.value : { success: false, postCount: 0 };
-      const fg          = fgRes.status === 'fulfilled'     ? fgRes.value     : { success: false };
-      const externalData = {
-        fearGreed:   fg.success ? fg : null,
-        assetNews:   assetNews.success ? assetNews : null,
-        assetReddit: assetReddit.success ? assetReddit : null,
-        marketNews:  null
-      };
-      result = boostPowerCalc.calculateBoostPower(crypto, config, externalData);
-    }
+    // Obtener noticias y reddit básicos para el análisis
+    const [newsRes, redditRes, fgRes] = await Promise.allSettled([
+      getAssetNews(crypto.symbol, crypto.name),
+      getAssetReddit(crypto.symbol, crypto.name, crypto.market_cap),
+      getFearGreedIndex()
+    ]);
+    const assetNews   = newsRes.status === 'fulfilled'   ? newsRes.value   : { success: false, count: 0 };
+    const assetReddit = redditRes.status === 'fulfilled' ? redditRes.value : { success: false, postCount: 0 };
+    const fg          = fgRes.status === 'fulfilled'     ? fgRes.value     : { success: false };
 
+    const externalData = {
+      fearGreed:   fg.success ? fg : null,
+      assetNews:   assetNews.success ? assetNews : null,
+      assetReddit: assetReddit.success ? assetReddit : null,
+      marketNews:  null
+    };
+
+    // Calcular boostPower y clasificación
+    const result = boostPowerCalc.calculateBoostPower(crypto, config, externalData);
     const assetData = {
       id:                          crypto.id,
       symbol:                      crypto.symbol,
@@ -2543,10 +2645,9 @@ app.post('/api/cycles/add-asset', async (req, res) => {
       atl:                         crypto.atl,
       boostPower:                  result.boostPower,
       boostPowerPercent:           result.boostPowerPercent,
-      classification:              result.classification?.category ?? result.classification,
+      classification:              result.classification.category,
       predictedChange:             result.predictedChange,
-      breakdown:                   providedData?.breakdown || null,
-      manuallyAdded:               true,
+      manuallyAdded:               true,  // marcar que fue añadido manual
       addedAt:                     new Date().toISOString()
     };
 
