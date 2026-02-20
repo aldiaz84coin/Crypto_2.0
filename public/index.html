@@ -1439,24 +1439,85 @@ function renderActiveCycleCard(c) {
   const now=Date.now(), total=c.durationMs||(c.endTime-c.startTime);
   const remaining=Math.max(0,c.endTime-now), pct=Math.min(100,Math.round((now-c.startTime)/total*100));
   const ready=remaining===0, sig=total>=SIGNIFICANT_MS;
+
+  // ── Badges de info del ciclo ─────────────────────────────────────────────
+  const isSpec = c.mode === 'speculative';
+  const modeBadge = isSpec
+    ? '<span class="pill bg-orange-900 text-orange-300">🎯 Especulativo</span>'
+    : '<span class="pill bg-blue-900 text-blue-300">📊 Generalista</span>';
+  const scaleBadge = c.predictionScaleFactor
+    ? `<span class="text-xs text-gray-400">Escala: <span class="text-white mono">×${parseFloat(c.predictionScaleFactor).toFixed(2)}</span></span>`
+    : '';
+  const startedAt = c.startTime
+    ? `<span class="text-xs text-gray-500">Iniciado: ${new Date(c.startTime).toLocaleTimeString('es-ES',{hour:'2-digit',minute:'2-digit'})}</span>`
+    : '';
+
+  // ── Vista de activos del ciclo ───────────────────────────────────────────
+  const assets = c.snapshot || [];
+  const CAT_COLORS = { INVERTIBLE:'text-green-400', APALANCADO:'text-yellow-400', RUIDOSO:'text-red-400' };
+  const assetsRows = assets.map(a => {
+    const cat = (a.classification || 'RUIDOSO').toUpperCase();
+    const catColor = CAT_COLORS[cat] || 'text-gray-400';
+    const bp = a.boostPowerPercent ?? Math.round((a.boostPower||0)*100);
+    const pred = typeof a.predictedChange === 'number'
+      ? `<span class="${a.predictedChange>=0?'text-green-400':'text-red-400'}">${a.predictedChange>=0?'+':''}${a.predictedChange.toFixed(1)}%</span>`
+      : '<span class="text-gray-500">—</span>';
+    const manual = a.manuallyAdded ? '<span class="pill bg-purple-900 text-purple-300 ml-1">PUMP</span>' : '';
+    return `
+      <div class="flex items-center justify-between py-1.5 border-b border-gray-800 last:border-0 text-xs">
+        <div class="flex items-center gap-2 min-w-0">
+          <span class="font-bold text-white mono w-16 shrink-0">${(a.symbol||'').toUpperCase()}</span>
+          <span class="${catColor} shrink-0">${cat}</span>
+          ${manual}
+        </div>
+        <div class="flex items-center gap-3 shrink-0 ml-2">
+          <span class="text-gray-400">BP: <span class="text-white font-semibold">${bp}%</span></span>
+          <span class="text-gray-400">Pred: ${pred}</span>
+          <span class="text-gray-500 mono">$${(a.current_price||0)<0.01?(a.current_price||0).toFixed(6):(a.current_price||0).toFixed(2)}</span>
+        </div>
+      </div>`;
+  }).join('');
+
   card.innerHTML = `
     <div class="flex justify-between items-center mb-3">
       <div>
-        <p class="font-semibold text-sm">${ready?'✅ Listo para validar':'🔄 Ciclo activo'} · ${c.snapshot?.length||0} activos · ${fmtDur(total)}</p>
-        <div class="flex items-center gap-2 mt-0.5">
+        <p class="font-semibold text-sm">${ready?'✅ Listo para validar':'🔄 Ciclo activo'} · ${assets.length} activos · ${fmtDur(total)}</p>
+        <div class="flex items-center gap-2 mt-0.5 flex-wrap">
+          ${modeBadge}
           <span class="pill ${sig?'bg-green-900 text-green-300':'bg-gray-800 text-gray-400'}">${sig?'⭐⭐ Significativo':'⚗️ Testing'}</span>
-          <span class="text-xs text-gray-500 mono">${c.id}</span>
+          ${scaleBadge}
+          ${startedAt}
+          <span class="text-xs text-gray-700 mono">${c.id}</span>
         </div>
       </div>
-      <div class="text-right">
+      <div class="text-right flex flex-col items-end gap-1">
         ${ready
           ? `<button onclick="completeCycle('${c.id}')" class="bg-green-700 hover:bg-green-600 px-4 py-2 rounded-lg text-sm font-bold">Validar</button>`
           : `<div class="text-xl font-bold text-blue-400 mono" id="cd-${c.id}">${fmtCountdown(remaining)}</div><div class="text-xs text-gray-500">restante</div>`
         }
       </div>
     </div>
-    <div class="w-full bg-gray-800 rounded-full h-1.5"><div class="bar bg-blue-600 h-1.5 rounded-full" style="width:${pct}%"></div></div>
-    ${!ready?`<div class="text-right mt-1"><button onclick="completeCycle('${c.id}')" class="text-xs text-gray-600 hover:text-yellow-400">Completar manualmente</button></div>`:''}`;
+    <div class="w-full bg-gray-800 rounded-full h-1.5 mb-2"><div class="bar bg-blue-600 h-1.5 rounded-full" style="width:${pct}%"></div></div>
+    ${!ready?`<div class="text-right mb-2"><button onclick="completeCycle('${c.id}')" class="text-xs text-gray-600 hover:text-yellow-400">Completar manualmente</button></div>`:''}
+
+    <!-- Activos expandibles -->
+    <div>
+      <button onclick="toggleCycleAssets('${c.id}')" class="flex items-center gap-1 text-xs text-gray-400 hover:text-white transition-colors w-full text-left py-1">
+        <span id="cycle-assets-arrow-${c.id}" class="mono">▶</span>
+        <span>Ver activos del ciclo (${assets.length})</span>
+      </button>
+      <div id="cycle-assets-${c.id}" class="hidden mt-2 bg-gray-950 rounded-lg px-3 py-1 max-h-64 overflow-y-auto">
+        ${assetsRows || '<p class="text-gray-600 text-xs py-2">Sin activos en el snapshot</p>'}
+      </div>
+    </div>`;
+}
+
+function toggleCycleAssets(cycleId) {
+  const panel = document.getElementById('cycle-assets-'+cycleId);
+  const arrow = document.getElementById('cycle-assets-arrow-'+cycleId);
+  if (!panel) return;
+  const open = panel.classList.toggle('hidden');
+  arrow.textContent = open ? '▶' : '▼';
 }
 
 function tickCycle(c) {
