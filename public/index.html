@@ -3528,16 +3528,10 @@ async function confirmPumpBuy(assetId) {
     resultDiv.innerHTML = '<span class="text-red-400">❌ Capital mínimo $1</span>';
     return;
   }
-  const assetData = (currentPumpAssetDetail?.id === assetId ? currentPumpAssetDetail : null)
-    || pumpAssetCache[assetId]?.data
-    || _pumpBuyAsset
-    || pumpDetectionMap[assetId]
-    // Mínimo absoluto — el backend solo necesita id y symbol para operar
-    || { id: assetId, symbol: assetId, current_price: 0, classification: 'PUMP' };
-
-  // Normalizar id siempre presente
-  if (!assetData.id) assetData.id = assetId;
-  if (!assetData.symbol) assetData.symbol = assetId;
+  // _pumpBuyAsset siempre tiene id y symbol garantizados desde openPumpBuyModal
+  const assetData = { ...(_pumpBuyAsset || {}) };
+  assetData.id     = assetData.id     || assetData.assetId || assetId;
+  assetData.symbol = assetData.symbol || assetId;
 
   resultDiv.innerHTML = '<span class="text-blue-400">⏳ Enviando orden...</span>';
   document.querySelectorAll('#modal-pump-buy button').forEach(b => b.disabled = true);
