@@ -1456,7 +1456,7 @@ function renderActiveCycleCard(c) {
   const assets = c.snapshot || [];
   const CAT_COLORS = { INVERTIBLE:'text-green-400', APALANCADO:'text-yellow-400', RUIDOSO:'text-red-400' };
   const assetsRows = assets.map(a => {
-    const cat = (a.classification || 'RUIDOSO').toUpperCase();
+    const cat = (typeof a.classification === 'object' ? (a.classification?.category || 'RUIDOSO') : (a.classification || 'RUIDOSO')).toUpperCase();
     const catColor = CAT_COLORS[cat] || 'text-gray-400';
     const bp = a.boostPowerPercent ?? Math.round((a.boostPower||0)*100);
     const pred = typeof a.predictedChange === 'number'
