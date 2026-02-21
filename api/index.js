@@ -1033,10 +1033,25 @@ app.post('/api/cycles/:cycleId/complete', async (req, res) => {
     const cycleData = await cyclesManager.getCycle(redis, req.params.cycleId);
     const cycleMode = cycleData?.mode || req.body?.mode || 'normal';
     const config    = await getConfig(cycleMode);
-    const prices  = await axios.get(
-      'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1',
-      { timeout: 8000 }
-    );
+    //
+   // const prices  = await axios.get(
+   //   'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1',
+    //  { timeout: 8000 }
+   // );
+    //
+
+// ✅ DESPUÉS — busca los IDs exactos del snapshot:
+const snapshotIds = (cycleData?.snapshot || [])
+  .map(a => a.id).filter(Boolean).join(',');
+
+const priceUrl = snapshotIds
+  ? `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${snapshotIds}&per_page=250`
+  : `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1`;
+
+const prices = await axios.get(priceUrl, { timeout: 10000 });
+
+
+    
     const cycle = await cyclesManager.completeCycle(redis, req.params.cycleId, prices.data, config);
     res.json({ success: true, cycle: { id: cycle.id, metrics: cycle.metrics, completedAt: cycle.completedAt } });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
