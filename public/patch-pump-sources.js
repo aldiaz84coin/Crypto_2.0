@@ -140,7 +140,7 @@ window.loadPumpSources = async function(force = false) {
   list.innerHTML = '<p class="text-gray-500 text-sm text-center py-6">⏳ Consultando APIs...</p>';
 
   try {
-    const r = await fetch('/api/status');
+    const r = await fetch('/api/status/complete');
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
     const d = await r.json();
 
