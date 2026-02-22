@@ -1054,6 +1054,182 @@ app.post('/api/cycles/:cycleId/complete', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ── POST /api/cycles/:cycleId/revalidate ─────────────────────────────────────
+// Recalcula los resultados de un ciclo ya completado volviendo a pedir precios
+// a CoinGecko con los IDs exactos del snapshot.
+// Útil para reparar ciclos guardados con results=[] por el bug del per_page=50.
+app.post('/api/cycles/:cycleId/revalidate', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cycle = await cyclesManager.getCycle(redis, req.params.cycleId);
+    if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+    if (cycle.status !== 'completed') return res.status(400).json({ success: false, error: 'Solo se pueden revalidar ciclos completados' });
+    if (!cycle.snapshot?.length) return res.status(400).json({ success: false, error: 'El ciclo no tiene snapshot' });
+
+    // Pedir precios actuales de los IDs exactos del snapshot
+    const snapshotIds = cycle.snapshot.map(a => a.id).filter(Boolean).join(',');
+    const priceUrl = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${snapshotIds}&per_page=250`;
+    const prices = await axios.get(priceUrl, { timeout: 12000 });
+
+    if (!prices.data || prices.data.length === 0) {
+      return res.status(503).json({ success: false, error: 'CoinGecko no devolvió precios. Espera un momento y reintenta.' });
+    }
+
+    // Nota: para ciclos históricos se usan precios ACTUALES, no los del momento
+    // de cierre (CoinGecko histórico requiere API Pro). Se registra este hecho.
+    const cycleMode = cycle.mode || 'normal';
+    const config    = await getConfig(cycleMode);
+
+    const boostPowerCalc = require('./boost-power-calculator');
+    const results = [];
+
+    for (const asset of cycle.snapshot) {
+      const current = prices.data.find(p => p.id === asset.id);
+      if (!current) continue;
+
+      const actualChange    = ((current.current_price - asset.current_price) / asset.current_price) * 100;
+      const predictedChange = typeof asset.predictedChange === 'number'
+        ? asset.predictedChange
+        : parseFloat(asset.predictedChange || 0);
+      const category = asset.classification || 'RUIDOSO';
+
+      const validation = boostPowerCalc.validatePrediction(predictedChange, actualChange, category, config);
+
+      results.push({
+        id:               asset.id,
+        symbol:           asset.symbol,
+        name:             asset.name,
+        snapshotPrice:    asset.current_price,
+        currentPrice:     current.current_price,
+        predictedChange:  predictedChange.toFixed(2),
+        actualChange:     actualChange.toFixed(2),
+        classification:   category,
+        boostPower:       asset.boostPower,
+        correct:          validation.correct,
+        validationReason: validation.reason,
+        error:            Math.abs(predictedChange - actualChange).toFixed(2),
+        revalidated:      true  // marcar que estos precios son actuales, no del cierre
+      });
+    }
+
+    if (results.length === 0) {
+      return res.status(503).json({ success: false, error: `CoinGecko no devolvió precio para ninguno de los ${cycle.snapshot.length} activos. Puede que los IDs hayan cambiado.` });
+    }
+
+    // Guardar resultados recalculados
+    cycle.results             = results;
+    cycle.metrics             = cyclesManager.recalculateMetrics(results);
+    cycle.revalidatedAt       = new Date().toISOString();
+    cycle.revalidationNote    = 'Precios recalculados con cotizaciones actuales (no del momento de cierre)';
+
+    // Persistir en Redis
+    const { Redis } = require('@upstash/redis');
+    await redis.set(cycle.id, cycle);
+
+    res.json({
+      success: true,
+      cycleId: cycle.id,
+      found:   results.length,
+      total:   cycle.snapshot.length,
+      metrics: cycle.metrics,
+      revalidationNote: cycle.revalidationNote
+    });
+  } catch(e) {
+    console.error('revalidate error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── POST /api/cycles/revalidate-empty ────────────────────────────────────────
+// Revalida en bloque todos los ciclos completados que tengan 0 resultados.
+// Devuelve un resumen con los ciclos reparados y los que fallaron.
+app.post('/api/cycles/revalidate-empty', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const ids       = await cyclesManager.getCompletedCycles(redis);
+    const allCycles = await cyclesManager.getCyclesDetails(redis, ids);
+
+    // Filtrar: completados con results vacío o nulo
+    const empty = allCycles.filter(c =>
+      c.status === 'completed' && (!c.results || c.results.length === 0)
+    );
+
+    if (empty.length === 0) {
+      return res.json({ success: true, message: 'No hay ciclos con datos vacíos. Todo está bien.', repaired: 0, failed: 0, details: [] });
+    }
+
+    const boostPowerCalc = require('./boost-power-calculator');
+    const details = [];
+
+    for (const cycle of empty) {
+      // Pequeña pausa para no saturar CoinGecko (rate limit)
+      await new Promise(r => setTimeout(r, 1200));
+
+      try {
+        const snapshotIds = (cycle.snapshot || []).map(a => a.id).filter(Boolean).join(',');
+        if (!snapshotIds) {
+          details.push({ id: cycle.id, status: 'skipped', reason: 'snapshot vacío' });
+          continue;
+        }
+
+        const priceUrl = `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${snapshotIds}&per_page=250`;
+        const prices   = await axios.get(priceUrl, { timeout: 12000 });
+
+        if (!prices.data?.length) {
+          details.push({ id: cycle.id, status: 'failed', reason: 'CoinGecko sin precios' });
+          continue;
+        }
+
+        const cycleMode = cycle.mode || 'normal';
+        const config    = await getConfig(cycleMode);
+        const results   = [];
+
+        for (const asset of cycle.snapshot) {
+          const current = prices.data.find(p => p.id === asset.id);
+          if (!current) continue;
+          const actualChange    = ((current.current_price - asset.current_price) / asset.current_price) * 100;
+          const predictedChange = typeof asset.predictedChange === 'number' ? asset.predictedChange : parseFloat(asset.predictedChange || 0);
+          const category        = asset.classification || 'RUIDOSO';
+          const validation      = boostPowerCalc.validatePrediction(predictedChange, actualChange, category, config);
+          results.push({
+            id: asset.id, symbol: asset.symbol, name: asset.name,
+            snapshotPrice: asset.current_price, currentPrice: current.current_price,
+            predictedChange: predictedChange.toFixed(2), actualChange: actualChange.toFixed(2),
+            classification: category, boostPower: asset.boostPower,
+            correct: validation.correct, validationReason: validation.reason,
+            error: Math.abs(predictedChange - actualChange).toFixed(2),
+            revalidated: true
+          });
+        }
+
+        if (results.length === 0) {
+          details.push({ id: cycle.id, status: 'failed', reason: 'ningún ID encontrado en CoinGecko' });
+          continue;
+        }
+
+        cycle.results          = results;
+        cycle.metrics          = cyclesManager.recalculateMetrics(results);
+        cycle.revalidatedAt    = new Date().toISOString();
+        cycle.revalidationNote = 'Precios recalculados con cotizaciones actuales';
+        await redis.set(cycle.id, cycle);
+
+        details.push({ id: cycle.id, status: 'repaired', found: results.length, total: cycle.snapshot.length, successRate: cycle.metrics.successRate });
+
+      } catch(err) {
+        details.push({ id: cycle.id, status: 'failed', reason: err.message });
+      }
+    }
+
+    const repaired = details.filter(d => d.status === 'repaired').length;
+    const failed   = details.filter(d => d.status === 'failed').length;
+
+    res.json({ success: true, total: empty.length, repaired, failed, details });
+  } catch(e) {
+    console.error('revalidate-empty error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 app.get('/api/cycles/history', async (req, res) => {
   if (!redis) return res.json({ success: true, cycles: [], mode: 'all' });
   try {
