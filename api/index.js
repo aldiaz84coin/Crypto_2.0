@@ -611,48 +611,57 @@ app.get('/api/config/api-keys', async (_req, res) => {
 // En modo especulativo: excluir large-caps y mid-high caps
 // Pide más activos y filtra por market cap
 const SPECULATIVE_CAP_MAX = 200_000_000;  // $200M máximo
-const SPECULATIVE_VOL_MAX = 50_000_000;   // $50M volumen máximo
+const SPECULATIVE_VOL_MAX = 200_000_000;  // $200M volumen máximo (ampliado)
 
 app.get('/api/crypto', async (req, res) => {
   try {
     const mode   = req.query.mode || 'normal'; // ?mode=speculative
     const config = await getConfig(mode);
 
-    // Especulativo: pedir 100 activos y filtrar; normal: top 20 por market cap
-    const perPage = mode === 'speculative' ? 250 : 20;
+    // Normal: 2 páginas x 250 = 500 activos (top large/mid caps)
+    // Especulativo: 4 páginas x 250 = 1000 activos (universo completo de small-caps)
+    const pages = mode === 'speculative' ? [1, 2, 3, 4] : [1, 2];
+    const cgBase = 'https://api.coingecko.com/api/v3/coins/markets' +
+      '?vs_currency=usd&order=market_cap_desc&per_page=250' +
+      '&sparkline=false&price_change_percentage=24h,7d';
 
-    const [marketRes, fgRes, newsRes] = await Promise.allSettled([
-      axios.get(
-        'https://api.coingecko.com/api/v3/coins/markets' +
-        `?vs_currency=usd&order=market_cap_desc&per_page=${perPage}&page=1` +
-        '&sparkline=false&price_change_percentage=24h,7d',
-        { timeout: 10000 }
-      ),
+    const [fgRes, newsRes, ...pageResults] = await Promise.allSettled([
       getFearGreedIndex(),
-      getMarketNews(10)
+      getMarketNews(10),
+      ...pages.map(p => axios.get(`${cgBase}&page=${p}`, { timeout: 15000 }))
     ]);
 
-    if (marketRes.status === 'rejected')
-      throw new Error('CoinGecko no disponible: ' + marketRes.reason?.message);
+    // Necesitamos al menos la primera página
+    if (pageResults[0].status === 'rejected')
+      throw new Error('CoinGecko no disponible: ' + pageResults[0].reason?.message);
 
-    const fg   = fgRes.status === 'fulfilled'   ? fgRes.value   : { success: false };
-    const news = newsRes.status === 'fulfilled'  ? newsRes.value : { success: false, count: 0, articles: [], avgSentiment: 0 };
+    const fg   = fgRes.status === 'fulfilled'  ? fgRes.value  : { success: false };
+    const news = newsRes.status === 'fulfilled' ? newsRes.value : { success: false, count: 0, articles: [], avgSentiment: 0 };
 
     const externalData = {
       fearGreed:  fg.success   ? fg   : null,
       marketNews: news.success ? news : null,
-      // assetNews y assetReddit se rellenan en /api/crypto/:id/detail
       assetNews:   null,
       assetReddit: null
     };
 
-    // Filtrar activos según el modo
-    let rawCryptos = marketRes.value.data;
+    // Combinar todas las páginas (descartar fallidas, deduplicar por id)
+    const seen = new Set();
+    let rawCryptos = pageResults
+      .filter(r => r.status === 'fulfilled')
+      .flatMap(r => r.value.data || [])
+      .filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; });
+
     if (mode === 'speculative') {
       rawCryptos = rawCryptos.filter(c =>
+        (c.market_cap  || 0) >= 1_000_000 &&
         (c.market_cap  || 0) <= SPECULATIVE_CAP_MAX &&
         (c.total_volume || 0) <= SPECULATIVE_VOL_MAX
-      ).slice(0, 20); // Top 20 small-caps por market cap
+      );
+      // Ordenar por ratio volumen/mcap desc (más actividad relativa primero)
+      rawCryptos.sort((a, b) =>
+        (b.total_volume / Math.max(b.market_cap, 1)) - (a.total_volume / Math.max(a.market_cap, 1))
+      );
     }
 
     const cryptosWithBoost = rawCryptos.map(crypto => {
