@@ -1031,27 +1031,24 @@ app.post('/api/cycles/:cycleId/complete', async (req, res) => {
   try {
     // Recuperar el ciclo para saber su modo antes de usar la config correcta
     const cycleData = await cyclesManager.getCycle(redis, req.params.cycleId);
-    const cycleMode = cycleData?.mode || req.body?.mode || 'normal';
+    if (!cycleData) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+
+    const cycleMode = cycleData.mode || req.body?.mode || 'normal';
     const config    = await getConfig(cycleMode);
-    //
-   // const prices  = await axios.get(
-   //   'https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1',
-    //  { timeout: 8000 }
-   // );
-    //
 
-// ✅ DESPUÉS — busca los IDs exactos del snapshot:
-const snapshotIds = (cycleData?.snapshot || [])
-  .map(a => a.id).filter(Boolean).join(',');
+    // Pedir precios exactos de los activos del snapshot en lugar de los top-N genéricos.
+    // Esto garantiza que activos fuera del top-50 y micro-caps (modo especulativo) se encuentren.
+    const snapshotIds = (cycleData.snapshot || []).map(a => a.id).filter(Boolean).join(',');
+    const priceUrl = snapshotIds
+      ? `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${snapshotIds}&per_page=250`
+      : `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=100&page=1`;
 
-const priceUrl = snapshotIds
-  ? `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&ids=${snapshotIds}&per_page=250`
-  : `https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=50&page=1`;
+    const prices = await axios.get(priceUrl, { timeout: 12000 });
 
-const prices = await axios.get(priceUrl, { timeout: 10000 });
+    if (!prices.data || prices.data.length === 0) {
+      return res.status(503).json({ success: false, error: 'CoinGecko no devolvió precios. Espera un momento y vuelve a intentarlo.' });
+    }
 
-
-    
     const cycle = await cyclesManager.completeCycle(redis, req.params.cycleId, prices.data, config);
     res.json({ success: true, cycle: { id: cycle.id, metrics: cycle.metrics, completedAt: cycle.completedAt } });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }

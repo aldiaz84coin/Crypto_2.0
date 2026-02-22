@@ -206,6 +206,17 @@ async function completeCycle(redis, cycleId, currentPrices, config) {
     });
   }
 
+  // Guardia: no guardar un ciclo "completado" con 0 resultados.
+  // Ocurre cuando CoinGecko no devuelve precios para ningún activo del snapshot
+  // (rate-limit, error de red, o IDs incorrectos). Lanzar error para que el
+  // endpoint devuelva 503 y el usuario pueda reintentar sin corromper el historial.
+  if (results.length === 0) {
+    throw new Error(
+      `No se encontraron precios actuales para ninguno de los ${cycle.snapshot.length} activos del snapshot. ` +
+      `Espera 1 minuto y vuelve a completar el ciclo.`
+    );
+  }
+
   cycle.status      = 'completed';
   cycle.results     = results;
   cycle.metrics     = buildMetrics(results);
