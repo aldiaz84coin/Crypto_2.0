@@ -2955,6 +2955,8 @@ function renderPumpDetections(detections) {
   // Guardar datos de cada detección para uso posterior (compra manual)
   detections.forEach(d => { if (d.assetId) pumpDetectionMap[d.assetId] = d; });
   div.innerHTML = detections.map(d => renderDetectionCard(d)).join('');
+  // Cargar scoring del algoritmo para cada detección de forma asíncrona
+  detections.forEach(d => { if (d.assetId) _loadPumpAlgoScore(d.assetId); });
 }
 
 function renderDetectionCard(d) {
@@ -3014,19 +3016,81 @@ function renderDetectionCard(d) {
       <!-- Mensajes clonados -->
       ${clonesHTML ? `<div class="bg-orange-950/30 border border-orange-900 rounded-lg p-3 mb-3"><p class="text-xs font-semibold text-orange-400 mb-2">Mensajes clonados detectados</p><div class="space-y-1">${clonesHTML}</div></div>` : ''}
 
+      <!-- Scoring del Algoritmo (cargado async) -->
+      <div class="bg-gray-800/60 border border-indigo-900/50 rounded-lg p-3 mb-3">
+        <p class="text-xs font-semibold text-indigo-400 mb-2">🧠 Scoring del Algoritmo</p>
+        <div id="algo-score-${d.assetId}" class="text-xs text-gray-500 flex items-center gap-2">
+          <span class="animate-spin inline-block">⏳</span> Calculando boostPower y clasificación...
+        </div>
+      </div>
+
       <!-- Botones de acción -->
       <div class="flex gap-2 mt-4 flex-wrap">
         <button onclick="viewPumpAssetDetail('${d.assetId}')" class="flex-1 bg-blue-700 hover:bg-blue-600 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
           🔍 Ver análisis
         </button>
-        <button onclick="addPumpAssetToCycle('${d.assetId}', '${d.symbol}')" class="flex-1 bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
-          ➕ Añadir a ciclo
+        <button id="btn-ciclo-${d.assetId}" onclick="addPumpAssetToCycle('${d.assetId}', '${d.symbol}')" class="flex-1 bg-indigo-800 hover:bg-indigo-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">
+          📈 Ciclo inversión
         </button>
         <button onclick="openPumpBuyModal('${d.assetId}', '${d.symbol}', ${d.current_price || 0}, null)" class="flex-1 bg-emerald-700 hover:bg-emerald-600 px-4 py-2 rounded-lg text-sm font-bold transition-colors">
           💰 Comprar
         </button>
       </div>
     </div>`;
+}
+
+// ── Scoring del algoritmo para detecciones pump (lazy load) ───────
+async function _loadPumpAlgoScore(assetId) {
+  const block = document.getElementById(`algo-score-${assetId}`);
+  if (!block) return;
+  try {
+    // Reutilizar caché si disponible (< 5 min)
+    const cached = pumpAssetCache[assetId];
+    const now = Date.now();
+    let asset;
+    if (cached && (now - cached.ts) < 5 * 60 * 1000) {
+      asset = cached.data;
+    } else {
+      const r = await fetch(`/api/pump/asset/${assetId}?mode=speculative`);
+      const d = await r.json();
+      if (!d.success) throw new Error(d.error);
+      asset = d.asset;
+      pumpAssetCache[assetId] = { data: asset, ts: now };
+    }
+
+    const bp  = Math.round((asset.boostPower || 0) * 100);
+    const cl  = asset.classification || {};
+    const cat = typeof cl === 'object' ? (cl.category || 'RUIDOSO') : (cl || 'RUIDOSO');
+    const pred = asset.predictedChange || 0;
+    const predStr = `${pred >= 0 ? '+' : ''}${pred.toFixed(1)}%`;
+    const catColors = { INVERTIBLE: 'text-green-400', APALANCADO: 'text-yellow-400', RUIDOSO: 'text-gray-400', PUMP: 'text-red-400' };
+    const catEmoji  = { INVERTIBLE: '🟢', APALANCADO: '🟡', RUIDOSO: '⚪', PUMP: '🚨' };
+    const bpColor = bp >= 65 ? 'bg-green-500' : bp >= 40 ? 'bg-yellow-500' : 'bg-gray-600';
+
+    block.innerHTML = `
+      <div class="space-y-2">
+        <div class="flex items-center gap-3">
+          <div class="flex-1">
+            <div class="flex justify-between text-xs mb-1"><span class="text-gray-400">⚡ BoostPower</span><span class="font-bold ${catColors[cat] || 'text-gray-400'}">${bp}%</span></div>
+            <div class="w-full bg-gray-700 rounded-full h-2"><div class="h-2 rounded-full ${bpColor} transition-all" style="width:${bp}%"></div></div>
+          </div>
+          <span class="pill border border-gray-700 ${catColors[cat] || 'text-gray-400'} text-xs font-bold whitespace-nowrap">${catEmoji[cat] || '⚪'} ${cat}</span>
+        </div>
+        <div class="flex gap-4 text-xs">
+          <span class="${pred >= 0 ? 'text-green-400' : 'text-red-400'} font-semibold">📈 Predicción: ${predStr}</span>
+          ${cl.confidence ? `<span class="text-gray-500">Confianza: ${cl.confidence}</span>` : ''}
+        </div>
+        ${cl.reason ? `<p class="text-xs text-gray-500 leading-relaxed">💬 ${cl.reason}</p>` : ''}
+      </div>`;
+
+    // Colorear botón de ciclo según clasificación
+    const btn = document.getElementById(`btn-ciclo-${assetId}`);
+    if (btn && cat === 'INVERTIBLE') { btn.className = btn.className.replace('bg-indigo-800 hover:bg-indigo-700', 'bg-green-800 hover:bg-green-700'); }
+    if (btn && cat === 'APALANCADO') { btn.className = btn.className.replace('bg-indigo-800 hover:bg-indigo-700', 'bg-yellow-800 hover:bg-yellow-700'); }
+
+  } catch(e) {
+    if (block) block.innerHTML = `<span class="text-red-400">❌ ${e.message}</span>`;
+  }
 }
 
 // ── Historial ─────────────────────────────────────────────────────
