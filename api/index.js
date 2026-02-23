@@ -2101,6 +2101,255 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ── POST /api/invest/watchdog ─────────────────────────────────────────────────
+// Watchdog automático de stop-loss / take-profit.
+// Debe llamarse cada 30 minutos desde el frontend (patch-pump-duration.js lo hace).
+//
+// DIFERENCIAS vs /api/invest/evaluate:
+//   1. Usa position.takeProfitPrice y position.stopLossPrice (fijados al abrir)
+//      en lugar de recalcular desde cfg — evita que cambios de config afecten
+//      posiciones ya abiertas.
+//   2. NO incrementa holdCycles — ese contador solo avanza al completar ciclos,
+//      no en cada comprobación periódica.
+//   3. Fallback de precios: CoinGecko → CryptoCompare → Binance → precio stale.
+//      Nunca falla silenciosamente con precios de entrada.
+//   4. Fuente única de verdad: toda la lógica de decisión está aquí, no en
+//      evaluateSellDecision del iteration-engine (que ya no debe usarse).
+app.post('/api/invest/watchdog', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const open      = positions.filter(p => p.status === 'open');
+
+    if (!open.length) return res.json({ success: true, checked: 0, actions: [], message: 'Sin posiciones abiertas' });
+
+    // ── Obtener precios con cascada de fuentes ────────────────────────────────
+    const assetIds  = [...new Set(open.map(p => p.assetId))];
+    const symbolMap = {};
+    open.forEach(p => { symbolMap[p.assetId] = p.symbol; });
+
+    // Construir lastKnown desde las posiciones actuales (precio de entrada como mínimo)
+    const lastKnown = {};
+    open.forEach(p => {
+      lastKnown[p.assetId] = { price: p.currentPrice || p.entryPrice, timestamp: Date.now() - 3600000 };
+    });
+
+    let priceMap = {};
+    let priceSource = 'none';
+
+    // Fuente 1: CoinGecko
+    try {
+      const pRes = await axios.get(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${assetIds.join(',')}&vs_currencies=usd`,
+        { timeout: 7000 }
+      );
+      if (pRes.data && Object.keys(pRes.data).length > 0) {
+        priceMap = pRes.data;
+        priceSource = 'coingecko';
+      }
+    } catch (_) {}
+
+    // Fuente 2: CryptoCompare (si CoinGecko falló o faltan activos)
+    const missing1 = assetIds.filter(id => !priceMap[id]?.usd);
+    if (missing1.length > 0) {
+      try {
+        const syms = [...new Set(missing1.map(id => symbolMap[id]).filter(Boolean))].join(',').toUpperCase();
+        const ccKey = process.env.CRYPTOCOMPARE_API_KEY || '';
+        const headers = ccKey ? { authorization: `Apikey ${ccKey}` } : {};
+        const pRes = await axios.get(
+          `https://min-api.cryptocompare.com/data/price?fsym=USD&tsyms=${syms}`,
+          { timeout: 6000, headers }
+        );
+        // CryptoCompare devuelve precios en USD invertidos — usar pricemultifull en su lugar
+        const pRes2 = await axios.get(
+          `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${syms}&tsyms=USD`,
+          { timeout: 6000, headers }
+        );
+        const ccData = pRes2.data || {};
+        const idBySym = {};
+        missing1.forEach(id => { if (symbolMap[id]) idBySym[symbolMap[id].toUpperCase()] = id; });
+        for (const [sym, data] of Object.entries(ccData)) {
+          const id = idBySym[sym.toUpperCase()];
+          if (id && data.USD) {
+            if (!priceMap[id]) priceMap[id] = {};
+            priceMap[id].usd = data.USD;
+            if (priceSource === 'none') priceSource = 'cryptocompare';
+            else if (priceSource === 'coingecko') priceSource = 'coingecko+cryptocompare';
+          }
+        }
+      } catch (_) {}
+    }
+
+    // Fuente 3: Binance Public API (si todavía faltan)
+    const missing2 = assetIds.filter(id => !priceMap[id]?.usd);
+    if (missing2.length > 0) {
+      try {
+        const pRes = await axios.get('https://api.binance.com/api/v3/ticker/price', { timeout: 6000 });
+        const tickers = {};
+        (pRes.data || []).forEach(t => { tickers[t.symbol] = parseFloat(t.price); });
+        missing2.forEach(id => {
+          const sym = (symbolMap[id] || '').toUpperCase() + 'USDT';
+          if (tickers[sym]) {
+            if (!priceMap[id]) priceMap[id] = {};
+            priceMap[id].usd = tickers[sym];
+            if (priceSource === 'none') priceSource = 'binance';
+          }
+        });
+      } catch (_) {}
+    }
+
+    // Fuente 4 (stale): usar currentPrice de la posición como último recurso
+    // IMPORTANTE: marcar como stale para no tomar decisiones de venta basadas en precios obsoletos
+    const staleIds = [];
+    assetIds.forEach(id => {
+      if (!priceMap[id]?.usd) {
+        const fallback = lastKnown[id]?.price;
+        if (fallback) {
+          priceMap[id] = { usd: fallback, stale: true };
+          staleIds.push(id);
+        }
+      }
+    });
+
+    // ── Evaluar cada posición ────────────────────────────────────────────────
+    const actions   = [];
+    const checked   = [];
+    const keys      = await getExchangeKeys(cfg.exchange);
+    let   posChanged = false;
+
+    for (const position of open) {
+      const priceInfo    = priceMap[position.assetId];
+      const currentPrice = priceInfo?.usd;
+
+      // Sin precio → registrar y saltar (no decidir con datos vacíos)
+      if (!currentPrice) {
+        checked.push({ assetId: position.assetId, symbol: position.symbol, status: 'no_price' });
+        continue;
+      }
+
+      // Precio stale → solo disparar stop-loss como protección, nunca take-profit
+      const isStale = priceInfo?.stale === true;
+
+      const pnlPct = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+
+      // ── Condiciones de venta ──────────────────────────────────────────────
+      // BUG FIX #2: usar precios almacenados en la posición (fijados al abrir),
+      // NO recalcular desde cfg. Así un cambio de config no afecta posiciones abiertas.
+      const tpPrice = position.takeProfitPrice;
+      const slPrice = position.stopLossPrice;
+
+      // Fallback a cfg por si posiciones antiguas no tienen esos campos
+      const tpPct = tpPrice
+        ? ((tpPrice - position.entryPrice) / position.entryPrice) * 100
+        : cfg.takeProfitPct;
+      const slPct = slPrice
+        ? ((position.entryPrice - slPrice) / position.entryPrice) * 100
+        : cfg.stopLossPct;
+
+      const hitTP = !isStale && (tpPrice ? currentPrice >= tpPrice : pnlPct >= tpPct);
+      const hitSL = slPrice ? currentPrice <= slPrice : pnlPct <= -slPct;
+
+      const shouldSell = hitTP || hitSL;
+
+      const checkEntry = {
+        positionId:    position.id,
+        assetId:       position.assetId,
+        symbol:        position.symbol,
+        entryPrice:    position.entryPrice,
+        currentPrice,
+        takeProfitPrice: tpPrice,
+        stopLossPrice:   slPrice,
+        pnlPct:        parseFloat(pnlPct.toFixed(2)),
+        hitTP,
+        hitSL,
+        isStale,
+        priceSource,
+        action: shouldSell ? 'sell' : 'hold',
+      };
+
+      if (shouldSell) {
+        const reason = hitSL
+          ? `watchdog_stop_loss: ${pnlPct.toFixed(2)}% ≤ −${slPct.toFixed(2)}% (precio: ${currentPrice} ≤ SL: ${slPrice || 'n/a'})`
+          : `watchdog_take_profit: +${pnlPct.toFixed(2)}% ≥ +${tpPct.toFixed(2)}% (precio: ${currentPrice} ≥ TP: ${tpPrice || 'n/a'})`;
+
+        try {
+          // Ejecutar orden de venta
+          const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
+
+          // Calcular PnL real y cerrar posición
+          // BUG FIX #3: NO llamar a evaluatePosition (que incrementaría holdCycles).
+          // Hacemos los cálculos directamente aquí.
+          const pnlUSD   = (currentPrice - position.entryPrice) * position.units;
+          const exitFee  = position.capitalUSD * (cfg.feePct || 0.10) / 100;
+          const netPnL   = pnlUSD - exitFee;
+
+          position.status            = 'closed';
+          position.closedAt          = new Date().toISOString();
+          position.currentPrice      = currentPrice;
+          position.realizedPnL       = parseFloat(pnlUSD.toFixed(4));
+          position.realizedPnLPct    = parseFloat(pnlPct.toFixed(2));
+          position.exitFeeUSD        = parseFloat(exitFee.toFixed(4));
+          position.totalFeesUSD      = parseFloat(((position.entryFeeUSD || 0) + exitFee).toFixed(4));
+          position.closeReason       = hitSL ? 'watchdog_stop_loss' : 'watchdog_take_profit';
+          position.exchangeCloseOrderId = order.orderId;
+
+          posChanged = true;
+          checkEntry.sold = true;
+          checkEntry.reason = reason;
+          checkEntry.pnlUSD  = parseFloat(pnlUSD.toFixed(4));
+          checkEntry.netPnL  = parseFloat(netPnL.toFixed(4));
+
+          actions.push({ ...checkEntry, order });
+
+          // Log
+          await appendInvestLog({
+            type:      'watchdog_close',
+            subtype:   hitSL ? 'stop_loss' : 'take_profit',
+            cycleId:   position.cycleId || null,
+            timestamp: new Date().toISOString(),
+            config:    { mode: cfg.mode, exchange: cfg.exchange, takeProfitPct: cfg.takeProfitPct, stopLossPct: cfg.stopLossPct },
+            position: {
+              id: position.id, symbol: position.symbol, assetId: position.assetId,
+              entryPrice: position.entryPrice, exitPrice: currentPrice,
+              takeProfitPrice: tpPrice, stopLossPrice: slPrice,
+              pnlPct: parseFloat(pnlPct.toFixed(2)), pnlUSD: parseFloat(pnlUSD.toFixed(4)),
+              netPnL: parseFloat(netPnL.toFixed(4)), priceSource,
+            },
+            reason,
+          });
+        } catch (sellErr) {
+          console.error(`[watchdog] Error cerrando ${position.symbol}:`, sellErr.message);
+          checkEntry.sold  = false;
+          checkEntry.error = sellErr.message;
+          actions.push(checkEntry);
+        }
+      } else {
+        checked.push(checkEntry);
+      }
+    }
+
+    if (posChanged) await savePositions(positions);
+
+    res.json({
+      success:     true,
+      timestamp:   new Date().toISOString(),
+      checked:     open.length,
+      priceSource,
+      staleIds,
+      sells:       actions.filter(a => a.sold).length,
+      holds:       checked.length,
+      errors:      actions.filter(a => !a.sold).length,
+      actions,
+      checked,
+    });
+
+  } catch(e) {
+    console.error('[watchdog] error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ── POST /api/invest/buy-manual ─────────────────────────────────────────────
 // Lanza una orden de compra manual desde el Detector de Especulaciones Externas
 // El activo entra directamente en el algoritmo de inversión (posición abierta)
@@ -2184,7 +2433,7 @@ app.post('/api/invest/buy-manual', async (req, res) => {
     position.exchangeOrderId  = order.orderId || position.exchangeOrderId;
     position.orderDetails     = order;
     position.executedAt       = new Date().toISOString();
-    position.source           = 'pump_detector'; // marcar origen
+    position.source           = 'pump_detector';
     position.cycleDurationMs  = cycleDurationMs || 43200000; // duración elegida en el modal
 
     const allPositions = [...positions, position];
@@ -2952,16 +3201,12 @@ app.get('/api/pump/cron', async (req, res) => {
 });
 
 // ── POST /api/cycles/:cycleId/iterate ────────────────────────────────────────
-// Ejecuta UNA iteración del ciclo: obtiene precios (con fallback automático a
-// CryptoCompare y Binance), evalúa criterios de venta y registra el resultado.
 app.post('/api/cycles/:cycleId/iterate', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
     const cycle = await cyclesManager.loadCycle(redis, req.params.cycleId);
     if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
-    if (cycle.status === 'completed') {
-      return res.status(400).json({ success: false, error: 'Ciclo ya completado' });
-    }
+    if (cycle.status === 'completed') return res.status(400).json({ success: false, error: 'Ciclo ya completado' });
 
     const positions    = await getPositions();
     const investConfig = await getInvestConfig();
@@ -2971,108 +3216,78 @@ app.post('/api/cycles/:cycleId/iterate', async (req, res) => {
       redis, req.params.cycleId, cyclesManager, positions, investConfig, apiKeys
     );
 
-    // Cerrar posiciones que activaron SL/TP en esta iteración
+    // Cerrar posiciones que activaron SL/TP
     const sellResults = [];
     if (result.toSell.length > 0) {
       const allPositions = await getPositions();
       const cfg  = investConfig;
       const keys = await getExchangeKeys(cfg.exchange);
-
       for (const { position, currentPrice, decision } of result.toSell) {
         try {
-          const evaluation = investManager.evaluatePosition(position, currentPrice, position.cycleId, cfg);
-          const order      = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-          const pos        = allPositions.find(p => p.id === position.id);
+          const order   = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
+          const pos     = allPositions.find(p => p.id === position.id);
           if (pos) {
-            investManager.closePosition(pos, evaluation);
+            const pnlUSD  = (currentPrice - pos.entryPrice) * pos.units;
+            const exitFee = pos.capitalUSD * (cfg.feePct || 0.10) / 100;
+            pos.status    = 'closed';
+            pos.closedAt  = new Date().toISOString();
+            pos.currentPrice       = currentPrice;
+            pos.realizedPnL        = parseFloat(pnlUSD.toFixed(4));
+            pos.realizedPnLPct     = parseFloat(decision.pnlPct.toFixed(2));
+            pos.exitFeeUSD         = parseFloat(exitFee.toFixed(4));
+            pos.closeReason        = decision.reason.split(':')[0];
             pos.exchangeCloseOrderId = order.orderId;
-            pos.iterationClosedAt    = new Date().toISOString();
-            pos.iterationCloseReason = decision.reason;
           }
-          sellResults.push({ assetId: position.assetId, symbol: position.symbol,
-            price: currentPrice, pnlPct: decision.pnlPct, reason: decision.reason, closed: true });
-        } catch (closeErr) {
-          console.error(`[iterate] Error cerrando ${position.id}:`, closeErr.message);
-          sellResults.push({ assetId: position.assetId, symbol: position.symbol,
-            pnlPct: decision.pnlPct, closed: false, error: closeErr.message });
+          sellResults.push({ assetId: position.assetId, symbol: position.symbol, price: currentPrice, pnlPct: decision.pnlPct, closed: true });
+        } catch (err) {
+          sellResults.push({ assetId: position.assetId, symbol: position.symbol, closed: false, error: err.message });
         }
       }
       await savePositions(allPositions);
     }
 
     res.json({
-      success:         true,
-      cycleId:         result.cycleId,
-      iterationNumber: result.iterationNumber,
-      totalIterations: result.totalIterations,
-      isLastIteration: result.isLastIteration,
-      timestamp:       result.timestamp,
-      assetsCount:     result.assetsCount,
-      fetchedCount:    result.fetchedCount,
-      failedCount:     result.failedCount,
-      staleCount:      result.staleCount,
-      priceSource:     result.priceSource,
-      decisionsCount:  Object.keys(result.decisions).length,
-      sellsExecuted:   sellResults.length,
-      sellResults,
-      shouldComplete:  result.isLastIteration,
+      success: true, cycleId: result.cycleId,
+      iterationNumber: result.iterationNumber, totalIterations: result.totalIterations,
+      isLastIteration: result.isLastIteration, assetsCount: result.assetsCount,
+      fetchedCount: result.fetchedCount, failedCount: result.failedCount,
+      staleCount: result.staleCount, priceSource: result.priceSource,
+      sellsExecuted: sellResults.length, sellResults, shouldComplete: result.isLastIteration,
     });
-  } catch (e) {
-    console.error('[iterate] error:', e.message);
-    res.status(500).json({ success: false, error: e.message });
-  }
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ── GET /api/cycles/:cycleId/iterations ──────────────────────────────────────
-// Devuelve el historial de iteraciones y el schedule completo de un ciclo.
 app.get('/api/cycles/:cycleId/iterations', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
     const cycle = await cyclesManager.loadCycle(redis, req.params.cycleId);
     if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
 
-    const durationMs   = cycle.durationMs || 43200000;
-    const schedule     = iterationEngine.getIterationSchedule(cycle.startTime, durationMs);
-    const iterations   = cycle.iterations || [];
-    const nextIterTime = iterationEngine.getNextIterationTime(cycle);
+    const durationMs = cycle.durationMs || 43200000;
+    const schedule   = iterationEngine.getIterationSchedule(cycle.startTime, durationMs);
+    const iterations = cycle.iterations || [];
 
-    const enrichedIterations = iterations.map((iter, idx) => ({
-      ...iter,
-      scheduledTime: schedule[idx] || null,
+    const enriched = iterations.map((iter, idx) => ({
+      ...iter, scheduledTime: schedule[idx] || null,
       delayMs: schedule[idx] ? iter.timestamp - schedule[idx] : 0,
     }));
-
     const pending = schedule.slice(iterations.length).map((ts, i) => ({
-      iterationIndex:  iterations.length + i,
-      iterationNumber: iterations.length + i + 1,
-      scheduledTime:   ts,
-      status:          ts <= Date.now() ? 'due' : 'upcoming',
+      iterationNumber: iterations.length + i + 1, scheduledTime: ts,
+      status: ts <= Date.now() ? 'due' : 'upcoming',
     }));
 
     res.json({
-      success:            true,
-      cycleId:            cycle.id,
-      status:             cycle.status,
-      durationMs,
-      startTime:          cycle.startTime,
-      endTime:            cycle.endTime,
-      totalScheduled:     schedule.length,
-      completedCount:     iterations.length,
-      pendingCount:       pending.length,
-      nextIterationAt:    nextIterTime,
-      iterationsComplete: cycle.iterationsComplete || false,
-      iterations:         enrichedIterations,
-      pending,
+      success: true, cycleId: cycle.id, status: cycle.status,
+      durationMs, startTime: cycle.startTime, endTime: cycle.endTime,
+      totalScheduled: schedule.length, completedCount: iterations.length, pendingCount: pending.length,
+      nextIterationAt: iterationEngine.getNextIterationTime(cycle),
+      iterations: enriched, pending,
     });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ── POST /api/cycles/run-pending-iterations ───────────────────────────────────
-// Ejecuta todas las iteraciones pendientes de todos los ciclos activos.
-// Llamado periódicamente desde el frontend (cada 5 min) para mantener el
-// sistema al día incluso si el usuario no está en la pestaña de validación.
 app.post('/api/cycles/run-pending-iterations', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
@@ -3088,31 +3303,14 @@ app.post('/api/cycles/run-pending-iterations', async (req, res) => {
     for (const cycle of cycles) {
       if (cycle.status === 'completed') continue;
       if (!iterationEngine.hasIterationDue(cycle)) continue;
-
       try {
-        const result = await iterationEngine.executeIteration(
-          redis, cycle.id, cyclesManager, positions, investConfig, apiKeys
-        );
-        processed.push({
-          cycleId:         cycle.id,
-          iterationNumber: result.iterationNumber,
-          fetchedCount:    result.fetchedCount,
-          staleCount:      result.staleCount,
-          sellsTriggered:  result.toSell.length,
-          isLastIteration: result.isLastIteration,
-          shouldComplete:  result.isLastIteration,
-        });
-        // Pausa entre ciclos para no saturar APIs
+        const result = await iterationEngine.executeIteration(redis, cycle.id, cyclesManager, positions, investConfig, apiKeys);
+        processed.push({ cycleId: cycle.id, iterationNumber: result.iterationNumber, fetchedCount: result.fetchedCount, sellsTriggered: result.toSell.length, isLastIteration: result.isLastIteration });
         await new Promise(r => setTimeout(r, 1500));
-      } catch (err) {
-        processed.push({ cycleId: cycle.id, error: err.message });
-      }
+      } catch (err) { processed.push({ cycleId: cycle.id, error: err.message }); }
     }
-
     res.json({ success: true, processed, count: processed.length });
-  } catch (e) {
-    res.status(500).json({ success: false, error: e.message });
-  }
+  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ── Arranque local ────────────────────────────────────────────────────────────
