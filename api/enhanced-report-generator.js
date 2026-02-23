@@ -1,15 +1,20 @@
-// enhanced-report-generator.js — v3.0
+// enhanced-report-generator.js — v3.1
 // Informe paramétrico completo por activo + conclusiones LLM "Los 3 Sabios"
 //
 // Secciones:
 //   1. Portada y resumen ejecutivo (modo normal / especulativo)
+//      · Ventana temporal explícita (misma para predicción y validación)
+//      · Candidatas al próximo ciclo — siempre explícito (nunca en blanco)
+//      · Activos descartados — siempre explícito (nunca en blanco)
 //   2. Configuración del algoritmo (todos los pesos y umbrales)
 //   3. Contexto general de mercado en el momento del ciclo
-//   4. Por cada activo: parámetros calculados, pesos de clasificación,
+//   4. Por cada activo: indicadores calculados + influencia en clasificación,
 //      valores de mercado inicio→fin, Google Trends, predicción vs real
-//   5. Tabla comparativa global
+//   5. Tabla comparativa global — nueva lógica:
+//      · Dirección acertada ✓/✗ (↑↑/↓↓/↑↓/↓↑)
+//      · Calidad: Buena ≤1% / Media 1-3% / No válida >3%
 //   6. Parámetros del algoritmo de compra/venta durante el ciclo
-//   7. Conclusiones por activo (razonamiento individual)
+//   7. Conclusiones por activo (razonamiento individual mejorado)
 //   8. Conclusiones generales con consenso "Los 3 Sabios" (LLM)
 //   9. Recomendaciones de ajuste de pesos
 
@@ -51,6 +56,44 @@ function classColor(cat) {
 }
 function changeColor(v) { return parseFloat(v) >= 0 ? COLOR.GREEN : COLOR.RED; }
 function correctColor(c) { return c ? COLOR.GREEN : COLOR.RED; }
+
+// ─── NUEVO v3.1: Calidad de predicción ────────────────────────────────────────
+/**
+ * Califica la predicción según desviación absoluta (pred vs real)
+ *   Buena    <= 1%
+ *   Media    1% < x <= 3%
+ *   No válida > 3%
+ */
+function predQuality(absDev) {
+  const d = Math.abs(parseFloat(absDev || 0));
+  if (d <= 1) return { label: 'BUENA',     color: COLOR.GREEN,  bg: 'F0FDF4' };
+  if (d <= 3) return { label: 'MEDIA',     color: COLOR.YELLOW, bg: 'FFFBEB' };
+  return           { label: 'NO VALIDA',  color: COLOR.RED,    bg: 'FEF2F2' };
+}
+
+/**
+ * Analiza si prediccion y real van en la misma direccion.
+ * Devuelve { correct: boolean, label: string, arrow: string }
+ * Umbral de ruido: movimientos < 0.3% se consideran laterales.
+ */
+function directionAnalysis(predicted, actual) {
+  const p = parseFloat(predicted || 0);
+  const a = parseFloat(actual    || 0);
+  const NOISE = 0.3;
+  const pDir = Math.abs(p) < NOISE ? 0 : (p > 0 ? 1 : -1);
+  const aDir = Math.abs(a) < NOISE ? 0 : (a > 0 ? 1 : -1);
+
+  if (pDir === 0 && aDir === 0) return { correct: true,  label: 'Lateral / Lateral',                                   arrow: '->' };
+  if (pDir === 0)               return { correct: Math.abs(a) < 1, label: `Lateral / ${a>0?'Sube':'Baja'}`,           arrow: '->' };
+  if (aDir === 0)               return { correct: Math.abs(p) < 1, label: `${p>0?'Sube':'Baja'} / Lateral`,          arrow: '->' };
+
+  if (pDir === aDir) {
+    const arrow = pDir > 0 ? 'sube/sube' : 'baja/baja';
+    return { correct: true,  label: `[${arrow}] ${pDir > 0 ? 'Subida' : 'Bajada'} acertada`, arrow };
+  }
+  const arrow = p > 0 ? 'sube/baja' : 'baja/sube';
+  return { correct: false, label: `[${arrow}] Pred: ${p>0?'Sube':'Baja'} / Real: ${a>0?'Sube':'Baja'}`, arrow };
+}
 
 // Celda de tabla con fondo opcional
 function tc(text, { bold = false, color, bg, align = AlignmentType.LEFT, colspan } = {}) {
@@ -104,11 +147,24 @@ function kv(label, value, { color } = {}) {
 // ═══════════════════════════════════════════════════════════════════════════════
 
 function buildCover(cycle, config) {
-  const mode = cycle.mode || 'normal';
-  const modeLabel = mode === 'speculative' ? 'ESPECULATIVO' : 'GENERALISTA';
-  const validResults = (cycle.results || []).filter(r => !(cycle.excludedResults || []).includes(r.id));
-  const successRate = cycle.metrics?.successRate || '0.00';
-  const acc = parseFloat(successRate);
+  const mode        = cycle.mode || 'normal';
+  const modeLabel   = mode === 'speculative' ? 'ESPECULATIVO' : 'GENERALISTA';
+  const allResults  = cycle.results || [];
+  const excludedIds = cycle.excludedResults || [];
+  const validResults = allResults.filter(r => !excludedIds.includes(r.id));
+  const excluded     = allResults.filter(r =>  excludedIds.includes(r.id));
+  const successRate  = cycle.metrics?.successRate || '0.00';
+  const acc          = parseFloat(successRate);
+
+  // Candidatas al proximo ciclo: INVERTIBLE/APALANCADO que acertaron con BP >= 60%
+  const nextCandidates = validResults.filter(r =>
+    (r.classification === 'INVERTIBLE' || r.classification === 'APALANCADO') &&
+    r.correct &&
+    parseFloat(r.boostPower || 0) >= 0.60
+  );
+
+  const windowHrs  = ((cycle.durationMs || 43200000) / 3600000).toFixed(1);
+  const windowNote = `Todas las predicciones y validaciones corresponden a la misma ventana de ${windowHrs}h (inicio: ${fmt.date(cycle.startTime)} -> fin: ${fmt.date(cycle.completedAt)})`;
 
   return [
     new Paragraph({
@@ -119,7 +175,7 @@ function buildCover(cycle, config) {
     new Paragraph({
       alignment: AlignmentType.CENTER,
       spacing: { after: 80 },
-      children: [new TextRun({ text: `INFORME ANALÍTICO DE CICLO — MODELO ${modeLabel}`, bold: true, size: 28, color: COLOR.DARK })]
+      children: [new TextRun({ text: `INFORME ANALITICO DE CICLO - MODELO ${modeLabel}`, bold: true, size: 28, color: COLOR.DARK })]
     }),
     new Paragraph({
       alignment: AlignmentType.CENTER,
@@ -128,43 +184,111 @@ function buildCover(cycle, config) {
     }),
     sep(),
     ...blank(),
+
     // Resumen ejecutivo en tabla
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
         new TableRow({ children: [
-          tc('ID Ciclo',         { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
-          tc(cycle.id,          { bg: 'F1F5F9' }),
-          tc('Modo',            { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
-          tc(modeLabel,         { bold: true, bg: 'F1F5F9', color: mode === 'speculative' ? COLOR.ORANGE : COLOR.BLUE }),
+          tc('ID Ciclo',   { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc(cycle.id,    { bg: 'F1F5F9' }),
+          tc('Modo',      { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc(modeLabel,   { bold: true, bg: 'F1F5F9', color: mode === 'speculative' ? COLOR.ORANGE : COLOR.BLUE }),
         ]}),
         new TableRow({ children: [
-          tc('Inicio',          { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
-          tc(fmt.date(cycle.startTime), { bg: 'F1F5F9' }),
-          tc('Fin',             { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc('Inicio',    { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc(fmt.date(cycle.startTime),   { bg: 'F1F5F9' }),
+          tc('Fin',       { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
           tc(fmt.date(cycle.completedAt), { bg: 'F1F5F9' }),
         ]}),
         new TableRow({ children: [
-          tc('Duración',        { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc('Duracion',  { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
           tc(fmt.dur(cycle.durationMs || 0), { bg: 'F1F5F9' }),
-          tc('Significativo',   { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
-          tc(cycle.isSignificant ? '✓ Sí (≥6h)' : '✗ No (<6h)', { bg: 'F1F5F9', color: cycle.isSignificant ? COLOR.GREEN : COLOR.ORANGE }),
+          tc('Significativo', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc(cycle.isSignificant ? 'Si (>=6h)' : 'No (<6h)', { bg: 'F1F5F9', color: cycle.isSignificant ? COLOR.GREEN : COLOR.ORANGE }),
         ]}),
         new TableRow({ children: [
           tc('Activos analizados', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
-          tc(`${validResults.length} incluidos / ${(cycle.results||[]).length - validResults.length} excluidos`, { bg: 'F1F5F9' }),
-          tc('Tasa de acierto',  { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
-          tc(fmt.pct(successRate), { bold: true, bg: acc >= 60 ? 'DCFCE7' : acc >= 40 ? 'FEF9C3' : 'FEE2E2', color: acc >= 60 ? COLOR.GREEN : acc >= 40 ? COLOR.YELLOW : COLOR.RED }),
+          tc(`${validResults.length} validos / ${allResults.length} total`, { bg: 'F1F5F9' }),
+          tc('Tasa de acierto',   { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc(`${successRate}%`, { bold: true, bg: acc >= 60 ? 'DCFCE7' : acc >= 40 ? 'FEF9C3' : 'FEE2E2', color: acc >= 60 ? COLOR.GREEN : acc >= 40 ? COLOR.YELLOW : COLOR.RED }),
         ]}),
         new TableRow({ children: [
-          tc('Correctas',       { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc('Correctas',  { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
           tc(`${cycle.metrics?.correct || 0} / ${cycle.metrics?.total || 0}`, { bg: 'F1F5F9' }),
-          tc('Error promedio',  { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc('Error promedio', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
           tc(fmt.pct(cycle.metrics?.avgError || 0), { bg: 'F1F5F9' }),
+        ]}),
+        new TableRow({ children: [
+          tc('INVERTIBLE', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc(`${cycle.metrics?.invertible?.correct||0}/${cycle.metrics?.invertible?.total||0} (${cycle.metrics?.invertible?.successRate||'0.00'}%)`, { bg: 'F0FDF4' }),
+          tc('APALANCADO', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc(`${cycle.metrics?.apalancado?.correct||0}/${cycle.metrics?.apalancado?.total||0} (${cycle.metrics?.apalancado?.successRate||'0.00'}%)`, { bg: 'FFFBEB' }),
         ]}),
       ]
     }),
-    ...blank(2),
+    ...blank(),
+
+    // Ventana temporal — siempre explicita
+    p('Ventana Temporal de Analisis', { bold: true, size: 22, color: COLOR.BLUE }),
+    p(windowNote, { size: 18, color: COLOR.DARK }),
+    ...blank(),
+
+    // Candidatas al proximo ciclo — SIEMPRE explicito, nunca en blanco
+    p('Candidatas para el Proximo Ciclo', { bold: true, size: 22, color: COLOR.GREEN }),
+    ...(nextCandidates.length === 0
+      ? [p('Ninguna — No hay activos que cumplan los criterios para ser candidatos al proximo ciclo (requiere: acierto + BoostPower >= 60% + clasificacion INVERTIBLE o APALANCADO).', {
+          size: 18, color: COLOR.RED
+        })]
+      : [
+          p(`${nextCandidates.length} activo(s) recomendados para el siguiente ciclo:`, { size: 18 }),
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [
+              headerRow('Activo', 'Clasificacion', 'BoostPower', 'Pred.', 'Real', 'Calidad pred.'),
+              ...nextCandidates.map(r => {
+                const dev  = Math.abs(parseFloat(r.predictedChange||0) - parseFloat(r.actualChange||0));
+                const qual = predQuality(dev);
+                return new TableRow({ children: [
+                  tc(`${r.name||r.symbol} (${r.symbol?.toUpperCase()})`, { bold: true }),
+                  tc(r.classification, { color: classColor(r.classification), bold: true }),
+                  tc(fmt.score(r.boostPower), { color: COLOR.GREEN }),
+                  tc(fmt.sign(r.predictedChange), { color: changeColor(r.predictedChange) }),
+                  tc(fmt.sign(r.actualChange),    { color: changeColor(r.actualChange) }),
+                  tc(qual.label, { bold: true, color: qual.color }),
+                ]});
+              }),
+            ]
+          }),
+        ]
+    ),
+    ...blank(),
+
+    // Activos descartados — SIEMPRE explicito, nunca en blanco
+    p('Activos Descartados (Excluidos del Analisis Estadistico)', { bold: true, size: 22, color: COLOR.RED }),
+    ...(excluded.length === 0
+      ? [p('Ninguno — Todos los activos del ciclo han sido incluidos en el analisis estadistico.', {
+          size: 18, color: COLOR.GRAY
+        })]
+      : [
+          p(`${excluded.length} activo(s) excluidos manualmente del computo estadistico:`, { size: 18, color: COLOR.ORANGE }),
+          new Table({
+            width: { size: 80, type: WidthType.PERCENTAGE },
+            rows: [
+              headerRow('Activo', 'Clasificacion', 'BoostPower', 'Razon exclusion'),
+              ...excluded.map(r => new TableRow({ children: [
+                tc(`${r.name||r.symbol} (${r.symbol?.toUpperCase()})`, { bold: true }),
+                tc(r.classification || '—', { color: classColor(r.classification) }),
+                tc(fmt.score(r.boostPower)),
+                tc(r.exclusionReason || 'Excluido manualmente por el operador', { color: COLOR.GRAY }),
+              ]})),
+            ]
+          }),
+        ]
+    ),
+    ...blank(),
+    sep(),
+    ...blank(),
   ];
 }
 
@@ -331,6 +455,11 @@ function buildAssetCard(result, snap, cycle, idx) {
   const endPrice    = result.currentPrice || 0;
   const priceDelta  = startPrice > 0 ? ((endPrice - startPrice) / startPrice * 100) : 0;
 
+  // Nuevas metricas v3.1
+  const absDev      = Math.abs(predicted - actual);
+  const dir         = directionAnalysis(predicted, actual);
+  const qual        = predQuality(absDev);
+
   // Breakdown de factores (si está disponible)
   const bd = snap.breakdown || {};
   const potFactors = bd.potential?.factors || {};
@@ -348,12 +477,12 @@ function buildAssetCard(result, snap, cycle, idx) {
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
         new TableRow({ children: [
-          tc('Clasificación', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
+          tc('Clasificacion', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
           tc(cat, { bold: true, color: catColor, bg: cat === 'INVERTIBLE' ? 'DCFCE7' : cat === 'APALANCADO' ? 'FEF9C3' : 'F3F4F6' }),
           tc('BoostPower', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
           tc(fmt.score(result.boostPower || snap.boostPower), { bold: true, color: (result.boostPower || snap.boostPower || 0) > 0.6 ? COLOR.GREEN : COLOR.YELLOW }),
           tc('Resultado', { bold: true, bg: COLOR.SUBHEADER, color: COLOR.WHITE }),
-          tc(correct ? '✓ CORRECTO' : '✗ INCORRECTO', { bold: true, color: correctColor(correct), bg: correct ? 'DCFCE7' : 'FEE2E2' }),
+          tc(correct ? 'CORRECTO' : 'INCORRECTO', { bold: true, color: correctColor(correct), bg: correct ? 'DCFCE7' : 'FEE2E2' }),
         ]}),
       ]
     }),
@@ -364,7 +493,7 @@ function buildAssetCard(result, snap, cycle, idx) {
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
-        headerRow('Métrica', 'Valor al INICIO', 'Valor al CIERRE', 'Variación'),
+        headerRow('Metrica', 'Valor al INICIO', 'Valor al CIERRE', 'Variacion'),
         new TableRow({ children: [
           tc('Precio', { bold: true }),
           tc(fmt.price(startPrice)),
@@ -405,21 +534,40 @@ function buildAssetCard(result, snap, cycle, idx) {
     }),
     ...blank(),
 
-    // — Predicción vs Real
-    h3('  Predicción vs Resultado Real'),
+    // — NUEVA SECCION v3.1: Indicadores calculados e influencia
+    ...buildIndicatorsTable(snap, result),
+
+    // — Prediccion vs Real (mejorado v3.1)
+    h3('  Prediccion vs Resultado Real'),
     new Table({
-      width: { size: 80, type: WidthType.PERCENTAGE },
+      width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
-        headerRow('', 'Cambio previsto', 'Cambio real', 'Error absoluto'),
+        headerRow('Metrica', 'Prediccion', 'Real', 'Resultado'),
         new TableRow({ children: [
-          tc('Variación de precio', { bold: true }),
+          tc('Cambio esperado / observado', { bold: true }),
           tc(fmt.sign(predicted), { bold: true, color: changeColor(predicted) }),
           tc(fmt.sign(actual),    { bold: true, color: changeColor(actual) }),
-          tc(fmt.pct(result.error || Math.abs(predicted - actual)), { color: parseFloat(result.error || 0) < 5 ? COLOR.GREEN : parseFloat(result.error || 0) < 15 ? COLOR.YELLOW : COLOR.RED }),
+          tc(`Desv. abs.: ${fmt.pct(absDev)}`, { color: qual.color }),
+        ]}),
+        new TableRow({ children: [
+          tc('Direccion', { bold: true }),
+          tc(predicted >= 0 ? 'Sube' : 'Baja', { color: changeColor(predicted) }),
+          tc(actual    >= 0 ? 'Sube' : 'Baja', { color: changeColor(actual) }),
+          tc(`${dir.correct ? '[OK]' : '[FALLO]'} ${dir.label}`, { bold: true, color: dir.correct ? COLOR.GREEN : COLOR.RED }),
+        ]}),
+        new TableRow({ children: [
+          tc('Calidad de prediccion', { bold: true }),
+          tc(qual.label, { bold: true, color: qual.color, colspan: 2 }),
+          tc(qual.label === 'BUENA' ? 'Desv <=1% — prediccion precisa' : qual.label === 'MEDIA' ? 'Desv 1-3% — orientativa' : 'Desv >3% — no valida estadisticamente', { color: qual.color }),
+        ]}),
+        new TableRow({ children: [
+          tc('Ventana temporal', { bold: true }),
+          tc(fmt.date(cycle.startTime), { colspan: 2 }),
+          tc(`-> ${fmt.date(cycle.completedAt)}  (${fmt.dur(cycle.durationMs||0)})`, { color: COLOR.GRAY }),
         ]}),
       ]
     }),
-    p(`Razón de validación: ${result.validationReason || '—'}`, { color: COLOR.GRAY, size: 17, spacing: { before: 100 } }),
+    p(`Razon de validacion: ${result.validationReason || '—'}`, { color: COLOR.GRAY, size: 17, spacing: { before: 100 } }),
     ...blank(),
 
     // — Factores del algoritmo (breakdown)
@@ -429,7 +577,7 @@ function buildAssetCard(result, snap, cycle, idx) {
 
     // — Google Trends (si disponible)
     ...(trends ? buildTrendsSection(trends, result.name || snap.name) : [
-      p('📊 Google Trends: dato no disponible para este activo (requiere SERPAPI_KEY configurada)', { color: COLOR.GRAY, size: 17 })
+      p('Google Trends: dato no disponible para este activo (requiere SERPAPI_KEY configurada)', { color: COLOR.GRAY, size: 17 })
     ]),
     ...blank(),
     sep(),
@@ -513,6 +661,129 @@ function factorContext(key, value, snap, indicators) {
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// NUEVA SECCION v3.1 — INDICADORES CALCULADOS E INFLUENCIA EN CLASIFICACION
+// ═══════════════════════════════════════════════════════════════════════════════
+
+function buildIndicatorsTable(snap, result) {
+  const bd         = snap.breakdown || result.breakdown || {};
+  const indicators = bd.indicators  || snap.indicators || {};
+  const potFactors = bd.potential?.factors  || {};
+  const resFactors = bd.resistance?.factors || {};
+  const potScore   = parseFloat(bd.potential?.score  || 0);
+  const resScore   = parseFloat(bd.resistance?.score || 0);
+
+  if (Object.keys(indicators).length === 0 && Object.keys(potFactors).length === 0) {
+    return [
+      h3('  Indicadores Calculados'),
+      p('Datos de indicadores no disponibles para este activo en este ciclo.', { size: 17, color: COLOR.GRAY }),
+      ...blank(),
+    ];
+  }
+
+  const rows = [
+    headerRow('Indicador', 'Valor', 'Tipo', 'Influencia en clasificacion'),
+    ...buildIndicatorRows(indicators, potFactors, resFactors, snap),
+    // Filas de resumen de scores
+    new TableRow({ children: [
+      tc('SCORE POTENCIAL', { bold: true, bg: 'F0FDF4' }),
+      tc(`${(potScore * 100).toFixed(0)}/100`, { bold: true, bg: 'F0FDF4', color: potScore >= 0.6 ? COLOR.GREEN : COLOR.YELLOW }),
+      tc('META', { bg: 'F0FDF4', color: COLOR.TEAL }),
+      tc('Suma ponderada de factores alcistas -> determina el BoostPower del activo', { bg: 'F0FDF4' }),
+    ]}),
+    new TableRow({ children: [
+      tc('SCORE RESISTENCIA', { bold: true, bg: 'FEF2F2' }),
+      tc(`${(resScore * 100).toFixed(0)}/100`, { bold: true, bg: 'FEF2F2', color: resScore >= 0.6 ? COLOR.RED : COLOR.GREEN }),
+      tc('META', { bg: 'FEF2F2', color: COLOR.RED }),
+      tc('Suma ponderada de factores bajistas -> reduce el BoostPower final', { bg: 'FEF2F2' }),
+    ]}),
+  ];
+
+  return [
+    h3('  Indicadores Calculados e Influencia en Clasificacion'),
+    new Table({ width: { size: 100, type: WidthType.PERCENTAGE }, rows }),
+    ...blank(),
+  ];
+}
+
+function buildIndicatorRows(indicators, potFactors, resFactors, snap) {
+  const rows = [];
+
+  // Indicadores cuantitativos con descripcion de influencia
+  const indicatorDefs = [
+    { key: 'priceChange24h',  label: 'Cambio 24h',       fmt: v => fmt.sign(v),    type: 'MERCADO',
+      influence: v => `Momentum ${parseFloat(v)>0 ? 'positivo (refuerza potencial)' : 'negativo (refuerza resistencia)'}` },
+    { key: 'priceChange7d',   label: 'Cambio 7d',        fmt: v => fmt.sign(v),    type: 'MERCADO',
+      influence: v => parseFloat(v)>5 ? 'Fuerte impulso alcista semanal' : parseFloat(v)<-5 ? 'Caida sostenida semanal' : 'Movimiento moderado' },
+    { key: 'volumeChange24h', label: 'Volumen Delta 24h', fmt: v => fmt.sign(v),   type: 'MERCADO',
+      influence: v => `${parseFloat(v)>20 ? 'Spike de volumen — activa volumeSurge' : 'Volumen estable — volumeSurge bajo'}` },
+    { key: 'atlProximityPct', label: 'Proximidad ATL',   fmt: v => `${parseFloat(v||0).toFixed(1)}%`, type: 'POSICION',
+      influence: v => parseFloat(v)<20 ? 'Muy cerca del ATL — alto atlProximity' : parseFloat(v)<50 ? 'Moderado atlProximity' : 'Lejos del ATL — bajo atlProximity' },
+    { key: 'athDistancePct',  label: 'Distancia ATH',    fmt: v => `${parseFloat(v||0).toFixed(1)}%`, type: 'POSICION',
+      influence: v => parseFloat(v)>80 ? 'Activo muy deprimido (refuerza leverageRatio)' : 'Cerca del ATH — menor margen de recorrido' },
+    { key: 'fearGreedIndex',  label: 'Fear & Greed',     fmt: v => `${v} / 100`,   type: 'SENTIM.',
+      influence: v => parseFloat(v)<30 ? 'Miedo extremo -> senal contrarian de compra' : parseFloat(v)>70 ? 'Codicia -> mayor riesgo de correccion (fearOverlap alto)' : 'Sentimiento neutral' },
+    { key: 'newsCount',       label: 'Noticias 24h',     fmt: v => `${v} noticias`, type: 'SOCIAL',
+      influence: v => `${parseFloat(v)>5 ? 'Alta cobertura (activa socialMomentum)' : 'Cobertura baja — socialMomentum reducido'}` },
+    { key: 'newsSentiment',   label: 'Sentim. noticias', fmt: v => `${(parseFloat(v||0)*100).toFixed(0)}%`, type: 'SOCIAL',
+      influence: v => `Sentimiento ${parseFloat(v||0)>=0.6 ? 'positivo (refuerza newsSentiment)' : parseFloat(v||0)<=0.4 ? 'negativo (penaliza)' : 'neutro'}` },
+    { key: 'atlDaysAgo',      label: 'Dias desde ATL',   fmt: v => `${v} dias`,    type: 'TEMPORAL',
+      influence: v => parseFloat(v)<30 ? 'ATL muy reciente — alto reboundRecency' : parseFloat(v)<90 ? 'Rebote moderado — reboundRecency medio' : 'ATL antiguo — bajo reboundRecency' },
+  ];
+
+  indicatorDefs.forEach(({ key, label, fmt: fmtFn, type, influence }) => {
+    const v = indicators[key];
+    if (v === undefined || v === null) return;
+    rows.push(new TableRow({ children: [
+      tc(label, { bold: true }),
+      tc(fmtFn(v)),
+      tc(type, { color: COLOR.PURPLE }),
+      tc(influence(v), { size: 17 }),
+    ]}));
+  });
+
+  // Factores de potencial calculados
+  const potDefs = [
+    { key: 'atlProximity',   label: 'Factor pot: atlProximity' },
+    { key: 'volumeSurge',    label: 'Factor pot: volumeSurge' },
+    { key: 'socialMomentum', label: 'Factor pot: socialMomentum' },
+    { key: 'newsSentiment',  label: 'Factor pot: newsSentiment' },
+    { key: 'reboundRecency', label: 'Factor pot: reboundRecency' },
+  ];
+  potDefs.forEach(({ key, label }) => {
+    const v = potFactors[key];
+    if (v === undefined) return;
+    const score = Math.round(parseFloat(v) * 100);
+    rows.push(new TableRow({ children: [
+      tc(label, { bold: true }),
+      tc(`${score}/100`, { color: score>=60 ? COLOR.GREEN : score>=40 ? COLOR.YELLOW : COLOR.RED }),
+      tc('POTENCIAL', { color: COLOR.TEAL }),
+      tc(`Contribuye al Score Potencial. ${score>=60 ? 'Senal alcista activa.' : score>=40 ? 'Senal moderada.' : 'Senal debil.'}`),
+    ]}));
+  });
+
+  // Factores de resistencia calculados
+  const resDefs = [
+    { key: 'leverageRatio',   label: 'Factor res: leverageRatio' },
+    { key: 'marketCapSize',   label: 'Factor res: marketCapSize' },
+    { key: 'volatilityNoise', label: 'Factor res: volatilityNoise' },
+    { key: 'fearOverlap',     label: 'Factor res: fearOverlap' },
+  ];
+  resDefs.forEach(({ key, label }) => {
+    const v = resFactors[key];
+    if (v === undefined) return;
+    const score = Math.round(parseFloat(v) * 100);
+    rows.push(new TableRow({ children: [
+      tc(label, { bold: true }),
+      tc(`${score}/100`, { color: score>=60 ? COLOR.RED : score>=40 ? COLOR.YELLOW : COLOR.GREEN }),
+      tc('RESISTENCIA', { color: COLOR.RED }),
+      tc(`Contribuye al Score Resistencia. ${score>=60 ? 'Alta resistencia — penaliza BoostPower.' : score>=40 ? 'Resistencia moderada.' : 'Resistencia baja.'}`),
+    ]}));
+  });
+
+  return rows;
+}
+
 function buildTrendsSection(trends, assetName) {
   const sections = [
     h3(`  Google Trends — "${assetName}"`),
@@ -540,33 +811,85 @@ function trendInterpretation(trends) {
 
 function buildComparisonTable(cycle) {
   const validResults = (cycle.results || []).filter(r => !(cycle.excludedResults || []).includes(r.id));
+  const windowHrs    = ((cycle.durationMs || 43200000) / 3600000).toFixed(1);
+  const n = validResults.length || 1;
+
+  // Estadisticas de calidad de prediccion
+  let cntBuena = 0, cntMedia = 0, cntNoValida = 0, cntDirOk = 0;
+  validResults.forEach(r => {
+    const dev = Math.abs(parseFloat(r.predictedChange||0) - parseFloat(r.actualChange||0));
+    const q   = predQuality(dev);
+    const dir = directionAnalysis(r.predictedChange, r.actualChange);
+    if (q.label === 'BUENA')      cntBuena++;
+    else if (q.label === 'MEDIA') cntMedia++;
+    else                          cntNoValida++;
+    if (dir.correct) cntDirOk++;
+  });
 
   return [
-    h2('Tabla Comparativa Global — Predicción vs Real'),
+    h2('Tabla Comparativa Global — Prediccion vs Real'),
+
+    // Nota de ventana temporal
+    p(`Predicciones y validaciones para la misma ventana: ${windowHrs}h  (${fmt.date(cycle.startTime)} -> ${fmt.date(cycle.completedAt)})`, {
+      size: 17, color: COLOR.BLUE
+    }),
+    ...blank(),
+
+    // Resumen de calidad de prediccion
+    new Table({
+      width: { size: 80, type: WidthType.PERCENTAGE },
+      rows: [
+        headerRow('Direccion acertada', 'Calidad BUENA (<=1%)', 'Calidad MEDIA (1-3%)', 'No valida (>3%)'),
+        new TableRow({ children: [
+          tc(`${cntDirOk}/${validResults.length} (${(cntDirOk/n*100).toFixed(0)}%)`,
+             { bold: true, color: cntDirOk/n >= 0.6 ? COLOR.GREEN : COLOR.RED }),
+          tc(`${cntBuena}`, { bold: true, color: COLOR.GREEN }),
+          tc(`${cntMedia}`, { bold: true, color: COLOR.YELLOW }),
+          tc(`${cntNoValida}`, { bold: true, color: COLOR.RED }),
+        ]}),
+      ]
+    }),
+    ...blank(),
+
+    // Tabla detallada con nuevas columnas
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
-        headerRow('Activo', 'Clase', 'BoostPower', 'Precio inicio', 'Precio cierre', 'Pred.', 'Real', 'Error', 'OK'),
+        headerRow('Activo', 'Clase', 'BP', 'P.inicio', 'P.cierre', 'Pred.', 'Real', 'Desv.abs.', 'Direccion', 'Calidad'),
         ...validResults.map(r => {
-          const ok = r.correct;
+          const predicted = parseFloat(r.predictedChange || 0);
+          const actual    = parseFloat(r.actualChange    || 0);
+          const absDev    = Math.abs(predicted - actual);
+          const dir       = directionAnalysis(predicted, actual);
+          const qual      = predQuality(absDev);
+
           return new TableRow({ children: [
             tc(`${r.name || r.symbol} (${r.symbol?.toUpperCase()})`),
             tc(r.classification || '—', { color: classColor(r.classification), bold: true }),
             tc(fmt.score(r.boostPower), { color: (r.boostPower || 0) > 0.6 ? COLOR.GREEN : COLOR.YELLOW }),
             tc(fmt.price(r.snapshotPrice || 0)),
-            tc(fmt.price(r.currentPrice || 0)),
+            tc(fmt.price(r.currentPrice  || 0)),
             tc(fmt.sign(r.predictedChange), { color: changeColor(r.predictedChange) }),
-            tc(fmt.sign(r.actualChange), { bold: true, color: changeColor(r.actualChange) }),
-            tc(fmt.pct(r.error || 0), { color: parseFloat(r.error || 0) < 5 ? COLOR.GREEN : parseFloat(r.error || 0) < 15 ? COLOR.YELLOW : COLOR.RED }),
-            tc(ok ? '✓' : '✗', { bold: true, color: correctColor(ok), bg: ok ? 'DCFCE7' : 'FEE2E2' }),
+            tc(fmt.sign(r.actualChange),    { bold: true, color: changeColor(r.actualChange) }),
+            tc(fmt.pct(absDev), { color: qual.color }),
+            tc(dir.label, { color: dir.correct ? COLOR.GREEN : COLOR.RED, bold: true }),
+            tc(qual.label, { bold: true, color: qual.color, bg: qual.bg }),
           ]});
         }),
       ]
     }),
     ...blank(),
 
-    // Métricas por categoría
-    h3('Métricas por Categoría'),
+    // Leyenda de criterios
+    p('Criterios de validacion de prediccion:', { bold: true, size: 19 }),
+    p('  BUENA: desviacion absoluta <= 1% entre prediccion y movimiento real', { size: 17, color: COLOR.GREEN }),
+    p('  MEDIA: desviacion absoluta entre 1% y 3% — prediccion orientativa', { size: 17, color: COLOR.YELLOW }),
+    p('  NO VALIDA: desviacion > 3% — la prediccion no refleja el movimiento real', { size: 17, color: COLOR.RED }),
+    p('  Direccion: se evalua independientemente de la magnitud (sube/sube o baja/baja = acertado)', { size: 17, color: COLOR.GRAY }),
+    ...blank(),
+
+    // Metricas por categoria
+    h3('Metricas por Categoria'),
     buildCategoryMetricsTable(cycle.metrics),
     ...blank(2),
   ];
@@ -633,19 +956,19 @@ function buildAssetConclusions(cycle) {
 
   const sections = [
     h2('Conclusiones por Activo — Razonamiento Individual'),
-    p('Análisis del resultado de cada predicción y factores que explican el acierto o error.', { color: COLOR.GRAY, size: 18 }),
+    p('Analisis con clasificacion de calidad (Buena/Media/No valida) y direccion acertada/fallada.', { color: COLOR.GRAY, size: 18 }),
     ...blank(),
   ];
 
   validResults.forEach((result, i) => {
     const predicted = parseFloat(result.predictedChange || 0);
-    const actual    = parseFloat(result.actualChange || 0);
-    const correct   = result.correct;
+    const actual    = parseFloat(result.actualChange    || 0);
     const cat       = result.classification || 'RUIDOSO';
-    const error     = Math.abs(predicted - actual);
+    const absDev    = Math.abs(predicted - actual);
+    const dir       = directionAnalysis(predicted, actual);
+    const qual      = predQuality(absDev);
 
-    // Razonamiento automático basado en los datos
-    const reasoning = generateAssetReasoning(result, predicted, actual, error, cat, correct);
+    const reasoning = generateAssetReasoning(result, predicted, actual, absDev, cat, dir, qual);
 
     sections.push(
       new Paragraph({
@@ -653,7 +976,8 @@ function buildAssetConclusions(cycle) {
         children: [
           new TextRun({ text: `${i + 1}. ${result.name || result.symbol?.toUpperCase()} `, bold: true, size: 22 }),
           new TextRun({ text: `[${cat}]`, bold: true, size: 20, color: classColor(cat) }),
-          new TextRun({ text: `  ${correct ? '✓ CORRECTO' : '✗ INCORRECTO'}`, bold: true, size: 20, color: correctColor(correct) }),
+          new TextRun({ text: `  Dir: ${dir.correct ? '[OK]' : '[FALLO]'} ${dir.arrow}`, bold: true, size: 20, color: dir.correct ? COLOR.GREEN : COLOR.RED }),
+          new TextRun({ text: `  Calidad: ${qual.label}`, bold: true, size: 20, color: qual.color }),
         ]
       }),
       ...reasoning.map(line => new Paragraph({
@@ -668,33 +992,63 @@ function buildAssetConclusions(cycle) {
   return sections;
 }
 
-function generateAssetReasoning(result, predicted, actual, error, cat, correct) {
+function generateAssetReasoning(result, predicted, actual, absDev, cat, dir, qual) {
   const lines = [];
-  const sameDir = (predicted > 0 && actual > 0) || (predicted < 0 && actual < 0) || (predicted === 0 && Math.abs(actual) < 5);
+  const bd         = result.breakdown || {};
+  const indicators = bd.indicators   || {};
 
-  lines.push(`• Predicción: ${fmt.sign(predicted)} → Real: ${fmt.sign(actual)} → Error absoluto: ${fmt.pct(error)}`);
+  lines.push(`Prediccion: ${fmt.sign(predicted)} -> Real: ${fmt.sign(actual)} -> Desviacion absoluta: ${fmt.pct(absDev)}`);
 
-  if (correct) {
-    if (sameDir && error < 5) lines.push(`• Predicción muy precisa: dirección y magnitud alineadas con menos de ${fmt.pct(5)} de error.`);
-    else if (sameDir) lines.push(`• Dirección correcta. La magnitud divergió ${fmt.pct(error)} pero dentro del umbral de tolerancia.`);
-    else lines.push(`• Predicción validada (RUIDOSO: movimiento menor al ruido esperado).`);
+  // Direccion
+  if (dir.correct) {
+    lines.push(`OK Direccion acertada: ${dir.label}`);
   } else {
-    if (!sameDir) lines.push(`• Error de dirección: el mercado se movió en sentido opuesto al previsto.`);
-    else lines.push(`• Dirección correcta pero magnitud muy alejada (${fmt.pct(error)} de error, superando la tolerancia).`);
+    lines.push(`FALLO Direccion fallada: ${dir.label} — el mercado se movio en sentido contrario.`);
   }
 
-  // Análisis por categoría
+  // Calidad de la prediccion
+  if (qual.label === 'BUENA') {
+    lines.push(`Calidad BUENA (desv. <=1%): la prediccion reflejo el movimiento real con alta precision.`);
+  } else if (qual.label === 'MEDIA') {
+    lines.push(`Calidad MEDIA (desv. 1-3%): prediccion orientativa. La magnitud divergio ${fmt.pct(absDev)} del real.`);
+  } else {
+    lines.push(`Calidad NO VALIDA (desv. >3%): la prediccion no refleja adecuadamente el movimiento real (${fmt.pct(absDev)} de desviacion).`);
+  }
+
+  // Analisis por categoria
   if (cat === 'INVERTIBLE') {
-    if (!correct && !sameDir) lines.push(`• Posible señal falsa: el BoostPower indicaba potencial alcista pero factores externos o de resistencia no capturados dominaron.`);
-    if (!correct && sameDir) lines.push(`• El activo se movió en la dirección correcta pero la magnitud fue menor a la predicha. Considerar reducir el target INVERTIBLE.`);
+    if (!dir.correct) {
+      lines.push(`Senal falsa INVERTIBLE: el BoostPower indicaba potencial alcista pero factores externos dominaron. Revisar pesos atlProximity/socialMomentum.`);
+    } else if (qual.label === 'NO VALIDA') {
+      lines.push(`INVERTIBLE con direccion correcta pero magnitud muy alejada. Considerar ajustar invertibleTarget o escala temporal.`);
+    } else {
+      lines.push(`INVERTIBLE bien identificado. ${qual.label === 'BUENA' ? 'Modelo muy bien calibrado para este activo.' : 'Calibracion aceptable, margen de mejora en magnitud.'}`);
+    }
   } else if (cat === 'APALANCADO') {
-    if (!correct) lines.push(`• Los activos APALANCADO tienen mayor variabilidad. El error puede reflejar mayor sensibilidad al sentimiento de mercado.`);
+    if (!dir.correct) {
+      lines.push(`APALANCADO con error de direccion. Revisar fearOverlap y volatilityNoise — mayor sensibilidad al sentimiento.`);
+    } else if (qual.label === 'NO VALIDA') {
+      lines.push(`APALANCADO: la alta volatilidad puede explicar la gran desviacion de magnitud. Considerar ampliar tolerancia para esta clase.`);
+    }
   } else if (cat === 'RUIDOSO') {
-    if (!correct) lines.push(`• Clasificado como RUIDOSO (movimiento esperado < ±${5}%) pero se produjo un movimiento significativo. Revisar umbrales de volatilidad.`);
+    if (qual.label === 'NO VALIDA') {
+      lines.push(`RUIDOSO con movimiento significativo inesperado. El activo supero el umbral de ruido esperado. Revisar volatilityNoise.`);
+    }
   }
 
-  lines.push(`• Razón técnica: ${result.validationReason || '—'}`);
-  return lines;
+  // Contexto de indicadores disponibles
+  if (indicators.fearGreedIndex !== undefined) {
+    lines.push(`Contexto macro: Fear & Greed = ${indicators.fearGreedIndex} (${indicators.fearGreedLabel || '—'})`);
+  }
+  if (indicators.atlDaysAgo !== undefined) {
+    lines.push(`ATL hace ${indicators.atlDaysAgo} dias — reboundRecency ${indicators.atlDaysAgo < 30 ? 'muy activo' : indicators.atlDaysAgo < 90 ? 'moderado' : 'bajo'}`);
+  }
+  if (indicators.newsSentiment !== undefined) {
+    lines.push(`Sentimiento noticias: ${(parseFloat(indicators.newsSentiment)*100).toFixed(0)}% — ${parseFloat(indicators.newsSentiment)>=0.6 ? 'positivo' : parseFloat(indicators.newsSentiment)<=0.4 ? 'negativo' : 'neutro'}`);
+  }
+
+  lines.push(`Razon tecnica registrada: ${result.validationReason || '—'}`);
+  return lines.map(l => `• ${l}`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
