@@ -3529,6 +3529,136 @@ app.post('/api/cycles/run-pending-iterations', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ═══════════════════════════════════════════════════════════════════════════════
+// SCHEDULER SERVER-SIDE — Iteraciones + Watchdog SL/TP
+// Corre en Node.js independientemente del navegador.
+// Si el usuario cierra la app, los ciclos y el WD siguen activos.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+const SCHED_ITER_KEY        = 'scheduler:last_iteration_run';
+const SCHED_WD_KEY          = 'scheduler:last_watchdog_run';
+const SCHED_ITER_LOCK       = 'scheduler:iter_lock';
+const SCHED_WD_LOCK         = 'scheduler:wd_lock';
+const SCHED_ITER_INTERVAL_MS = 5  * 60 * 1000; // 5 min
+const SCHED_WD_INTERVAL_MS   = 30 * 60 * 1000; // 30 min
+const SCHED_LOCK_TTL_S       = 120;             // lock expira en 2 min
+
+async function serverRunPendingIterations() {
+  if (!redis) return;
+  try {
+    const lockOk = await redis.set(SCHED_ITER_LOCK, '1', { NX: true, EX: SCHED_LOCK_TTL_S });
+    if (!lockOk) return; // otro proceso ya está ejecutando
+
+    const activeIds = await cyclesManager.getActiveCycles(redis);
+    if (!activeIds.length) { await redis.del(SCHED_ITER_LOCK); return; }
+
+    const cycles       = await cyclesManager.getCyclesDetails(redis, activeIds);
+    const positions    = await getPositions();
+    const investConfig = await getInvestConfig();
+    const apiKeys      = { cryptocompare: process.env.CRYPTOCOMPARE_API_KEY || '' };
+    let   totalProcessed = 0;
+
+    for (const cycle of cycles) {
+      if (cycle.status === 'completed') continue;
+      if (!iterationEngine.hasIterationDue(cycle)) continue;
+      try {
+        const result = await iterationEngine.executeIteration(redis, cycle.id, cyclesManager, positions, investConfig, apiKeys);
+        totalProcessed++;
+        console.log(`[server-sched] Iter ${result.iterationNumber} — ciclo ${cycle.id.slice(0,8)} · ${result.fetchedCount} activos · lastIter=${result.isLastIteration}`);
+        await new Promise(r => setTimeout(r, 1500));
+      } catch(err) { console.error(`[server-sched] Error ciclo ${cycle.id}:`, err.message); }
+    }
+
+    await redisSet(SCHED_ITER_KEY, { runAt: Date.now(), processed: totalProcessed });
+    await redis.del(SCHED_ITER_LOCK);
+    if (totalProcessed > 0) console.log(`[server-sched] ✅ ${totalProcessed} iteraciones ejecutadas`);
+  } catch(err) {
+    console.error('[server-sched] Error en serverRunPendingIterations:', err.message);
+    try { await redis.del(SCHED_ITER_LOCK); } catch(_) {}
+  }
+}
+
+async function serverWatchdog() {
+  if (!redis) return;
+  try {
+    const lockOk = await redis.set(SCHED_WD_LOCK, '1', { NX: true, EX: 180 });
+    if (!lockOk) return;
+
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const open      = positions.filter(p => p.status === 'open');
+    if (!open.length) { await redis.del(SCHED_WD_LOCK); return; }
+
+    const assetIds  = [...new Set(open.map(p => p.assetId))];
+    const symbolMap = {};
+    open.forEach(p => { symbolMap[p.assetId] = p.symbol; });
+
+    const { prices, meta } = await fetchAndCachePrices(assetIds, symbolMap);
+    let sells = 0; let holds = 0; let posChanged = false;
+
+    for (const position of open) {
+      const priceInfo    = prices[position.assetId];
+      const currentPrice = priceInfo?.usd ?? priceInfo?.price;
+      if (!currentPrice) continue;
+
+      const isStale = priceInfo?.isStale === true;
+      const pnlPct  = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+      const tpPrice = position.takeProfitPrice;
+      const slPrice = position.stopLossPrice;
+      const tpPct   = tpPrice ? ((tpPrice - position.entryPrice) / position.entryPrice) * 100 : cfg.takeProfitPct;
+      const slPct   = slPrice ? ((position.entryPrice - slPrice) / position.entryPrice) * 100 : cfg.stopLossPct;
+      const hitTP   = !isStale && (tpPrice ? currentPrice >= tpPrice : pnlPct >= tpPct);
+      const hitSL   = !isStale && (slPrice ? currentPrice <= slPrice : pnlPct <= -Math.abs(slPct));
+
+      if (hitTP || hitSL) {
+        position.status      = 'closed';
+        position.closedAt    = new Date().toISOString();
+        position.closePrice  = currentPrice;
+        position.closeReason = hitTP ? 'takeProfit_server_wd' : 'stopLoss_server_wd';
+        position.pnlUSD      = parseFloat(((currentPrice - position.entryPrice) * position.units).toFixed(4));
+        position.pnlPct      = parseFloat(pnlPct.toFixed(2));
+        sells++; posChanged = true;
+        console.log(`[server-wd] 🔔 ${hitTP ? 'TP' : 'SL'} — ${position.symbol} · ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`);
+      } else { holds++; }
+    }
+
+    if (posChanged) await savePositions(positions);
+    await redisSet(SCHED_WD_KEY, { runAt: Date.now(), checked: open.length, sells, holds, source: meta?.source || 'unknown' });
+    await redis.del(SCHED_WD_LOCK);
+    console.log(`[server-wd] ✅ ${open.length} pos. · ${sells} ventas · ${holds} hold · ${meta?.source}`);
+  } catch(err) {
+    console.error('[server-wd] Error:', err.message);
+    try { await redis.del(SCHED_WD_LOCK); } catch(_) {}
+  }
+}
+
+// Endpoint para que el frontend sincronice su widget con el último run del servidor
+app.get('/api/scheduler/status', async (_req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const iterState = await redisGet(SCHED_ITER_KEY);
+    const wdState   = await redisGet(SCHED_WD_KEY);
+    res.json({
+      success:    true,
+      iterations: { lastRunAt: iterState?.runAt || null, lastRunAgo: iterState?.runAt ? Date.now() - iterState.runAt : null, lastProcessed: iterState?.processed || 0 },
+      watchdog:   { lastRunAt: wdState?.runAt   || null, lastRunAgo: wdState?.runAt   ? Date.now() - wdState.runAt   : null, lastSells: wdState?.sells || 0, lastSource: wdState?.source || null },
+    });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// Arrancar schedulers al iniciar el servidor (esperar 8s a que Redis esté listo)
+if (redis) {
+  setTimeout(() => {
+    setInterval(serverRunPendingIterations, SCHED_ITER_INTERVAL_MS);
+    setTimeout(serverRunPendingIterations, 10000); // primera ejecución en 10s
+    console.log('[server-sched] ✅ Scheduler de iteraciones activo (cada 5min)');
+
+    setInterval(serverWatchdog, SCHED_WD_INTERVAL_MS);
+    setTimeout(serverWatchdog, 25000); // primera ejecución en 25s
+    console.log('[server-sched] ✅ Scheduler de watchdog activo (cada 30min)');
+  }, 8000);
+}
+
 // ── Arranque local ────────────────────────────────────────────────────────────
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
