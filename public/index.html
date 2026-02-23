@@ -650,6 +650,7 @@
           <button data-filter="evaluate"     onclick="setLogFilter('evaluate')"    class="log-filter-btn px-2.5 py-1 rounded text-xs text-gray-500 bg-transparent transition-colors">⚖️ Evaluación</button>
           <button data-filter="no_invest"    onclick="setLogFilter('no_invest')"   class="log-filter-btn px-2.5 py-1 rounded text-xs text-gray-500 bg-transparent transition-colors">⏸️ Sin inv.</button>
           <button data-filter="manual_close" onclick="setLogFilter('manual_close')" class="log-filter-btn px-2.5 py-1 rounded text-xs text-gray-500 bg-transparent transition-colors">🔒 Manual</button>
+          <button data-filter="watchdog_close" onclick="setLogFilter('watchdog_close')" class="log-filter-btn px-2.5 py-1 rounded text-xs text-gray-500 bg-transparent transition-colors">🔔 Watchdog</button>
         </div>
         <div class="flex gap-2">
           <button onclick="exportInvestLog()"
@@ -2506,10 +2507,11 @@ function buildLogCard(entry, idx) {
   const id   = entry._logId || `log-${idx}`;
   const isEx = investLogExpanded.has(id);
   const TYPE_META = {
-    invest:       { icon:'💰', color:'green',  label:'INVERSIÓN EJECUTADA' },
-    evaluate:     { icon:'⚖️', color:'blue',   label:'EVALUACIÓN DE CICLO' },
-    no_invest:    { icon:'⏸️', color:'yellow', label:'SIN INVERSIÓN' },
-    manual_close: { icon:'🔒', color:'orange', label:'CIERRE MANUAL' },
+    invest:         { icon:'💰', color:'green',  label:'INVERSIÓN EJECUTADA' },
+    evaluate:       { icon:'⚖️', color:'blue',   label:'EVALUACIÓN DE CICLO' },
+    no_invest:      { icon:'⏸️', color:'yellow', label:'SIN INVERSIÓN' },
+    manual_close:   { icon:'🔒', color:'orange', label:'CIERRE MANUAL' },
+    watchdog_close: { icon:'🔔', color:'purple', label:'WATCHDOG' },
   };
   const meta = TYPE_META[entry.type] || { icon:'📋', color:'gray', label:(entry.type||'EVENTO').toUpperCase() };
   const col  = meta.color;
@@ -2531,6 +2533,13 @@ function buildLogCard(entry, idx) {
   } else if (entry.type === 'manual_close') {
     const res = entry.result || {}; const pos = entry.position || {};
     summaryLine = `${pos.symbol||'—'} · <span class="${(res.pnlPct||0)>=0?'text-green-400':'text-red-400'} font-bold">${(res.pnlPct||0)>=0?'+':''}${(res.pnlPct||0).toFixed(2)}%</span> ($${(res.pnlUSD||0).toFixed(4)})`;
+  } else if (entry.type === 'watchdog_close') {
+    const pos = entry.position || {};
+    const isSL = (entry.subtype || entry.reason || '').includes('stop');
+    const trigger = isSL ? '🔴 Stop Loss' : '🟢 Take Profit';
+    const pnlPct = pos.pnlPct ?? 0;
+    const pnlColor = pnlPct >= 0 ? 'text-green-400' : 'text-red-400';
+    summaryLine = `${trigger} · <b class="text-white">${pos.symbol||'—'}</b> · <span class="${pnlColor} font-bold">${pnlPct>=0?'+':''}${pnlPct.toFixed(2)}%</span> · fuente: ${pos.priceSource||'—'}`;
   }
 
   const modeBadge = entry.config?.mode ? `<span class="pill text-xs ${entry.config.mode==='real'?'bg-red-900 text-red-300':'bg-gray-800 text-gray-400'}">${entry.config.mode}</span>` : '';
@@ -2561,11 +2570,98 @@ function buildLogCard(entry, idx) {
 }
 
 function buildExpandedDetails(entry) {
-  if (entry.type === 'invest')       return buildInvestDetails(entry);
-  if (entry.type === 'evaluate')     return buildEvaluateDetails(entry);
-  if (entry.type === 'no_invest')    return buildNoInvestDetails(entry);
-  if (entry.type === 'manual_close') return buildManualCloseDetails(entry);
+  if (entry.type === 'invest')         return buildInvestDetails(entry);
+  if (entry.type === 'evaluate')       return buildEvaluateDetails(entry);
+  if (entry.type === 'no_invest')      return buildNoInvestDetails(entry);
+  if (entry.type === 'manual_close')   return buildManualCloseDetails(entry);
+  if (entry.type === 'watchdog_close') return buildWatchdogDetails(entry);
   return `<pre class="text-xs text-gray-400 overflow-x-auto">${JSON.stringify(entry,null,2)}</pre>`;
+}
+
+function buildWatchdogDetails(e) {
+  const pos = e.position || {};
+  const cfg = e.config  || {};
+  const isSL    = (e.subtype || '').includes('stop') || (e.reason || '').includes('stop');
+  const triggerLabel = isSL ? '🔴 Stop Loss activado' : '🟢 Take Profit activado';
+  const triggerColor = isSL ? 'red' : 'green';
+  const pnlPct  = pos.pnlPct  ?? 0;
+  const pnlUSD  = pos.pnlUSD  ?? 0;
+  const netPnL  = pos.netPnL  ?? 0;
+  const pnlColor = pnlPct >= 0 ? 'text-green-400' : 'text-red-400';
+
+  // Badge de fuente de precio
+  const srcColors = {
+    coingecko:      'bg-emerald-900/60 text-emerald-300',
+    cryptocompare:  'bg-blue-900/60 text-blue-300',
+    binance:        'bg-yellow-900/60 text-yellow-300',
+    stale:          'bg-orange-900/60 text-orange-300',
+  };
+  const srcColor = srcColors[pos.priceSource] || 'bg-gray-800 text-gray-400';
+
+  return `
+  <!-- Cabecera del trigger -->
+  <div class="bg-${triggerColor}-950 border border-${triggerColor}-800 rounded-lg p-3 mb-3 flex items-center justify-between">
+    <div>
+      <p class="text-${triggerColor}-300 font-bold text-sm">${triggerLabel}</p>
+      <p class="text-xs text-gray-400 mt-0.5">${e.reason || '—'}</p>
+    </div>
+    <span class="${pnlColor} font-bold text-xl mono">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</span>
+  </div>
+
+  <!-- Datos de la operación -->
+  <div class="grid grid-cols-2 gap-2 mb-3">
+    <div class="bg-gray-900 rounded-lg p-2.5 text-xs">
+      <p class="text-gray-500 mb-2 font-semibold">Activo</p>
+      <p class="text-white font-bold text-base">${pos.symbol || '—'}</p>
+      <p class="text-gray-400">${pos.assetId || ''}</p>
+    </div>
+    <div class="bg-gray-900 rounded-lg p-2.5 text-xs">
+      <p class="text-gray-500 mb-2 font-semibold">Fuente de precio</p>
+      <span class="pill text-xs ${srcColor}">${pos.priceSource || '—'}</span>
+      ${pos.priceSource === 'stale' ? '<p class="text-orange-400 text-xs mt-1">⚠ Precio de caché anterior</p>' : ''}
+    </div>
+  </div>
+
+  <!-- Precios -->
+  <div class="bg-gray-900 rounded-lg p-2.5 mb-3 text-xs">
+    <p class="text-gray-500 mb-2 font-semibold">Precios</p>
+    <div class="grid grid-cols-2 gap-x-6 gap-y-1">
+      <span class="text-gray-400">Entrada: <span class="mono text-white">$${fmtP(pos.entryPrice)}</span></span>
+      <span class="text-gray-400">Salida: <span class="mono text-white font-bold">$${fmtP(pos.exitPrice)}</span></span>
+      <span class="text-gray-400">Take Profit: <span class="mono text-green-400">$${fmtP(pos.takeProfitPrice)}</span></span>
+      <span class="text-gray-400">Stop Loss: <span class="mono text-red-400">$${fmtP(pos.stopLossPrice)}</span></span>
+    </div>
+  </div>
+
+  <!-- P&L -->
+  <div class="grid grid-cols-3 gap-2 mb-3 text-xs">
+    <div class="bg-gray-900 rounded-lg p-2 text-center">
+      <p class="text-gray-500 mb-1">P&L bruto</p>
+      <p class="font-bold mono ${pnlColor}">${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%</p>
+      <p class="mono ${pnlColor}">$${pnlUSD.toFixed(4)}</p>
+    </div>
+    <div class="bg-gray-900 rounded-lg p-2 text-center">
+      <p class="text-gray-500 mb-1">Net P&L</p>
+      <p class="font-bold mono ${netPnL >= 0 ? 'text-green-400' : 'text-red-400'}">$${netPnL.toFixed(4)}</p>
+      <p class="text-gray-500 text-xs">(menos fees)</p>
+    </div>
+    <div class="bg-gray-900 rounded-lg p-2 text-center">
+      <p class="text-gray-500 mb-1">Capital</p>
+      <p class="font-bold mono text-white">$${(pos.capitalUSD ?? 0).toFixed(2)}</p>
+      <p class="text-gray-500 text-xs">${(pos.units ?? 0).toFixed ? (pos.units ?? 0).toFixed(6) : '—'} units</p>
+    </div>
+  </div>
+
+  <!-- Config activa -->
+  <details class="mt-1">
+    <summary class="text-xs text-gray-600 cursor-pointer hover:text-gray-400">⚙ Config en el momento del cierre</summary>
+    <div class="flex flex-wrap gap-1.5 mt-1.5">
+      ${cfg.takeProfitPct !== undefined ? `<span class="pill text-xs bg-green-900/50 text-green-400">TP ${cfg.takeProfitPct}%</span>` : ''}
+      ${cfg.stopLossPct   !== undefined ? `<span class="pill text-xs bg-red-900/50 text-red-400">SL ${cfg.stopLossPct}%</span>` : ''}
+      ${cfg.mode          ? `<span class="pill text-xs bg-gray-800 text-gray-400">${cfg.mode}</span>` : ''}
+      ${cfg.exchange      ? `<span class="pill text-xs bg-gray-800 text-gray-400">${cfg.exchange}</span>` : ''}
+    </div>
+  </details>`;
 }
 
 function fmtP(v) {
@@ -4103,8 +4199,6 @@ async function applyInsightsConsensus() {
   <script src="/patch-pump-sources.js"></script>
   <script src="/patch-analysis-categories.js"></script>
   <script src="/patch-cycles-history.js"></script>
-  <script src="/patch-pump-duration.js"></script>
-  <script src="/patch-price-status.js"></script>
 
 <!-- ══ MODAL: COMPRA MANUAL DESDE DETECTOR PUMP ══════════════════════════════ -->
 <div id="modal-pump-buy" class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
