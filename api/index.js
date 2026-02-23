@@ -37,7 +37,6 @@ const investManager     = require('./investment-manager');
 const exchangeConnector = require('./exchange-connector');
 const pumpDetector      = require('./pump-detector');
 const alertService      = require('./alert-service');
-const iterationEngine   = require('./iteration-engine');
 
 const DEFAULT_CONFIG            = algorithmConfig.DEFAULT_CONFIG;
 const DEFAULT_CONFIG_NORMAL     = algorithmConfig.DEFAULT_CONFIG_NORMAL;
@@ -1489,9 +1488,168 @@ app.post('/api/insights/apply-consensus', async (req, res) => {
 // ════════════════════════════════════════════════════════════════════════════
 
 // ── Helpers de Redis para inversión ──────────────────────────────────────────
-const INVEST_CONFIG_KEY = 'invest-config';
-const POSITIONS_KEY     = 'invest-positions';
-const INVEST_LOG_KEY    = 'invest-cycle-log';
+const INVEST_CONFIG_KEY  = 'invest-config';
+const POSITIONS_KEY      = 'invest-positions';
+const INVEST_LOG_KEY     = 'invest-cycle-log';
+const PRICE_CACHE_KEY    = 'invest-price-cache';   // caché persistente de precios válidos
+const PRICE_STALE_MAX_MS = 4 * 60 * 60 * 1000;    // precio válido máx 4h antes de advertir
+
+// ── Caché de precios ─────────────────────────────────────────────────────────
+// Estructura en Redis:
+//   { assetId: { price, source, updatedAt, attempts, lastError }, ... }
+//
+// REGLA CRÍTICA: nunca se persiste un precio 0, null o NaN.
+// Si la API falla se conserva el último precio válido con `source: 'stale'`.
+
+async function getPriceCache() {
+  const v = await redisGet(PRICE_CACHE_KEY);
+  if (v && typeof v === 'object') return v;
+  if (v && typeof v === 'string') { try { return JSON.parse(v); } catch(_){} }
+  return {};
+}
+
+async function savePriceCache(cache) {
+  await redisSet(PRICE_CACHE_KEY, cache);
+}
+
+/**
+ * Obtiene precios actualizados para una lista de assetIds.
+ * Cascada: CoinGecko → CryptoCompare → Binance → caché stale.
+ * Nunca devuelve 0 ni null para activos con historial.
+ *
+ * @returns {Object} {
+ *   prices: { assetId: { price, source, updatedAt, isStale } },
+ *   meta:   { source, fetchedCount, staleCount, failedIds[], updatedAt }
+ * }
+ */
+async function fetchAndCachePrices(assetIds, symbolMap = {}) {
+  const cache    = await getPriceCache();
+  const now      = Date.now();
+  const prices   = {};           // resultado final
+  const pending  = [...assetIds]; // IDs que aún necesitan precio fresco
+  let   source   = 'none';
+
+  // ── Fuente 1: CoinGecko ──────────────────────────────────────────────────
+  if (pending.length > 0) {
+    try {
+      const ids  = pending.join(',');
+      const pRes = await axios.get(
+        `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`,
+        { timeout: 8000 }
+      );
+      const data = pRes.data || {};
+      for (const id of [...pending]) {
+        const p = data[id]?.usd;
+        if (p && p > 0 && isFinite(p)) {
+          prices[id] = { price: p, source: 'coingecko', updatedAt: now, isStale: false };
+          pending.splice(pending.indexOf(id), 1);
+        }
+      }
+      if (Object.keys(prices).length > 0) source = 'coingecko';
+    } catch (e) {
+      console.warn('[price-cache] CoinGecko falló:', e.message);
+    }
+  }
+
+  // ── Fuente 2: CryptoCompare ──────────────────────────────────────────────
+  if (pending.length > 0) {
+    try {
+      const syms    = [...new Set(pending.map(id => (symbolMap[id] || id).toUpperCase()))].join(',');
+      const ccKey   = process.env.CRYPTOCOMPARE_API_KEY || await getRedisKey('CRYPTOCOMPARE_API_KEY') || '';
+      const headers = ccKey ? { authorization: `Apikey ${ccKey}` } : {};
+      const pRes    = await axios.get(
+        `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${syms}&tsyms=USD`,
+        { timeout: 7000, headers }
+      );
+      const data       = pRes.data || {};
+      const idBySym    = {};
+      pending.forEach(id => { idBySym[(symbolMap[id] || id).toUpperCase()] = id; });
+      for (const [sym, vals] of Object.entries(data)) {
+        const id = idBySym[sym.toUpperCase()];
+        const p  = vals?.USD;
+        if (id && p && p > 0 && isFinite(p)) {
+          prices[id] = { price: p, source: 'cryptocompare', updatedAt: now, isStale: false };
+          pending.splice(pending.indexOf(id), 1);
+          if (source === 'none') source = 'cryptocompare';
+        }
+      }
+    } catch (e) {
+      console.warn('[price-cache] CryptoCompare falló:', e.message);
+    }
+  }
+
+  // ── Fuente 3: Binance Public ─────────────────────────────────────────────
+  if (pending.length > 0) {
+    try {
+      const pRes    = await axios.get('https://api.binance.com/api/v3/ticker/price', { timeout: 6000 });
+      const tickers = {};
+      (pRes.data || []).forEach(t => { tickers[t.symbol] = parseFloat(t.price); });
+      for (const id of [...pending]) {
+        const sym = (symbolMap[id] || id).toUpperCase() + 'USDT';
+        const p   = tickers[sym];
+        if (p && p > 0 && isFinite(p)) {
+          prices[id] = { price: p, source: 'binance', updatedAt: now, isStale: false };
+          pending.splice(pending.indexOf(id), 1);
+          if (source === 'none') source = 'binance';
+        }
+      }
+    } catch (e) {
+      console.warn('[price-cache] Binance falló:', e.message);
+    }
+  }
+
+  // ── Fuente 4: caché stale ────────────────────────────────────────────────
+  // Para activos que ninguna fuente respondió: usar último precio conocido
+  const failedIds  = [];
+  const staleIds   = [];
+  for (const id of pending) {
+    const cached = cache[id];
+    if (cached?.price && cached.price > 0 && isFinite(cached.price)) {
+      const ageMs = now - (cached.updatedAt || 0);
+      prices[id]  = { price: cached.price, source: 'stale', updatedAt: cached.updatedAt, isStale: true, staleSinceMs: ageMs };
+      staleIds.push(id);
+      console.warn(`[price-cache] Stale para ${id}: $${cached.price} (${Math.round(ageMs/60000)}min)`);
+    } else {
+      failedIds.push(id);
+      console.error(`[price-cache] Sin precio para ${id} y sin historial — se omite`);
+    }
+  }
+
+  // ── Actualizar caché en Redis ────────────────────────────────────────────
+  // Solo guardamos precios frescos (no stale), para no corromper el historial
+  const updatedCache = { ...cache };
+  for (const [id, info] of Object.entries(prices)) {
+    if (!info.isStale) {
+      updatedCache[id] = { price: info.price, source: info.source, updatedAt: now, attempts: 0 };
+    } else {
+      // Incrementar contador de intentos fallidos
+      if (updatedCache[id]) updatedCache[id].attempts = (updatedCache[id].attempts || 0) + 1;
+    }
+  }
+  try { await savePriceCache(updatedCache); } catch (_) {}
+
+  return {
+    prices,
+    meta: {
+      source,
+      fetchedCount:  Object.values(prices).filter(p => !p.isStale).length,
+      staleCount:    staleIds.length,
+      failedIds,
+      staleIds,
+      updatedAt:     now,
+      updatedAtISO:  new Date(now).toISOString(),
+    }
+  };
+}
+
+/**
+ * Obtiene el precio de UN activo desde caché o API.
+ * Garantiza que nunca devuelve 0 ni null si hay historial.
+ */
+async function getSafePrice(assetId, symbol) {
+  const { prices } = await fetchAndCachePrices([assetId], { [assetId]: symbol });
+  return prices[assetId] || null;
+}
 
 async function getInvestConfig() {
   const stored = await redisGet(INVEST_CONFIG_KEY);
@@ -1582,23 +1740,26 @@ app.get('/api/invest/positions', async (_req, res) => {
     const closed    = positions.filter(p => p.status === 'closed');
     const available = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
 
-    // Actualizar precios actuales de posiciones abiertas (datos reales de CoinGecko)
+    // Actualizar precios usando fetchAndCachePrices — nunca devuelve 0
+    let priceMeta = { source: 'none', fetchedCount: 0, staleCount: 0, failedIds: [], updatedAt: null };
     if (open.length > 0) {
-      try {
-        const ids  = [...new Set(open.map(p => p.assetId))].join(',');
-        const pRes = await axios.get(
-          `https://api.coingecko.com/api/v3/simple/price?ids=${ids}&vs_currencies=usd`,
-          { timeout: 5000 }
-        );
-        open.forEach(p => {
-          const price = pRes.data?.[p.assetId]?.usd;
-          if (price) {
-            p.currentPrice    = price;
-            p.unrealizedPnL   = parseFloat(((price - p.entryPrice) * p.units).toFixed(4));
-            p.unrealizedPnLPct = parseFloat(((price - p.entryPrice) / p.entryPrice * 100).toFixed(2));
-          }
-        });
-      } catch(_) {}
+      const assetIds  = [...new Set(open.map(p => p.assetId))];
+      const symbolMap = {};
+      open.forEach(p => { symbolMap[p.assetId] = p.symbol; });
+
+      const { prices, meta } = await fetchAndCachePrices(assetIds, symbolMap);
+      priceMeta = meta;
+
+      open.forEach(p => {
+        const info = prices[p.assetId];
+        if (!info?.price || info.price <= 0) return; // sin precio válido → conservar anterior
+        p.currentPrice      = info.price;
+        p.priceSource       = info.source;
+        p.priceUpdatedAt    = info.isStale ? info.updatedAt : meta.updatedAt;
+        p.priceIsStale      = info.isStale || false;
+        p.unrealizedPnL     = parseFloat(((info.price - p.entryPrice) * p.units).toFixed(4));
+        p.unrealizedPnLPct  = parseFloat(((info.price - p.entryPrice) / p.entryPrice * 100).toFixed(2));
+      });
     }
 
     // Enriquecer posiciones abiertas con datos temporales de su ciclo
@@ -1669,6 +1830,16 @@ app.get('/api/invest/positions', async (_req, res) => {
         closedPositions:  closed.length,
         totalUnrealizedPnL: parseFloat(open.reduce((s,p) => s + (p.unrealizedPnL||0), 0).toFixed(4)),
         totalRealizedPnL:   parseFloat(closed.reduce((s,p) => s + (p.realizedPnL||0), 0).toFixed(4))
+      },
+      // Metadatos de la última actualización de precios — para indicador UX
+      priceUpdate: {
+        source:       priceMeta.source,
+        updatedAt:    priceMeta.updatedAtISO || null,
+        fetchedCount: priceMeta.fetchedCount,
+        staleCount:   priceMeta.staleCount,
+        failedIds:    priceMeta.failedIds || [],
+        hasStale:     (priceMeta.staleCount || 0) > 0,
+        hasFailed:    (priceMeta.failedIds?.length || 0) > 0,
       },
       open,
       closed: closed.slice(0, 20)
@@ -2101,262 +2272,13 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ── POST /api/invest/watchdog ─────────────────────────────────────────────────
-// Watchdog automático de stop-loss / take-profit.
-// Debe llamarse cada 30 minutos desde el frontend (patch-pump-duration.js lo hace).
-//
-// DIFERENCIAS vs /api/invest/evaluate:
-//   1. Usa position.takeProfitPrice y position.stopLossPrice (fijados al abrir)
-//      en lugar de recalcular desde cfg — evita que cambios de config afecten
-//      posiciones ya abiertas.
-//   2. NO incrementa holdCycles — ese contador solo avanza al completar ciclos,
-//      no en cada comprobación periódica.
-//   3. Fallback de precios: CoinGecko → CryptoCompare → Binance → precio stale.
-//      Nunca falla silenciosamente con precios de entrada.
-//   4. Fuente única de verdad: toda la lógica de decisión está aquí, no en
-//      evaluateSellDecision del iteration-engine (que ya no debe usarse).
-app.post('/api/invest/watchdog', async (req, res) => {
-  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
-  try {
-    const cfg       = await getInvestConfig();
-    const positions = await getPositions();
-    const open      = positions.filter(p => p.status === 'open');
-
-    if (!open.length) return res.json({ success: true, checked: 0, actions: [], message: 'Sin posiciones abiertas' });
-
-    // ── Obtener precios con cascada de fuentes ────────────────────────────────
-    const assetIds  = [...new Set(open.map(p => p.assetId))];
-    const symbolMap = {};
-    open.forEach(p => { symbolMap[p.assetId] = p.symbol; });
-
-    // Construir lastKnown desde las posiciones actuales (precio de entrada como mínimo)
-    const lastKnown = {};
-    open.forEach(p => {
-      lastKnown[p.assetId] = { price: p.currentPrice || p.entryPrice, timestamp: Date.now() - 3600000 };
-    });
-
-    let priceMap = {};
-    let priceSource = 'none';
-
-    // Fuente 1: CoinGecko
-    try {
-      const pRes = await axios.get(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${assetIds.join(',')}&vs_currencies=usd`,
-        { timeout: 7000 }
-      );
-      if (pRes.data && Object.keys(pRes.data).length > 0) {
-        priceMap = pRes.data;
-        priceSource = 'coingecko';
-      }
-    } catch (_) {}
-
-    // Fuente 2: CryptoCompare (si CoinGecko falló o faltan activos)
-    const missing1 = assetIds.filter(id => !priceMap[id]?.usd);
-    if (missing1.length > 0) {
-      try {
-        const syms = [...new Set(missing1.map(id => symbolMap[id]).filter(Boolean))].join(',').toUpperCase();
-        const ccKey = process.env.CRYPTOCOMPARE_API_KEY || '';
-        const headers = ccKey ? { authorization: `Apikey ${ccKey}` } : {};
-        const pRes = await axios.get(
-          `https://min-api.cryptocompare.com/data/price?fsym=USD&tsyms=${syms}`,
-          { timeout: 6000, headers }
-        );
-        // CryptoCompare devuelve precios en USD invertidos — usar pricemultifull en su lugar
-        const pRes2 = await axios.get(
-          `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${syms}&tsyms=USD`,
-          { timeout: 6000, headers }
-        );
-        const ccData = pRes2.data || {};
-        const idBySym = {};
-        missing1.forEach(id => { if (symbolMap[id]) idBySym[symbolMap[id].toUpperCase()] = id; });
-        for (const [sym, data] of Object.entries(ccData)) {
-          const id = idBySym[sym.toUpperCase()];
-          if (id && data.USD) {
-            if (!priceMap[id]) priceMap[id] = {};
-            priceMap[id].usd = data.USD;
-            if (priceSource === 'none') priceSource = 'cryptocompare';
-            else if (priceSource === 'coingecko') priceSource = 'coingecko+cryptocompare';
-          }
-        }
-      } catch (_) {}
-    }
-
-    // Fuente 3: Binance Public API (si todavía faltan)
-    const missing2 = assetIds.filter(id => !priceMap[id]?.usd);
-    if (missing2.length > 0) {
-      try {
-        const pRes = await axios.get('https://api.binance.com/api/v3/ticker/price', { timeout: 6000 });
-        const tickers = {};
-        (pRes.data || []).forEach(t => { tickers[t.symbol] = parseFloat(t.price); });
-        missing2.forEach(id => {
-          const sym = (symbolMap[id] || '').toUpperCase() + 'USDT';
-          if (tickers[sym]) {
-            if (!priceMap[id]) priceMap[id] = {};
-            priceMap[id].usd = tickers[sym];
-            if (priceSource === 'none') priceSource = 'binance';
-          }
-        });
-      } catch (_) {}
-    }
-
-    // Fuente 4 (stale): usar currentPrice de la posición como último recurso
-    // IMPORTANTE: marcar como stale para no tomar decisiones de venta basadas en precios obsoletos
-    const staleIds = [];
-    assetIds.forEach(id => {
-      if (!priceMap[id]?.usd) {
-        const fallback = lastKnown[id]?.price;
-        if (fallback) {
-          priceMap[id] = { usd: fallback, stale: true };
-          staleIds.push(id);
-        }
-      }
-    });
-
-    // ── Evaluar cada posición ────────────────────────────────────────────────
-    const actions   = [];
-    const checked   = [];
-    const keys      = await getExchangeKeys(cfg.exchange);
-    let   posChanged = false;
-
-    for (const position of open) {
-      const priceInfo    = priceMap[position.assetId];
-      const currentPrice = priceInfo?.usd;
-
-      // Sin precio → registrar y saltar (no decidir con datos vacíos)
-      if (!currentPrice) {
-        checked.push({ assetId: position.assetId, symbol: position.symbol, status: 'no_price' });
-        continue;
-      }
-
-      // Precio stale → solo disparar stop-loss como protección, nunca take-profit
-      const isStale = priceInfo?.stale === true;
-
-      const pnlPct = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
-
-      // ── Condiciones de venta ──────────────────────────────────────────────
-      // BUG FIX #2: usar precios almacenados en la posición (fijados al abrir),
-      // NO recalcular desde cfg. Así un cambio de config no afecta posiciones abiertas.
-      const tpPrice = position.takeProfitPrice;
-      const slPrice = position.stopLossPrice;
-
-      // Fallback a cfg por si posiciones antiguas no tienen esos campos
-      const tpPct = tpPrice
-        ? ((tpPrice - position.entryPrice) / position.entryPrice) * 100
-        : cfg.takeProfitPct;
-      const slPct = slPrice
-        ? ((position.entryPrice - slPrice) / position.entryPrice) * 100
-        : cfg.stopLossPct;
-
-      const hitTP = !isStale && (tpPrice ? currentPrice >= tpPrice : pnlPct >= tpPct);
-      const hitSL = slPrice ? currentPrice <= slPrice : pnlPct <= -slPct;
-
-      const shouldSell = hitTP || hitSL;
-
-      const checkEntry = {
-        positionId:    position.id,
-        assetId:       position.assetId,
-        symbol:        position.symbol,
-        entryPrice:    position.entryPrice,
-        currentPrice,
-        takeProfitPrice: tpPrice,
-        stopLossPrice:   slPrice,
-        pnlPct:        parseFloat(pnlPct.toFixed(2)),
-        hitTP,
-        hitSL,
-        isStale,
-        priceSource,
-        action: shouldSell ? 'sell' : 'hold',
-      };
-
-      if (shouldSell) {
-        const reason = hitSL
-          ? `watchdog_stop_loss: ${pnlPct.toFixed(2)}% ≤ −${slPct.toFixed(2)}% (precio: ${currentPrice} ≤ SL: ${slPrice || 'n/a'})`
-          : `watchdog_take_profit: +${pnlPct.toFixed(2)}% ≥ +${tpPct.toFixed(2)}% (precio: ${currentPrice} ≥ TP: ${tpPrice || 'n/a'})`;
-
-        try {
-          // Ejecutar orden de venta
-          const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-
-          // Calcular PnL real y cerrar posición
-          // BUG FIX #3: NO llamar a evaluatePosition (que incrementaría holdCycles).
-          // Hacemos los cálculos directamente aquí.
-          const pnlUSD   = (currentPrice - position.entryPrice) * position.units;
-          const exitFee  = position.capitalUSD * (cfg.feePct || 0.10) / 100;
-          const netPnL   = pnlUSD - exitFee;
-
-          position.status            = 'closed';
-          position.closedAt          = new Date().toISOString();
-          position.currentPrice      = currentPrice;
-          position.realizedPnL       = parseFloat(pnlUSD.toFixed(4));
-          position.realizedPnLPct    = parseFloat(pnlPct.toFixed(2));
-          position.exitFeeUSD        = parseFloat(exitFee.toFixed(4));
-          position.totalFeesUSD      = parseFloat(((position.entryFeeUSD || 0) + exitFee).toFixed(4));
-          position.closeReason       = hitSL ? 'watchdog_stop_loss' : 'watchdog_take_profit';
-          position.exchangeCloseOrderId = order.orderId;
-
-          posChanged = true;
-          checkEntry.sold = true;
-          checkEntry.reason = reason;
-          checkEntry.pnlUSD  = parseFloat(pnlUSD.toFixed(4));
-          checkEntry.netPnL  = parseFloat(netPnL.toFixed(4));
-
-          actions.push({ ...checkEntry, order });
-
-          // Log
-          await appendInvestLog({
-            type:      'watchdog_close',
-            subtype:   hitSL ? 'stop_loss' : 'take_profit',
-            cycleId:   position.cycleId || null,
-            timestamp: new Date().toISOString(),
-            config:    { mode: cfg.mode, exchange: cfg.exchange, takeProfitPct: cfg.takeProfitPct, stopLossPct: cfg.stopLossPct },
-            position: {
-              id: position.id, symbol: position.symbol, assetId: position.assetId,
-              entryPrice: position.entryPrice, exitPrice: currentPrice,
-              takeProfitPrice: tpPrice, stopLossPrice: slPrice,
-              pnlPct: parseFloat(pnlPct.toFixed(2)), pnlUSD: parseFloat(pnlUSD.toFixed(4)),
-              netPnL: parseFloat(netPnL.toFixed(4)), priceSource,
-            },
-            reason,
-          });
-        } catch (sellErr) {
-          console.error(`[watchdog] Error cerrando ${position.symbol}:`, sellErr.message);
-          checkEntry.sold  = false;
-          checkEntry.error = sellErr.message;
-          actions.push(checkEntry);
-        }
-      } else {
-        checked.push(checkEntry);
-      }
-    }
-
-    if (posChanged) await savePositions(positions);
-
-    res.json({
-      success:     true,
-      timestamp:   new Date().toISOString(),
-      checked:     open.length,
-      priceSource,
-      staleIds,
-      sells:       actions.filter(a => a.sold).length,
-      holds:       checked.length,
-      errors:      actions.filter(a => !a.sold).length,
-      actions,
-      checked,
-    });
-
-  } catch(e) {
-    console.error('[watchdog] error:', e.message);
-    res.status(500).json({ success: false, error: e.message });
-  }
-});
-
 // ── POST /api/invest/buy-manual ─────────────────────────────────────────────
 // Lanza una orden de compra manual desde el Detector de Especulaciones Externas
 // El activo entra directamente en el algoritmo de inversión (posición abierta)
 app.post('/api/invest/buy-manual', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
-    let { assetData, capitalUSD: overrideCapital, cycleDurationMs } = req.body;
+    let { assetData, capitalUSD: overrideCapital } = req.body;
 
     // Normalizar assetData: puede llegar con 'assetId' en vez de 'id' (objetos del detector PUMP)
     if (assetData && !assetData.id && assetData.assetId) assetData.id = assetData.assetId;
@@ -2393,15 +2315,23 @@ app.post('/api/invest/buy-manual', async (req, res) => {
       return res.status(400).json({ success: false, error: 'Capital insuficiente (mínimo $1)' });
     }
 
-    // Obtener precio actual actualizado si el frontend no lo envía con timestamp reciente
+    // Obtener precio actual usando fetchAndCachePrices — nunca devuelve 0
     let entryPrice = assetData.current_price;
-    try {
-      const pRes = await axios.get(
-        `https://api.coingecko.com/api/v3/simple/price?ids=${assetData.id}&vs_currencies=usd`,
-        { timeout: 5000 }
-      );
-      entryPrice = pRes.data?.[assetData.id]?.usd || entryPrice;
-    } catch(_) { /* usar precio del frontend */ }
+    if (!entryPrice || entryPrice <= 0 || !isFinite(entryPrice)) {
+      // El frontend envió un precio inválido — intentar obtenerlo frescos
+      const priceInfo = await getSafePrice(assetData.id, assetData.symbol);
+      if (priceInfo?.price && priceInfo.price > 0) {
+        entryPrice = priceInfo.price;
+      } else {
+        return res.status(400).json({ success: false, error: `Precio no disponible para ${assetData.symbol.toUpperCase()} en este momento. Reintenta en unos segundos.` });
+      }
+    } else {
+      // Precio del frontend aparentemente válido — intentar refrescar igualmente
+      try {
+        const priceInfo = await getSafePrice(assetData.id, assetData.symbol);
+        if (priceInfo?.price && priceInfo.price > 0) entryPrice = priceInfo.price;
+      } catch (_) { /* usar precio del frontend */ }
+    }
 
     // Construir objeto target compatible con createPosition
     const target = {
@@ -2430,11 +2360,10 @@ app.post('/api/invest/buy-manual', async (req, res) => {
     // Crear posición con cycleId especial para identificar origen PUMP
     const cycleId  = `pump_manual_${Date.now()}`;
     const position = investManager.createPosition(target, cycleId, cfg);
-    position.exchangeOrderId  = order.orderId || position.exchangeOrderId;
-    position.orderDetails     = order;
-    position.executedAt       = new Date().toISOString();
-    position.source           = 'pump_detector';
-    position.cycleDurationMs  = cycleDurationMs || 43200000; // duración elegida en el modal
+    position.exchangeOrderId = order.orderId || position.exchangeOrderId;
+    position.orderDetails    = order;
+    position.executedAt      = new Date().toISOString();
+    position.source          = 'pump_detector'; // marcar origen
 
     const allPositions = [...positions, position];
     await savePositions(allPositions);
@@ -3200,117 +3129,94 @@ app.get('/api/pump/cron', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ── POST /api/cycles/:cycleId/iterate ────────────────────────────────────────
-app.post('/api/cycles/:cycleId/iterate', async (req, res) => {
-  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+// ── GET /api/invest/prices/status ────────────────────────────────────────────
+// Devuelve el estado del caché de precios: qué activos tienen precio fresco,
+// cuáles tienen precios stale y cuáles no tienen nada.
+// Usado por el indicador UX del frontend.
+app.get('/api/invest/prices/status', async (_req, res) => {
   try {
-    const cycle = await cyclesManager.loadCycle(redis, req.params.cycleId);
-    if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
-    if (cycle.status === 'completed') return res.status(400).json({ success: false, error: 'Ciclo ya completado' });
+    const cache     = await getPriceCache();
+    const positions = await getPositions();
+    const open      = positions.filter(p => p.status === 'open');
+    const now       = Date.now();
 
-    const positions    = await getPositions();
-    const investConfig = await getInvestConfig();
-    const apiKeys      = { cryptocompare: process.env.CRYPTOCOMPARE_API_KEY || '' };
+    const entries = Object.entries(cache).map(([id, v]) => {
+      const ageMs  = now - (v.updatedAt || 0);
+      const isStale = ageMs > PRICE_STALE_MAX_MS;
+      return {
+        assetId:    id,
+        price:      v.price,
+        source:     v.source,
+        updatedAt:  v.updatedAt ? new Date(v.updatedAt).toISOString() : null,
+        ageMinutes: Math.round(ageMs / 60000),
+        isStale,
+        attempts:   v.attempts || 0,
+      };
+    });
 
-    const result = await iterationEngine.executeIteration(
-      redis, req.params.cycleId, cyclesManager, positions, investConfig, apiKeys
-    );
-
-    // Cerrar posiciones que activaron SL/TP
-    const sellResults = [];
-    if (result.toSell.length > 0) {
-      const allPositions = await getPositions();
-      const cfg  = investConfig;
-      const keys = await getExchangeKeys(cfg.exchange);
-      for (const { position, currentPrice, decision } of result.toSell) {
-        try {
-          const order   = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-          const pos     = allPositions.find(p => p.id === position.id);
-          if (pos) {
-            const pnlUSD  = (currentPrice - pos.entryPrice) * pos.units;
-            const exitFee = pos.capitalUSD * (cfg.feePct || 0.10) / 100;
-            pos.status    = 'closed';
-            pos.closedAt  = new Date().toISOString();
-            pos.currentPrice       = currentPrice;
-            pos.realizedPnL        = parseFloat(pnlUSD.toFixed(4));
-            pos.realizedPnLPct     = parseFloat(decision.pnlPct.toFixed(2));
-            pos.exitFeeUSD         = parseFloat(exitFee.toFixed(4));
-            pos.closeReason        = decision.reason.split(':')[0];
-            pos.exchangeCloseOrderId = order.orderId;
-          }
-          sellResults.push({ assetId: position.assetId, symbol: position.symbol, price: currentPrice, pnlPct: decision.pnlPct, closed: true });
-        } catch (err) {
-          sellResults.push({ assetId: position.assetId, symbol: position.symbol, closed: false, error: err.message });
-        }
-      }
-      await savePositions(allPositions);
-    }
+    const openWithIssues = open
+      .filter(p => {
+        const c = cache[p.assetId];
+        return !c || !c.price || c.price <= 0;
+      })
+      .map(p => ({ assetId: p.assetId, symbol: p.symbol, issue: 'sin precio en caché' }));
 
     res.json({
-      success: true, cycleId: result.cycleId,
-      iterationNumber: result.iterationNumber, totalIterations: result.totalIterations,
-      isLastIteration: result.isLastIteration, assetsCount: result.assetsCount,
-      fetchedCount: result.fetchedCount, failedCount: result.failedCount,
-      staleCount: result.staleCount, priceSource: result.priceSource,
-      sellsExecuted: sellResults.length, sellResults, shouldComplete: result.isLastIteration,
+      success:         true,
+      cacheSize:       entries.length,
+      freshCount:      entries.filter(e => !e.isStale).length,
+      staleCount:      entries.filter(e => e.isStale).length,
+      openPositions:   open.length,
+      openWithIssues,
+      lastUpdated:     entries.length
+        ? new Date(Math.max(...entries.map(e => cache[e.assetId]?.updatedAt || 0))).toISOString()
+        : null,
+      entries: entries.sort((a, b) => (b.updatedAt||'') > (a.updatedAt||'') ? 1 : -1),
     });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// ── GET /api/cycles/:cycleId/iterations ──────────────────────────────────────
-app.get('/api/cycles/:cycleId/iterations', async (req, res) => {
+// ── POST /api/invest/prices/refresh ──────────────────────────────────────────
+// Fuerza una actualización del caché para todas las posiciones abiertas.
+// El frontend lo llama periódicamente y también cuando detecta precios stale.
+app.post('/api/invest/prices/refresh', async (_req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
-    const cycle = await cyclesManager.loadCycle(redis, req.params.cycleId);
-    if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+    const positions = await getPositions();
+    const open      = positions.filter(p => p.status === 'open');
+    if (!open.length) return res.json({ success: true, message: 'Sin posiciones abiertas', fetchedCount: 0 });
 
-    const durationMs = cycle.durationMs || 43200000;
-    const schedule   = iterationEngine.getIterationSchedule(cycle.startTime, durationMs);
-    const iterations = cycle.iterations || [];
+    const assetIds  = [...new Set(open.map(p => p.assetId))];
+    const symbolMap = {};
+    open.forEach(p => { symbolMap[p.assetId] = p.symbol; });
 
-    const enriched = iterations.map((iter, idx) => ({
-      ...iter, scheduledTime: schedule[idx] || null,
-      delayMs: schedule[idx] ? iter.timestamp - schedule[idx] : 0,
-    }));
-    const pending = schedule.slice(iterations.length).map((ts, i) => ({
-      iterationNumber: iterations.length + i + 1, scheduledTime: ts,
-      status: ts <= Date.now() ? 'due' : 'upcoming',
-    }));
+    const { prices, meta } = await fetchAndCachePrices(assetIds, symbolMap);
+
+    // Actualizar currentPrice en las posiciones (sin persistir — solo para la respuesta)
+    const updated = open.map(p => {
+      const info = prices[p.assetId];
+      if (!info?.price || info.price <= 0) return { assetId: p.assetId, symbol: p.symbol, status: 'failed' };
+      return {
+        assetId:    p.assetId,
+        symbol:     p.symbol,
+        price:      info.price,
+        source:     info.source,
+        isStale:    info.isStale,
+        pnlPct:     parseFloat(((info.price - p.entryPrice) / p.entryPrice * 100).toFixed(2)),
+        status:     info.isStale ? 'stale' : 'fresh',
+      };
+    });
 
     res.json({
-      success: true, cycleId: cycle.id, status: cycle.status,
-      durationMs, startTime: cycle.startTime, endTime: cycle.endTime,
-      totalScheduled: schedule.length, completedCount: iterations.length, pendingCount: pending.length,
-      nextIterationAt: iterationEngine.getNextIterationTime(cycle),
-      iterations: enriched, pending,
+      success:      true,
+      fetchedCount: meta.fetchedCount,
+      staleCount:   meta.staleCount,
+      failedIds:    meta.failedIds,
+      source:       meta.source,
+      updatedAt:    meta.updatedAtISO,
+      positions:    updated,
     });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-// ── POST /api/cycles/run-pending-iterations ───────────────────────────────────
-app.post('/api/cycles/run-pending-iterations', async (req, res) => {
-  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
-  try {
-    const activeIds = await cyclesManager.getActiveCycles(redis);
-    if (!activeIds.length) return res.json({ success: true, message: 'No hay ciclos activos', processed: [] });
-
-    const cycles       = await cyclesManager.getCyclesDetails(redis, activeIds);
-    const positions    = await getPositions();
-    const investConfig = await getInvestConfig();
-    const apiKeys      = { cryptocompare: process.env.CRYPTOCOMPARE_API_KEY || '' };
-
-    const processed = [];
-    for (const cycle of cycles) {
-      if (cycle.status === 'completed') continue;
-      if (!iterationEngine.hasIterationDue(cycle)) continue;
-      try {
-        const result = await iterationEngine.executeIteration(redis, cycle.id, cyclesManager, positions, investConfig, apiKeys);
-        processed.push({ cycleId: cycle.id, iterationNumber: result.iterationNumber, fetchedCount: result.fetchedCount, sellsTriggered: result.toSell.length, isLastIteration: result.isLastIteration });
-        await new Promise(r => setTimeout(r, 1500));
-      } catch (err) { processed.push({ cycleId: cycle.id, error: err.message }); }
-    }
-    res.json({ success: true, processed, count: processed.length });
-  } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
 // ── Arranque local ────────────────────────────────────────────────────────────
