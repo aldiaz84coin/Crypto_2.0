@@ -39,6 +39,27 @@ async function syncSchedulerStatus() {
           _wd.nextRunAt = serverLastRun + 30 * 60 * 1000;
         }
 
+        // ── Cancelar timeout inicial si el servidor corrió recientemente ──
+        if (_wd.pendingTimeout !== null && _wd.pendingTimeout !== undefined) {
+          clearTimeout(_wd.pendingTimeout);
+          _wd.pendingTimeout = null;
+          console.log('[scheduler-sync] ⛔ Timeout inicial del WD cancelado');
+
+          // Reprogramar según el tiempo real del servidor
+          const WD_MS = _wd.INTERVAL_MS || (30 * 60 * 1000);
+          if (timeSince < (WD_MS - 2 * 60 * 1000)) {
+            const waitMs = Math.max(10000, WD_MS - timeSince);
+            _wd.nextRunAt = now + waitMs;
+            _wd.pendingTimeout = setTimeout(() => {
+              _wd.pendingTimeout = null;
+              _wdRun();
+              clearInterval(_wd.interval);
+              _wd.interval = setInterval(() => _wdRun(), WD_MS);
+            }, waitMs);
+            console.log(`[scheduler-sync] ⏭ WD reprogramado — próxima en ${Math.round(waitMs/60000)}min`);
+          }
+        }
+
         if (typeof wdSaveState === 'function') wdSaveState();
         if (typeof _wdRender   === 'function') _wdRender();
 

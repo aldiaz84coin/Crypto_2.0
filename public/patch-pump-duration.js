@@ -342,12 +342,13 @@ document.addEventListener('DOMContentLoaded', () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 const _wd = {
-  interval:   null,
-  lastRunAt:  null,   // timestamp numérico del último run completado
-  lastResult: null,   // último objeto de respuesta del backend
-  nextRunAt:  null,   // timestamp del próximo run programado
-  running:    false,
-  INTERVAL_MS: 30 * 60 * 1000, // 30 min
+  interval:       null,
+  pendingTimeout: null,  // ID del setTimeout inicial (cancelable por scheduler-sync)
+  lastRunAt:      null,  // timestamp numérico del último run completado
+  lastResult:     null,  // último objeto de respuesta del backend
+  nextRunAt:      null,  // timestamp del próximo run programado
+  running:        false,
+  INTERVAL_MS:    30 * 60 * 1000, // 30 min
 };
 
 // ── Widget ────────────────────────────────────────────────────────────────────
@@ -519,8 +520,11 @@ function startWatchdog() {
   _wd.interval  = setInterval(() => _wdRun(), _wd.INTERVAL_MS);
   _wd.nextRunAt = Date.now() + 15000; // primera ejecución en 15s
 
-  // Primera ejecución a los 15s (dar tiempo a que la app cargue)
-  setTimeout(() => _wdRun(), 15000);
+  // Primera ejecución a los 15s — guardar ID para que scheduler-sync pueda cancelarlo
+  _wd.pendingTimeout = setTimeout(() => {
+    _wd.pendingTimeout = null;
+    _wdRun();
+  }, 15000);
 
   console.log('[watchdog] 🔔 Iniciado — widget visible · primera ejecución en 15s');
 }
