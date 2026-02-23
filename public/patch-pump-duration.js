@@ -338,8 +338,82 @@ document.addEventListener('DOMContentLoaded', () => {
 
 
 // ═══════════════════════════════════════════════════════════════════════════
-// 4. AUTO-RUNNER: Ejecuta iteraciones pendientes en background cada 5 min
-//    Solo activo cuando la pestaña de Validación está visible.
+// 4. WATCHDOG DE STOP-LOSS / TAKE-PROFIT — cada 30 minutos
+//    Comprueba TODAS las posiciones abiertas contra sus precios de TP/SL
+//    almacenados en el momento de la apertura. Si se superan → vende.
+//    Se ejecuta en background independientemente de la pestaña activa.
+// ═══════════════════════════════════════════════════════════════════════════
+
+let _watchdogInterval = null;
+let _watchdogLastRun  = null;
+
+async function runWatchdog() {
+  try {
+    const r = await fetch('/api/invest/watchdog', { method: 'POST' });
+    const d = await r.json();
+    _watchdogLastRun = new Date().toISOString();
+
+    if (d.success) {
+      if (d.sells > 0) {
+        console.log(`[watchdog] ✅ ${d.sells} posición(es) cerrada(s):`,
+          d.actions.filter(a => a.sold).map(a => `${a.symbol} ${a.pnlPct > 0 ? '+' : ''}${a.pnlPct?.toFixed?.(2) ?? '?'}%`).join(', ')
+        );
+        // Notificación visible si hay ventas
+        const sells = d.actions.filter(a => a.sold);
+        sells.forEach(s => {
+          const emoji = s.pnlPct >= 0 ? '🟢' : '🔴';
+          const type  = s.closeReason?.includes('stop') ? 'Stop Loss' : 'Take Profit';
+          console.warn(`[watchdog] ${emoji} ${type}: ${s.symbol} ${s.pnlPct >= 0 ? '+' : ''}${s.pnlPct?.toFixed?.(2) ?? '?'}% — Precio: $${s.currentPrice}`);
+        });
+        // Refrescar vista de posiciones si está visible
+        if (typeof loadInvestPositions === 'function') loadInvestPositions().catch(() => {});
+      } else {
+        console.log(`[watchdog] 👁 ${d.checked} pos. revisadas · fuente: ${d.priceSource} · sin ventas`);
+      }
+    }
+  } catch (e) {
+    console.warn('[watchdog] Error:', e.message);
+  }
+}
+
+function startWatchdog() {
+  if (_watchdogInterval) return;
+  const INTERVAL_MS = 30 * 60 * 1000; // 30 minutos
+  _watchdogInterval = setInterval(runWatchdog, INTERVAL_MS);
+  console.log('[watchdog] 🔔 Iniciado (cada 30 min). Primera comprobación en 10s...');
+  setTimeout(runWatchdog, 10000); // primera ejecución a los 10s
+}
+
+// Indicador visual del watchdog en la UI
+function injectWatchdogStatus() {
+  // Buscar sección de inversión para añadir badge de estado
+  const investSection = document.getElementById('content-invest') ||
+                        document.querySelector('[data-tab="invest"]');
+  if (!investSection || investSection.querySelector('.watchdog-badge')) return;
+
+  const badge = document.createElement('div');
+  badge.className = 'watchdog-badge fixed bottom-4 right-4 z-40 bg-gray-900 border border-emerald-700 rounded-xl px-3 py-2 text-xs text-emerald-400 shadow-lg cursor-pointer';
+  badge.title = 'Watchdog SL/TP activo';
+  badge.innerHTML = '🔔 Watchdog activo';
+  badge.onclick = () => runWatchdog().then(() => {
+    badge.innerHTML = '✅ Comprobado';
+    setTimeout(() => { badge.innerHTML = '🔔 Watchdog activo'; }, 3000);
+  });
+
+  // Actualizar timestamp del último run
+  setInterval(() => {
+    if (_watchdogLastRun) {
+      const mins = Math.round((Date.now() - new Date(_watchdogLastRun).getTime()) / 60000);
+      badge.innerHTML = `🔔 SL/TP · hace ${mins}m`;
+    }
+  }, 60000);
+
+  document.body.appendChild(badge);
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// 5. AUTO-RUNNER DE ITERACIONES — cada 5 minutos
+//    Ejecuta iteraciones pendientes de ciclos activos.
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _iterationRunnerInterval = null;
@@ -350,13 +424,8 @@ async function runPendingIterationsBackground() {
     const d = await r.json();
     if (d.success && d.count > 0) {
       console.log(`[iter-runner] ${d.count} iteraciones ejecutadas:`, d.processed);
-
-      // Si algún ciclo tiene iteración final → refrescar validación
       const hasLastIter = d.processed.some(p => p.isLastIteration);
-      if (hasLastIter) {
-        console.log('[iter-runner] Iteración final detectada → actualizando validación');
-        if (typeof loadValidation === 'function') await loadValidation();
-      }
+      if (hasLastIter && typeof loadValidation === 'function') await loadValidation();
     }
   } catch (e) {
     console.warn('[iter-runner] Error en background runner:', e.message);
@@ -365,36 +434,27 @@ async function runPendingIterationsBackground() {
 
 function startIterationRunner() {
   if (_iterationRunnerInterval) return;
-  _iterationRunnerInterval = setInterval(runPendingIterationsBackground, 5 * 60 * 1000); // cada 5 min
+  _iterationRunnerInterval = setInterval(runPendingIterationsBackground, 5 * 60 * 1000);
   console.log('[iter-runner] Auto-runner iniciado (cada 5 min)');
-  // Primera ejecución inmediata
   setTimeout(runPendingIterationsBackground, 3000);
 }
 
-function stopIterationRunner() {
-  if (_iterationRunnerInterval) {
-    clearInterval(_iterationRunnerInterval);
-    _iterationRunnerInterval = null;
-    console.log('[iter-runner] Auto-runner detenido');
-  }
-}
-
-// Iniciar el runner cuando el usuario esté en la pestaña de validación
-// Sobreescribir setTab o usar el mecanismo existente
+// Sobreescribir setTab para inyectar botones de iteraciones al entrar en Validación
 const _origSetTabForIter = window.setTab;
 window.setTab = function(tab) {
   if (_origSetTabForIter) _origSetTabForIter(tab);
   if (tab === 'validation') {
     startIterationRunner();
     setTimeout(injectIterationButtons, 800);
-  } else if (tab !== 'validation') {
-    // No parar el runner — seguir en background para no perder iteraciones
-    // stopIterationRunner(); // ← descomentado si se quiere parar
   }
 };
 
-// Arrancar siempre el runner (independiente de la pestaña activa)
-// para asegurar que los ciclos se procesan aunque el usuario no esté en Validación
+// Arrancar todo al cargar
 document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(startIterationRunner, 5000); // esperar 5s para que la app esté lista
+  setTimeout(() => {
+    startWatchdog();
+    startIterationRunner();
+    injectWatchdogStatus();
+  }, 5000);
 });
+
