@@ -109,7 +109,7 @@ function calcVolumeSurge(crypto, thresholds) {
   return 0.20;
 }
 
-// Social Momentum: Reddit + noticias — solo señales relevantes al activo
+// Social Momentum: Reddit + noticias + Google Trends — señales relevantes al activo
 function calcSocialMomentum(crypto, externalData) {
   let score = 0.3; // base neutral
 
@@ -139,6 +139,26 @@ function calcSocialMomentum(crypto, externalData) {
     const redditSent = reddit.avgSentiment ?? 0;
     if (redditSent > 0.2)       score += 0.10;
     else if (redditSent < -0.2) score -= 0.08;
+  }
+
+  // ── Google Trends (SerpAPI) — interés de búsqueda real ────────────────────
+  // Señal genuina de demanda pública: difícil de manipular, muy correlada con movimientos
+  const trends = externalData.googleTrends;
+  if (trends && trends.success) {
+    const interest = trends.currentInterest || 0;
+    const growth   = trends.growthPercent   || 0;
+
+    // Nivel de interés absoluto (0-100)
+    if      (interest > 75) score += 0.20; // trending fuerte — activo en el radar masivo
+    else if (interest > 50) score += 0.12; // interés elevado
+    else if (interest > 25) score += 0.05; // interés moderado
+    // < 25: bajo interés — puede ser acumulación silenciosa, no penalizar
+
+    // Crecimiento reciente de búsquedas (comparado con inicio del período)
+    if      (growth > 100) score += 0.15; // búsquedas se duplicaron o más — señal fuerte
+    else if (growth > 50)  score += 0.08; // crecimiento marcado
+    else if (growth > 20)  score += 0.04; // crecimiento moderado
+    else if (growth < -50) score -= 0.05; // caída fuerte de interés — señal negativa
   }
 
   return Math.min(1, Math.max(0, score));
@@ -354,6 +374,7 @@ function buildIndicators(crypto, externalData, thresholds) {
   const volRatio = mcap > 0 ? vol / mcap : 0;
   const fgi    = externalData.fearGreed?.value ?? null;
   const assetNews = externalData.assetNews;
+  const gt     = externalData.googleTrends;
 
   return {
     // Cuantitativos
@@ -373,7 +394,15 @@ function buildIndicators(crypto, externalData, thresholds) {
     newsSentiment:     assetNews?.avgSentiment !== undefined ? round(assetNews.avgSentiment, 2) : null,
     newsSentimentLabel: sentimentLabel(assetNews?.avgSentiment),
     redditPosts:       externalData.assetReddit?.postCount ?? null,
-    redditSentiment:   externalData.assetReddit?.sentiment ?? null
+    redditSentiment:   externalData.assetReddit?.sentiment ?? null,
+    // Google Trends (SerpAPI) — null si no disponible
+    trendsCurrentInterest: gt?.success ? (gt.currentInterest ?? null) : null,
+    trendsAverage:         gt?.success ? (gt.average ?? null)         : null,
+    trendsPeak:            gt?.success ? (gt.peak ?? null)            : null,
+    trendsTrend:           gt?.success ? (gt.trend ?? null)           : null,   // 'rising'|'falling'|'stable'
+    trendsGrowth:          gt?.success ? round(gt.growthPercent ?? 0) : null,   // % crecimiento en período
+    trendsSource:          gt?.source  ?? null,
+    trendsCached:          gt?.cached  ?? false
   };
 }
 
@@ -447,13 +476,24 @@ function generateSummary(crypto, boostResult, externalData) {
     ? `Hay ${ind.newsCount} noticia${ind.newsCount > 1 ? 's' : ''} reciente${ind.newsCount > 1 ? 's' : ''} con sentimiento ${ind.newsSentimentLabel}.`
     : 'Sin noticias recientes identificadas.';
 
+  const trendsText = ind.trendsCurrentInterest !== null
+    ? (() => {
+        const lvl = ind.trendsCurrentInterest > 75 ? 'muy alto'
+                  : ind.trendsCurrentInterest > 50 ? 'elevado'
+                  : ind.trendsCurrentInterest > 25 ? 'moderado' : 'bajo';
+        const grow = ind.trendsGrowth > 20 ? ` (búsquedas +${ind.trendsGrowth}% en 7 días)`
+                   : ind.trendsGrowth < -20 ? ` (búsquedas ${ind.trendsGrowth}% en 7 días)` : '';
+        return `Interés en Google Trends: ${lvl} (${ind.trendsCurrentInterest}/100)${grow}.`;
+      })()
+    : '';
+
   const catText = {
     INVERTIBLE: `Clasificado como INVERTIBLE (BoostPower ${bp}%): bajo apalancamiento estructural, señal social activa y posición histórica favorable apuntan a potencial de subida de +${boostResult.predictedChange}% en el ciclo.`,
     APALANCADO: `Clasificado como APALANCADO (BoostPower ${bp}%): hay señal de subida pero la capitalización o posición de precio generará presión vendedora que limitará el recorrido (~+${boostResult.predictedChange}%).`,
     RUIDOSO:    `Clasificado como RUIDOSO (BoostPower ${bp}%): sin catalizador claro ni señal convergente. No se recomienda posición en este ciclo.`
   }[cat];
 
-  return `${crypto.name} cotiza a ${price}, ${posText} (${ind.atlProximityPct.toFixed(0)}% del rango ATL-ATH). Presenta ${volText} (${ind.capEfficiency.toFixed(1)}% vol/cap). ${fgiText} ${newsText} ${catText}`;
+  return `${crypto.name} cotiza a ${price}, ${posText} (${ind.atlProximityPct.toFixed(0)}% del rango ATL-ATH). Presenta ${volText} (${ind.capEfficiency.toFixed(1)}% vol/cap). ${fgiText} ${newsText} ${trendsText} ${catText}`.replace(/\s{2,}/g, ' ').trim();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════

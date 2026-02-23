@@ -287,6 +287,87 @@ async function getSantimentData(symbol) {
   return { success: false };
 }
 
+
+// ── Google Trends via SerpAPI ─────────────────────────────────────────────────
+// Cache Redis de 12h por activo para no agotar el cupo de 100 busquedas/mes gratuitas.
+// La key de cache incluye el simbolo en minusculas: trends:btc, trends:eth, etc.
+// Devuelve siempre un objeto con { success, ... } -- nunca lanza excepcion.
+async function getGoogleTrends(name, symbol) {
+  const cacheKey   = `trends:${symbol.toLowerCase()}`;
+  const CACHE_TTL  = 43200; // 12 horas en segundos
+
+  // 1. Verificar cache Redis
+  if (redis) {
+    try {
+      const cached = await redis.get(cacheKey);
+      if (cached && typeof cached === 'object' && cached.success) {
+        return { ...cached, cached: true };
+      }
+    } catch(_) {}
+  }
+
+  // 2. Sin cache -> intentar SerpAPI
+  try {
+    const apiKey = await getRedisKey('SERPAPI_KEY');
+    if (!apiKey) return { success: false, source: 'no_key', estimated: true };
+
+    // Query: "nombre crypto" da mejores resultados que solo el nombre
+    const query = `${name} crypto`;
+    const r = await axios.get('https://serpapi.com/search', {
+      params: {
+        engine:    'google_trends',
+        q:         query,
+        data_type: 'TIMESERIES',
+        date:      'now 7-d',   // ultimos 7 dias -- ventana corta, relevante para el ciclo
+        api_key:   apiKey
+      },
+      timeout: 8000
+    });
+
+    const timelineData = r.data?.interest_over_time?.timeline_data || [];
+    if (timelineData.length < 2) {
+      return { success: false, source: 'no_data', estimated: true };
+    }
+
+    // Extraer valores de interes (0-100)
+    const values = timelineData.map(d => {
+      const v = d.values?.[0]?.extracted_value;
+      return (v !== undefined && v !== null) ? Number(v) : 0;
+    });
+
+    const current   = values[values.length - 1];
+    const first     = values[0];
+    const average   = Math.round(values.reduce((s, v) => s + v, 0) / values.length);
+    const peak      = Math.max(...values);
+    const trend     = current > first + 5 ? 'rising'
+                    : current < first - 5 ? 'falling' : 'stable';
+    const growthPct = first > 0 ? parseFloat(((current - first) / first * 100).toFixed(1)) : 0;
+
+    const result = {
+      success:         true,
+      currentInterest: current,
+      average,
+      peak,
+      trend,
+      growthPercent:   growthPct,
+      period:          'ultimos 7 dias',
+      source:          'Google Trends (SerpAPI)',
+      query,
+      fetchedAt:       new Date().toISOString()
+    };
+
+    // Guardar en cache con TTL
+    if (redis) {
+      try { await redis.set(cacheKey, result, { ex: CACHE_TTL }); } catch(_) {}
+    }
+
+    return result;
+  } catch(e) {
+    console.warn(`[GoogleTrends] ${symbol}: ${e.response?.status || e.message}`);
+    return { success: false, source: 'error', error: e.message, estimated: true };
+  }
+}
+
 // ── Noticias genéricas de mercado ─────────────────────────────────────────────
 async function getMarketNews(limit = 10) {
   try {
@@ -747,13 +828,14 @@ app.get('/api/crypto/:id/detail', async (req, res) => {
     }
 
     // Todas las fuentes en paralelo
-    const [newsRes, redditRes, coinDeskRes, coinTelRes, lunarRes, santRes] = await Promise.allSettled([
+    const [newsRes, redditRes, coinDeskRes, coinTelRes, lunarRes, santRes, trendsRes] = await Promise.allSettled([
       getAssetNews(crypto.symbol, crypto.name),
       getAssetReddit(crypto.symbol, crypto.name, crypto.market_cap),
       getCoinDeskNews(crypto.symbol, crypto.name),
       getCoinTelegraphNews(crypto.symbol, crypto.name),
       getLunarCrushData(crypto.symbol),
-      getSantimentData(crypto.symbol)
+      getSantimentData(crypto.symbol),
+      getGoogleTrends(crypto.name, crypto.symbol)
     ]);
 
     const assetNews    = newsRes.status      === 'fulfilled' ? newsRes.value      : { success: false, count: 0, articles: [], avgSentiment: 0 };
@@ -762,6 +844,7 @@ app.get('/api/crypto/:id/detail', async (req, res) => {
     const coinTel      = coinTelRes.status   === 'fulfilled' ? coinTelRes.value   : { success: false };
     const lunarCrush   = lunarRes.status     === 'fulfilled' ? lunarRes.value     : { success: false };
     const santiment    = santRes.status      === 'fulfilled' ? santRes.value      : { success: false };
+    const googleTrends = trendsRes.status    === 'fulfilled' ? trendsRes.value    : { success: false };
 
     // Merge de artículos de todas las fuentes — ya filtrados por relevancia y recencia
     const allArticles = [
@@ -799,12 +882,13 @@ app.get('/api/crypto/:id/detail', async (req, res) => {
     })() : { success: false, count: 0, specificCount: 0, genericCount: 0, articles: [], avgSentiment: 0 };
 
     const externalData = {
-      fearGreed:   fg.success            ? fg          : null,
-      assetNews:   mergedNews.success    ? mergedNews  : (assetNews.success ? assetNews : null),
-      assetReddit: assetReddit.success   ? assetReddit : null,
-      lunarCrush:  lunarCrush.success    ? lunarCrush  : null,
-      santiment:   santiment.success     ? santiment   : null,
-      marketNews:  null
+      fearGreed:    fg.success            ? fg           : null,
+      assetNews:    mergedNews.success    ? mergedNews   : (assetNews.success ? assetNews : null),
+      assetReddit:  assetReddit.success   ? assetReddit  : null,
+      lunarCrush:   lunarCrush.success    ? lunarCrush   : null,
+      santiment:    santiment.success     ? santiment    : null,
+      googleTrends: googleTrends.success  ? googleTrends : null,
+      marketNews:   null
     };
 
     const result  = boostPowerCalc.calculateBoostPower(crypto, config, externalData);
@@ -847,9 +931,19 @@ app.get('/api/crypto/:id/detail', async (req, res) => {
                       articles:       mergedNews.articles,
                       sources:        mergedNews.sources
                     } : null,
-        reddit:     assetReddit.success ? { postCount: assetReddit.postCount, avgSentiment: assetReddit.avgSentiment, posts: assetReddit.posts, subredditsSearched: assetReddit.subredditsSearched } : null,
-        lunarCrush: lunarCrush.success  ? lunarCrush : null,
-        santiment:  santiment.success   ? santiment  : null,
+        reddit:      assetReddit.success ? { postCount: assetReddit.postCount, avgSentiment: assetReddit.avgSentiment, posts: assetReddit.posts, subredditsSearched: assetReddit.subredditsSearched } : null,
+        lunarCrush:  lunarCrush.success  ? lunarCrush : null,
+        santiment:   santiment.success   ? santiment  : null,
+        googleTrends: googleTrends.success ? {
+                        currentInterest: googleTrends.currentInterest,
+                        average:         googleTrends.average,
+                        peak:            googleTrends.peak,
+                        trend:           googleTrends.trend,
+                        growthPercent:   googleTrends.growthPercent,
+                        period:          googleTrends.period,
+                        query:           googleTrends.query,
+                        cached:          googleTrends.cached ?? false
+                      } : null,
         fearGreed: fg.success ? { value: fg.value, classification: fg.classification } : null
       }
     });
@@ -1008,7 +1102,40 @@ app.post('/api/cycles/start', async (req, res) => {
   try {
     const mode   = req.body.mode || 'normal';
     const config = await getConfig(mode);
-    const cycle  = await cyclesManager.createCycle(redis, snapshot, config, finalDuration, mode);
+
+    // ── Enriquecer snapshot con Google Trends (con caché Redis 12h) ───────────
+    // Se llama en paralelo por activo. La caché evita agotar el cupo de SerpAPI.
+    // Solo los primeros 20 activos del snapshot para limitar llamadas.
+    const TRENDS_LIMIT = 20;
+    const assetsToEnrich = snapshot.slice(0, TRENDS_LIMIT);
+    const trendsResults  = await Promise.allSettled(
+      assetsToEnrich.map(a => getGoogleTrends(a.name, a.symbol))
+    );
+
+    const enrichedSnapshot = snapshot.map((asset, i) => {
+      if (i >= TRENDS_LIMIT) return asset;
+      const tr = trendsResults[i];
+      const gt = (tr.status === 'fulfilled' && tr.value?.success) ? tr.value : null;
+      return {
+        ...asset,
+        googleTrends: gt,
+        // Actualizar indicators dentro del breakdown si existe
+        breakdown: asset.breakdown ? {
+          ...asset.breakdown,
+          indicators: {
+            ...(asset.breakdown.indicators || {}),
+            trendsCurrentInterest: gt?.currentInterest ?? null,
+            trendsAverage:         gt?.average ?? null,
+            trendsPeak:            gt?.peak ?? null,
+            trendsTrend:           gt?.trend ?? null,
+            trendsGrowth:          gt?.growthPercent ?? null,
+            trendsCached:          gt?.cached ?? false
+          }
+        } : asset.breakdown
+      };
+    });
+
+    const cycle = await cyclesManager.createCycle(redis, enrichedSnapshot, config, finalDuration, mode);
     res.json({ success: true, cycle: { id: cycle.id, startTime: cycle.startTime, endTime: cycle.endTime, durationMs: cycle.durationMs, assetsCount: cycle.snapshot.length } });
   } catch(e) {
     console.error('cycles/start:', e);
@@ -2874,13 +3001,14 @@ app.get('/api/pump/asset/:id', async (req, res) => {
     const pumpAnalysis = await pumpDetector.analyzePumpForAsset(crypto, getRedisKey);
 
     // Datos cualitativos: noticias, reddit, etc
-    const [newsRes, redditRes, coinDeskRes, coinTelRes, lunarRes, santRes] = await Promise.allSettled([
+    const [newsRes, redditRes, coinDeskRes, coinTelRes, lunarRes, santRes, trendsRes] = await Promise.allSettled([
       getAssetNews(crypto.symbol, crypto.name),
       getAssetReddit(crypto.symbol, crypto.name, crypto.market_cap),
       getCoinDeskNews(crypto.symbol, crypto.name),
       getCoinTelegraphNews(crypto.symbol, crypto.name),
       getLunarCrushData(crypto.symbol),
-      getSantimentData(crypto.symbol)
+      getSantimentData(crypto.symbol),
+      getGoogleTrends(crypto.name, crypto.symbol)
     ]);
 
     const assetNews    = newsRes.status      === 'fulfilled' ? newsRes.value      : { success: false, count: 0, articles: [], avgSentiment: 0 };
@@ -2889,6 +3017,7 @@ app.get('/api/pump/asset/:id', async (req, res) => {
     const coinTel      = coinTelRes.status   === 'fulfilled' ? coinTelRes.value   : { success: false };
     const lunarCrush   = lunarRes.status     === 'fulfilled' ? lunarRes.value     : { success: false };
     const santiment    = santRes.status      === 'fulfilled' ? santRes.value      : { success: false };
+    const googleTrends = trendsRes.status    === 'fulfilled' ? trendsRes.value    : { success: false };
 
     const allArticles = [
       ...(assetNews.articles || []),
@@ -2917,12 +3046,13 @@ app.get('/api/pump/asset/:id', async (req, res) => {
     })() : { success: false, count: 0, specificCount: 0, genericCount: 0, articles: [], avgSentiment: 0 };
 
     const externalData = {
-      fearGreed:   fg.success            ? fg          : null,
-      assetNews:   mergedNews.success    ? mergedNews  : (assetNews.success ? assetNews : null),
-      assetReddit: assetReddit.success   ? assetReddit : null,
-      lunarCrush:  lunarCrush.success    ? lunarCrush  : null,
-      santiment:   santiment.success     ? santiment   : null,
-      marketNews:  null
+      fearGreed:    fg.success            ? fg           : null,
+      assetNews:    mergedNews.success    ? mergedNews   : (assetNews.success ? assetNews : null),
+      assetReddit:  assetReddit.success   ? assetReddit  : null,
+      lunarCrush:   lunarCrush.success    ? lunarCrush   : null,
+      santiment:    santiment.success     ? santiment    : null,
+      googleTrends: googleTrends.success  ? googleTrends : null,
+      marketNews:   null
     };
 
     // Análisis del algoritmo principal (boostPower, clasificación, predicción)
@@ -2959,14 +3089,24 @@ app.get('/api/pump/asset/:id', async (req, res) => {
         // Análisis de pump
         pumpAnalysis: pumpAnalysis || { totalScore: 0, riskLevel: 'Normal', riskColor: 'text-gray-400', evidence: [] },
         // Datos cualitativos
-        news:       mergedNews.success  ? { count: mergedNews.count, specificCount: mergedNews.specificCount, genericCount: mergedNews.genericCount,
-                      avgSentiment: mergedNews.avgSentiment, rawAvgSentiment: mergedNews.rawAvgSentiment,
-                      articles: mergedNews.articles, sources: mergedNews.sources } : null,
-        reddit:     assetReddit.success ? { postCount: assetReddit.postCount, avgSentiment: assetReddit.avgSentiment,
-                      posts: assetReddit.posts, subredditsSearched: assetReddit.subredditsSearched } : null,
-        lunarCrush: lunarCrush.success  ? lunarCrush  : null,
-        santiment:  santiment.success   ? santiment   : null,
-        fearGreed:  fg.success          ? { value: fg.value, classification: fg.classification } : null
+        news:        mergedNews.success  ? { count: mergedNews.count, specificCount: mergedNews.specificCount, genericCount: mergedNews.genericCount,
+                       avgSentiment: mergedNews.avgSentiment, rawAvgSentiment: mergedNews.rawAvgSentiment,
+                       articles: mergedNews.articles, sources: mergedNews.sources } : null,
+        reddit:      assetReddit.success ? { postCount: assetReddit.postCount, avgSentiment: assetReddit.avgSentiment,
+                       posts: assetReddit.posts, subredditsSearched: assetReddit.subredditsSearched } : null,
+        lunarCrush:  lunarCrush.success  ? lunarCrush  : null,
+        santiment:   santiment.success   ? santiment   : null,
+        googleTrends: googleTrends.success ? {
+                        currentInterest: googleTrends.currentInterest,
+                        average:         googleTrends.average,
+                        peak:            googleTrends.peak,
+                        trend:           googleTrends.trend,
+                        growthPercent:   googleTrends.growthPercent,
+                        period:          googleTrends.period,
+                        query:           googleTrends.query,
+                        cached:          googleTrends.cached ?? false
+                      } : null,
+        fearGreed:   fg.success          ? { value: fg.value, classification: fg.classification } : null
       }
     });
   } catch(e) {
@@ -2999,20 +3139,23 @@ app.post('/api/cycles/add-asset', async (req, res) => {
     if (!crypto) return res.status(404).json({ success: false, error: `Activo ${assetId} no encontrado` });
 
     // Obtener noticias y reddit básicos para el análisis
-    const [newsRes, redditRes, fgRes] = await Promise.allSettled([
+    const [newsRes, redditRes, fgRes, trendsRes] = await Promise.allSettled([
       getAssetNews(crypto.symbol, crypto.name),
       getAssetReddit(crypto.symbol, crypto.name, crypto.market_cap),
-      getFearGreedIndex()
+      getFearGreedIndex(),
+      getGoogleTrends(crypto.name, crypto.symbol)
     ]);
-    const assetNews   = newsRes.status === 'fulfilled'   ? newsRes.value   : { success: false, count: 0 };
-    const assetReddit = redditRes.status === 'fulfilled' ? redditRes.value : { success: false, postCount: 0 };
-    const fg          = fgRes.status === 'fulfilled'     ? fgRes.value     : { success: false };
+    const assetNews    = newsRes.status === 'fulfilled'   ? newsRes.value   : { success: false, count: 0 };
+    const assetReddit  = redditRes.status === 'fulfilled' ? redditRes.value : { success: false, postCount: 0 };
+    const fg           = fgRes.status === 'fulfilled'     ? fgRes.value     : { success: false };
+    const googleTrends = trendsRes.status === 'fulfilled' ? trendsRes.value : { success: false };
 
     const externalData = {
-      fearGreed:   fg.success ? fg : null,
-      assetNews:   assetNews.success ? assetNews : null,
-      assetReddit: assetReddit.success ? assetReddit : null,
-      marketNews:  null
+      fearGreed:    fg.success           ? fg           : null,
+      assetNews:    assetNews.success    ? assetNews    : null,
+      assetReddit:  assetReddit.success  ? assetReddit  : null,
+      googleTrends: googleTrends.success ? googleTrends : null,
+      marketNews:   null
     };
 
     // Calcular boostPower y clasificación
@@ -3031,6 +3174,8 @@ app.post('/api/cycles/add-asset', async (req, res) => {
       boostPowerPercent:           result.boostPowerPercent,
       classification:              result.classification.category,
       predictedChange:             result.predictedChange,
+      breakdown:                   result.breakdown,           // incluye indicators con trends
+      googleTrends:                googleTrends.success ? googleTrends : null,
       manuallyAdded:               true,  // marcar que fue añadido manual
       addedAt:                     new Date().toISOString()
     };
