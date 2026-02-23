@@ -339,81 +339,195 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 4. WATCHDOG DE STOP-LOSS / TAKE-PROFIT — cada 30 minutos
-//    Comprueba TODAS las posiciones abiertas contra sus precios de TP/SL
-//    almacenados en el momento de la apertura. Si se superan → vende.
-//    Se ejecuta en background independientemente de la pestaña activa.
 // ═══════════════════════════════════════════════════════════════════════════
 
-let _watchdogInterval = null;
-let _watchdogLastRun  = null;
+const _wd = {
+  interval:   null,
+  lastRunAt:  null,   // timestamp numérico del último run completado
+  lastResult: null,   // último objeto de respuesta del backend
+  nextRunAt:  null,   // timestamp del próximo run programado
+  running:    false,
+  INTERVAL_MS: 30 * 60 * 1000, // 30 min
+};
 
-async function runWatchdog() {
+// ── Widget ────────────────────────────────────────────────────────────────────
+
+function _wdGetOrCreateWidget() {
+  let w = document.getElementById('watchdog-widget');
+  if (w) return w;
+
+  w = document.createElement('div');
+  w.id = 'watchdog-widget';
+  // Posición: esquina inferior derecha, siempre visible
+  w.style.cssText = `
+    position: fixed; bottom: 16px; right: 16px; z-index: 9999;
+    background: #111827; border: 1px solid #065f46;
+    border-radius: 12px; padding: 10px 14px;
+    font-size: 11px; color: #6ee7b7;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+    cursor: pointer; min-width: 180px; max-width: 260px;
+    font-family: ui-monospace, monospace;
+    transition: border-color 0.3s;
+  `;
+  w.title = 'Watchdog SL/TP — click para ejecutar ahora';
+  w.onclick = () => _wdRun(true);
+  document.body.appendChild(w);
+  return w;
+}
+
+function _wdRender() {
+  const w = _wdGetOrCreateWidget();
+  const now = Date.now();
+
+  // Color del borde según estado
+  if (_wd.running) {
+    w.style.borderColor = '#ca8a04'; // amarillo — ejecutando
+  } else if (_wd.lastResult?.sells > 0) {
+    w.style.borderColor = '#16a34a'; // verde — tuvo ventas
+  } else if (_wd.lastResult?.errors > 0) {
+    w.style.borderColor = '#dc2626'; // rojo — errores
+  } else {
+    w.style.borderColor = '#065f46'; // verde oscuro — normal
+  }
+
+  // Texto de última ejecución
+  let lastText = 'Nunca ejecutado';
+  if (_wd.lastRunAt) {
+    const secs = Math.floor((now - _wd.lastRunAt) / 1000);
+    if (secs < 60)        lastText = `hace ${secs}s`;
+    else if (secs < 3600) lastText = `hace ${Math.floor(secs/60)}m ${secs%60}s`;
+    else                  lastText = `hace ${Math.floor(secs/3600)}h`;
+  }
+
+  // Texto del próximo run
+  let nextText = '—';
+  if (_wd.nextRunAt) {
+    const secsNext = Math.floor((_wd.nextRunAt - now) / 1000);
+    if (secsNext <= 0)        nextText = 'ahora';
+    else if (secsNext < 60)   nextText = `en ${secsNext}s`;
+    else if (secsNext < 3600) nextText = `en ${Math.floor(secsNext/60)}m`;
+    else                      nextText = `en ${Math.floor(secsNext/3600)}h`;
+  }
+
+  // Resumen del último resultado
+  let statusLine = '';
+  if (_wd.running) {
+    statusLine = `<div style="color:#fbbf24;margin-top:4px">⏳ Ejecutando...</div>`;
+  } else if (_wd.lastResult) {
+    const r = _wd.lastResult;
+    const sellColor = r.sells > 0 ? '#4ade80' : '#9ca3af';
+    const src = r.priceSource || '—';
+    statusLine = `
+      <div style="color:#9ca3af;margin-top:4px;line-height:1.6">
+        <span>📊 ${r.checked ?? 0} pos. revisadas</span><br>
+        <span style="color:${sellColor}">🔔 ${r.sells ?? 0} ventas · ${r.holds ?? 0} hold</span><br>
+        <span style="color:#6b7280">🌐 ${src}</span>
+        ${r.staleIds?.length ? `<br><span style="color:#f59e0b">⚠ ${r.staleIds.length} precio(s) stale</span>` : ''}
+        ${r.errors > 0 ? `<br><span style="color:#f87171">❌ ${r.errors} error(es)</span>` : ''}
+      </div>`;
+  }
+
+  w.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+      <span style="font-weight:700;color:#34d399;font-size:12px">🔔 Watchdog SL/TP</span>
+      <span style="color:#374151;font-size:10px">▼</span>
+    </div>
+    <div style="color:#6b7280;margin-top:3px;line-height:1.6">
+      <span>🕐 Último: <span style="color:#d1fae5">${lastText}</span></span><br>
+      <span>⏭ Próximo: <span style="color:#fef3c7">${nextText}</span></span>
+    </div>
+    ${statusLine}
+    <div style="color:#374151;font-size:10px;margin-top:5px;text-align:center">click para ejecutar</div>
+  `;
+}
+
+// ── Lógica de ejecución ───────────────────────────────────────────────────────
+
+async function _wdRun(manual = false) {
+  if (_wd.running) return;
+  _wd.running = true;
+  _wdRender();
+
   try {
     const r = await fetch('/api/invest/watchdog', { method: 'POST' });
     const d = await r.json();
-    _watchdogLastRun = new Date().toISOString();
+
+    _wd.lastRunAt  = Date.now();
+    _wd.lastResult = d.success ? d : { ...(d || {}), error: d.error };
 
     if (d.success) {
       if (d.sells > 0) {
-        console.log(`[watchdog] ✅ ${d.sells} posición(es) cerrada(s):`,
-          d.actions.filter(a => a.sold).map(a => `${a.symbol} ${a.pnlPct > 0 ? '+' : ''}${a.pnlPct?.toFixed?.(2) ?? '?'}%`).join(', ')
-        );
-        // Notificación visible si hay ventas
-        const sells = d.actions.filter(a => a.sold);
-        sells.forEach(s => {
-          const emoji = s.pnlPct >= 0 ? '🟢' : '🔴';
-          const type  = s.closeReason?.includes('stop') ? 'Stop Loss' : 'Take Profit';
-          console.warn(`[watchdog] ${emoji} ${type}: ${s.symbol} ${s.pnlPct >= 0 ? '+' : ''}${s.pnlPct?.toFixed?.(2) ?? '?'}% — Precio: $${s.currentPrice}`);
-        });
-        // Refrescar vista de posiciones si está visible
+        // Notificación toast para ventas
+        _wdShowToast(d.actions.filter(a => a.sold));
+        // Refrescar vista de posiciones
         if (typeof loadInvestPositions === 'function') loadInvestPositions().catch(() => {});
-      } else {
-        console.log(`[watchdog] 👁 ${d.checked} pos. revisadas · fuente: ${d.priceSource} · sin ventas`);
       }
+      if (!manual) console.log(`[watchdog] ✅ ${d.checked} pos. · ${d.sells} ventas · ${d.priceSource}`);
+    } else {
+      console.warn('[watchdog] Error del backend:', d.error);
     }
   } catch (e) {
-    console.warn('[watchdog] Error:', e.message);
+    _wd.lastResult = { error: e.message, sells: 0, checked: 0, holds: 0, errors: 1 };
+    console.warn('[watchdog] Excepción:', e.message);
+  } finally {
+    _wd.running   = false;
+    _wd.nextRunAt = Date.now() + _wd.INTERVAL_MS;
+    _wdRender();
   }
 }
 
+function _wdShowToast(sells) {
+  const existing = document.getElementById('watchdog-toast');
+  if (existing) existing.remove();
+
+  const toast = document.createElement('div');
+  toast.id = 'watchdog-toast';
+  toast.style.cssText = `
+    position:fixed; top:16px; right:16px; z-index:10000;
+    background:#064e3b; border:1px solid #059669;
+    border-radius:12px; padding:12px 16px;
+    font-size:12px; color:#6ee7b7;
+    box-shadow:0 4px 20px rgba(0,0,0,0.7);
+    max-width:300px;
+  `;
+
+  const lines = sells.map(s => {
+    const icon  = (s.pnlPct ?? 0) >= 0 ? '🟢' : '🔴';
+    const type  = (s.closeReason || '').includes('stop') ? 'Stop Loss' : 'Take Profit';
+    const pct   = typeof s.pnlPct === 'number' ? s.pnlPct.toFixed(2) : '?';
+    return `${icon} <b>${s.symbol}</b> · ${type} · ${(s.pnlPct??0) >= 0 ? '+' : ''}${pct}%`;
+  }).join('<br>');
+
+  toast.innerHTML = `<div style="font-weight:700;margin-bottom:6px">🔔 Watchdog — ${sells.length} venta(s)</div>${lines}`;
+  document.body.appendChild(toast);
+  setTimeout(() => toast.remove(), 6000);
+}
+
+// ── Arranque ──────────────────────────────────────────────────────────────────
+
 function startWatchdog() {
-  if (_watchdogInterval) return;
-  const INTERVAL_MS = 30 * 60 * 1000; // 30 minutos
-  _watchdogInterval = setInterval(runWatchdog, INTERVAL_MS);
-  console.log('[watchdog] 🔔 Iniciado (cada 30 min). Primera comprobación en 10s...');
-  setTimeout(runWatchdog, 10000); // primera ejecución a los 10s
+  if (_wd.interval) return;
+
+  // Renderizar widget inmediatamente (antes del primer run)
+  _wdGetOrCreateWidget();
+  _wdRender();
+
+  // Actualizar el widget cada segundo para que el contador sea fluido
+  setInterval(_wdRender, 1000);
+
+  // Programar runs cada 30 min
+  _wd.interval  = setInterval(() => _wdRun(), _wd.INTERVAL_MS);
+  _wd.nextRunAt = Date.now() + 15000; // primera ejecución en 15s
+
+  // Primera ejecución a los 15s (dar tiempo a que la app cargue)
+  setTimeout(() => _wdRun(), 15000);
+
+  console.log('[watchdog] 🔔 Iniciado — widget visible · primera ejecución en 15s');
 }
 
-// Indicador visual del watchdog en la UI
-function injectWatchdogStatus() {
-  // Buscar sección de inversión para añadir badge de estado
-  const investSection = document.getElementById('content-invest') ||
-                        document.querySelector('[data-tab="invest"]');
-  if (!investSection || investSection.querySelector('.watchdog-badge')) return;
-
-  const badge = document.createElement('div');
-  badge.className = 'watchdog-badge fixed bottom-4 right-4 z-40 bg-gray-900 border border-emerald-700 rounded-xl px-3 py-2 text-xs text-emerald-400 shadow-lg cursor-pointer';
-  badge.title = 'Watchdog SL/TP activo';
-  badge.innerHTML = '🔔 Watchdog activo';
-  badge.onclick = () => runWatchdog().then(() => {
-    badge.innerHTML = '✅ Comprobado';
-    setTimeout(() => { badge.innerHTML = '🔔 Watchdog activo'; }, 3000);
-  });
-
-  // Actualizar timestamp del último run
-  setInterval(() => {
-    if (_watchdogLastRun) {
-      const mins = Math.round((Date.now() - new Date(_watchdogLastRun).getTime()) / 60000);
-      badge.innerHTML = `🔔 SL/TP · hace ${mins}m`;
-    }
-  }, 60000);
-
-  document.body.appendChild(badge);
-}
 
 // ═══════════════════════════════════════════════════════════════════════════
 // 5. AUTO-RUNNER DE ITERACIONES — cada 5 minutos
-//    Ejecuta iteraciones pendientes de ciclos activos.
 // ═══════════════════════════════════════════════════════════════════════════
 
 let _iterationRunnerInterval = null;
@@ -428,7 +542,7 @@ async function runPendingIterationsBackground() {
       if (hasLastIter && typeof loadValidation === 'function') await loadValidation();
     }
   } catch (e) {
-    console.warn('[iter-runner] Error en background runner:', e.message);
+    console.warn('[iter-runner] Error:', e.message);
   }
 }
 
@@ -449,12 +563,15 @@ window.setTab = function(tab) {
   }
 };
 
-// Arrancar todo al cargar
-document.addEventListener('DOMContentLoaded', () => {
-  setTimeout(() => {
-    startWatchdog();
-    startIterationRunner();
-    injectWatchdogStatus();
-  }, 5000);
-});
+// Arrancar todo en cuanto el DOM esté listo (sin esperar al DOMContentLoaded si ya pasó)
+function _initAll() {
+  startWatchdog();
+  startIterationRunner();
+}
 
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', _initAll);
+} else {
+  // DOM ya listo (script cargado después de DOMContentLoaded)
+  _initAll();
+}
