@@ -3191,7 +3191,8 @@ app.post('/api/invest/watchdog', async (req, res) => {
       sells:  actions.filter(a => a.sold).length,
       holds:  checked.length,
       errors: actions.filter(a => !a.sold).length,
-      actions, checked,
+      actions,
+      checkedDetails: checked,
     });
   } catch(e) {
     console.error('[watchdog] error:', e.message);
