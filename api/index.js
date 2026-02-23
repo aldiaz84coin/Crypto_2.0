@@ -1385,63 +1385,84 @@ app.get('/api/insights/keys-status', async (_req, res) => {
 });
 
 // ── POST /api/insights/analyze ───────────────────────────────────────────────
-// Analizar ciclos seleccionados con los 4 LLMs
+// Analiza N ciclos con hasta 7 LLMs — ANÁLISIS DUAL: clasificación + trading
 app.post('/api/insights/analyze', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
     const { cycleIds, mode } = req.body;
-    if (!cycleIds || !Array.isArray(cycleIds) || cycleIds.length === 0) {
-      return res.status(400).json({ success: false, error: 'cycleIds array requerido' });
-    }
-    
     const cycleMode = mode || 'normal';
-    const config    = await getConfig(cycleMode);
-    
-    // Obtener ciclos
-    const cycles = await cyclesManager.getCyclesDetails(redis, cycleIds);
+
+    // Cargar ciclos seleccionados (o todos los significativos si no se especifican)
+    const allCycles = await cyclesManager.listCycles(redis, cycleMode);
+    const cycles = cycleIds && cycleIds.length > 0
+      ? allCycles.filter(c => cycleIds.includes(c.id) && c.status === 'completed')
+      : allCycles.filter(c => c.status === 'completed' && c.isSignificant);
+
     if (cycles.length === 0) {
-      return res.status(404).json({ success: false, error: 'Ningún ciclo encontrado' });
-    }
-    
-    // Obtener API keys
-    const apiKeys = {
-      gemini: await getRedisKey('GEMINI_API_KEY'),
-      claude: await getRedisKey('ANTHROPIC_API_KEY'),
-      openai: await getRedisKey('OPENAI_API_KEY'),
-      groq:   await getRedisKey('GROQ_API_KEY')
-    };
-    
-    const configuredCount = Object.values(apiKeys).filter(Boolean).length;
-    if (configuredCount === 0) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'No hay API keys configuradas. Configure al menos 2 LLMs en la pestaña APIs.' 
+      return res.status(400).json({
+        success: false,
+        error: 'No hay ciclos completados disponibles para analizar.'
       });
     }
-    
-    // Analizar con LLMs (30-60s)
-    const responses = await llmInsights.analyzeWithLLMs(cycles, config, cycleMode, apiKeys);
-    
-    // Calcular consenso
+
+    // Config del algoritmo de clasificación
+    const config = await getConfig(cycleMode);
+
+    // API keys de todos los LLMs configurados
+    const apiKeys = {
+      gemini:   await getRedisKey('GEMINI_API_KEY'),
+      claude:   await getRedisKey('ANTHROPIC_API_KEY'),
+      openai:   await getRedisKey('OPENAI_API_KEY'),
+      groq:     await getRedisKey('GROQ_API_KEY'),
+      mistral:  await getRedisKey('MISTRAL_API_KEY'),
+      cohere:   await getRedisKey('COHERE_API_KEY'),
+      cerebras: await getRedisKey('CEREBRAS_API_KEY'),
+    };
+
+    const activeKeys = Object.values(apiKeys).filter(Boolean).length;
+    if (activeKeys < 2) {
+      return res.status(400).json({
+        success: false,
+        error: 'Configure al menos 2 LLMs en la pestaña APIs.'
+      });
+    }
+
+    // Cargar investConfig y posiciones cerradas para análisis dual
+    const investConfig    = await getInvestConfig();
+    const allPositions    = await getPositions();
+    const closedPositions = allPositions.filter(p => p.status === 'closed');
+
+    // Analizar con LLMs — análisis dual clasificación + trading (30-90s)
+    const responses = await llmInsights.analyzeWithLLMs(
+      cycles,
+      config,
+      cycleMode,
+      apiKeys,
+      investConfig,
+      closedPositions
+    );
+
+    // Calcular consenso dual
     const consensusResult = llmInsights.calculateConsensus(responses);
-    
+
     res.json({
-      success: true,
-      cyclesAnalyzed: cycles.length,
-      mode: cycleMode,
+      success:         true,
+      cyclesAnalyzed:  cycles.length,
+      closedPositions: closedPositions.length,
+      mode:            cycleMode,
       responses,
-      consensus: consensusResult,
-      analyzedAt: new Date().toISOString()
+      consensus:       consensusResult,
+      analyzedAt:      new Date().toISOString(),
     });
-    
-  } catch(e) {
+
+  } catch (e) {
     console.error('insights/analyze error:', e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });
 
 // ── POST /api/insights/apply-consensus ───────────────────────────────────────
-// Aplicar ajustes del consenso al modelo
+// Aplicar ajustes del consenso — actualiza clasificación Y config de trading
 app.post('/api/insights/apply-consensus', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
@@ -1449,34 +1470,63 @@ app.post('/api/insights/apply-consensus', async (req, res) => {
     if (!consensus) {
       return res.status(400).json({ success: false, error: 'consensus object requerido' });
     }
-    
+
     const cycleMode = mode || 'normal';
-    const current   = await getConfig(cycleMode);
-    
-    // Aplicar ajustes del consenso
+
+    // ── 1. Actualizar config del algoritmo de clasificación ───────────────────
+    const current = await getConfig(cycleMode);
     const updated = JSON.parse(JSON.stringify(current));
-    
+
     if (consensus.metaWeights)        Object.assign(updated.metaWeights,        consensus.metaWeights);
     if (consensus.classification)     Object.assign(updated.classification,     consensus.classification);
     if (consensus.prediction)         Object.assign(updated.prediction,         consensus.prediction);
     if (consensus.potentialWeights)   Object.assign(updated.potentialWeights,   consensus.potentialWeights);
     if (consensus.resistanceWeights)  Object.assign(updated.resistanceWeights,  consensus.resistanceWeights);
-    
+
     updated.lastModified = new Date().toISOString();
-    updated.source = 'llm-consensus';
-    
-    // Guardar
-    const key = cycleMode === 'speculative' ? 'algorithm-config:speculative' : 'algorithm-config:normal';
-    await redisSet(key, updated);
-    
-    res.json({ 
-      success: true, 
-      applied: updated, 
-      mode: cycleMode,
-      message: `Configuración actualizada con consenso de LLMs para modelo ${cycleMode}` 
+    updated.source       = 'llm-consensus-dual';
+
+    const configKey = cycleMode === 'speculative' ? 'algorithm-config:speculative' : 'algorithm-config:normal';
+    await redisSet(configKey, updated);
+
+    // ── 2. Actualizar investConfig con ajustes de trading del consenso ────────
+    let investUpdated = null;
+    const tradingConfig = consensus.tradingConfig || {};
+    const hasTradingAdjustments = Object.keys(tradingConfig).some(
+      k => tradingConfig[k] !== null && tradingConfig[k] !== undefined
+    );
+
+    if (hasTradingAdjustments) {
+      const currentInvest = await getInvestConfig();
+      investUpdated = { ...currentInvest };
+
+      // Aplicar solo valores en rangos seguros
+      const safeApply = (field, min, max) => {
+        const val = Number(tradingConfig[field]);
+        if (!isNaN(val) && val >= min && val <= max) investUpdated[field] = val;
+      };
+
+      safeApply('takeProfitPct', 2,  50);   // Entre 2% y 50%
+      safeApply('stopLossPct',   1,  25);   // Entre 1% y 25%
+      safeApply('maxHoldCycles', 1,  20);   // Entre 1 y 20 ciclos
+
+      investUpdated.lastModified = new Date().toISOString();
+      investUpdated.source       = 'llm-consensus-dual';
+
+      await redisSet(INVEST_CONFIG_KEY, investUpdated);
+    }
+
+    res.json({
+      success:               true,
+      mode:                  cycleMode,
+      classificationApplied: updated,
+      tradingApplied:        investUpdated,
+      message: investUpdated
+        ? `Clasificación y trading actualizados con consenso de LLMs (${cycleMode})`
+        : `Clasificación actualizada con consenso de LLMs (${cycleMode}) — sin ajustes de trading`,
     });
-    
-  } catch(e) {
+
+  } catch (e) {
     console.error('insights/apply-consensus error:', e.message);
     res.status(500).json({ success: false, error: e.message });
   }
