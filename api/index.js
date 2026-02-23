@@ -37,6 +37,7 @@ const investManager     = require('./investment-manager');
 const exchangeConnector = require('./exchange-connector');
 const pumpDetector      = require('./pump-detector');
 const alertService      = require('./alert-service');
+const iterationEngine   = require('./iteration-engine');
 
 const DEFAULT_CONFIG            = algorithmConfig.DEFAULT_CONFIG;
 const DEFAULT_CONFIG_NORMAL     = algorithmConfig.DEFAULT_CONFIG_NORMAL;
@@ -2106,7 +2107,7 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
 app.post('/api/invest/buy-manual', async (req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
-    let { assetData, capitalUSD: overrideCapital } = req.body;
+    let { assetData, capitalUSD: overrideCapital, cycleDurationMs } = req.body;
 
     // Normalizar assetData: puede llegar con 'assetId' en vez de 'id' (objetos del detector PUMP)
     if (assetData && !assetData.id && assetData.assetId) assetData.id = assetData.assetId;
@@ -2180,10 +2181,11 @@ app.post('/api/invest/buy-manual', async (req, res) => {
     // Crear posición con cycleId especial para identificar origen PUMP
     const cycleId  = `pump_manual_${Date.now()}`;
     const position = investManager.createPosition(target, cycleId, cfg);
-    position.exchangeOrderId = order.orderId || position.exchangeOrderId;
-    position.orderDetails    = order;
-    position.executedAt      = new Date().toISOString();
-    position.source          = 'pump_detector'; // marcar origen
+    position.exchangeOrderId  = order.orderId || position.exchangeOrderId;
+    position.orderDetails     = order;
+    position.executedAt       = new Date().toISOString();
+    position.source           = 'pump_detector'; // marcar origen
+    position.cycleDurationMs  = cycleDurationMs || 43200000; // duración elegida en el modal
 
     const allPositions = [...positions, position];
     await savePositions(allPositions);
@@ -2947,6 +2949,170 @@ app.get('/api/pump/cron', async (req, res) => {
     res.json({ success: true, message: 'Cron iniciado' });
     setImmediate(() => executePumpScan().catch(e => console.error('[Cron] Error:', e.message)));
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/cycles/:cycleId/iterate ────────────────────────────────────────
+// Ejecuta UNA iteración del ciclo: obtiene precios (con fallback automático a
+// CryptoCompare y Binance), evalúa criterios de venta y registra el resultado.
+app.post('/api/cycles/:cycleId/iterate', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cycle = await cyclesManager.loadCycle(redis, req.params.cycleId);
+    if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+    if (cycle.status === 'completed') {
+      return res.status(400).json({ success: false, error: 'Ciclo ya completado' });
+    }
+
+    const positions    = await getPositions();
+    const investConfig = await getInvestConfig();
+    const apiKeys      = { cryptocompare: process.env.CRYPTOCOMPARE_API_KEY || '' };
+
+    const result = await iterationEngine.executeIteration(
+      redis, req.params.cycleId, cyclesManager, positions, investConfig, apiKeys
+    );
+
+    // Cerrar posiciones que activaron SL/TP en esta iteración
+    const sellResults = [];
+    if (result.toSell.length > 0) {
+      const allPositions = await getPositions();
+      const cfg  = investConfig;
+      const keys = await getExchangeKeys(cfg.exchange);
+
+      for (const { position, currentPrice, decision } of result.toSell) {
+        try {
+          const evaluation = investManager.evaluatePosition(position, currentPrice, position.cycleId, cfg);
+          const order      = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
+          const pos        = allPositions.find(p => p.id === position.id);
+          if (pos) {
+            investManager.closePosition(pos, evaluation);
+            pos.exchangeCloseOrderId = order.orderId;
+            pos.iterationClosedAt    = new Date().toISOString();
+            pos.iterationCloseReason = decision.reason;
+          }
+          sellResults.push({ assetId: position.assetId, symbol: position.symbol,
+            price: currentPrice, pnlPct: decision.pnlPct, reason: decision.reason, closed: true });
+        } catch (closeErr) {
+          console.error(`[iterate] Error cerrando ${position.id}:`, closeErr.message);
+          sellResults.push({ assetId: position.assetId, symbol: position.symbol,
+            pnlPct: decision.pnlPct, closed: false, error: closeErr.message });
+        }
+      }
+      await savePositions(allPositions);
+    }
+
+    res.json({
+      success:         true,
+      cycleId:         result.cycleId,
+      iterationNumber: result.iterationNumber,
+      totalIterations: result.totalIterations,
+      isLastIteration: result.isLastIteration,
+      timestamp:       result.timestamp,
+      assetsCount:     result.assetsCount,
+      fetchedCount:    result.fetchedCount,
+      failedCount:     result.failedCount,
+      staleCount:      result.staleCount,
+      priceSource:     result.priceSource,
+      decisionsCount:  Object.keys(result.decisions).length,
+      sellsExecuted:   sellResults.length,
+      sellResults,
+      shouldComplete:  result.isLastIteration,
+    });
+  } catch (e) {
+    console.error('[iterate] error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── GET /api/cycles/:cycleId/iterations ──────────────────────────────────────
+// Devuelve el historial de iteraciones y el schedule completo de un ciclo.
+app.get('/api/cycles/:cycleId/iterations', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cycle = await cyclesManager.loadCycle(redis, req.params.cycleId);
+    if (!cycle) return res.status(404).json({ success: false, error: 'Ciclo no encontrado' });
+
+    const durationMs   = cycle.durationMs || 43200000;
+    const schedule     = iterationEngine.getIterationSchedule(cycle.startTime, durationMs);
+    const iterations   = cycle.iterations || [];
+    const nextIterTime = iterationEngine.getNextIterationTime(cycle);
+
+    const enrichedIterations = iterations.map((iter, idx) => ({
+      ...iter,
+      scheduledTime: schedule[idx] || null,
+      delayMs: schedule[idx] ? iter.timestamp - schedule[idx] : 0,
+    }));
+
+    const pending = schedule.slice(iterations.length).map((ts, i) => ({
+      iterationIndex:  iterations.length + i,
+      iterationNumber: iterations.length + i + 1,
+      scheduledTime:   ts,
+      status:          ts <= Date.now() ? 'due' : 'upcoming',
+    }));
+
+    res.json({
+      success:            true,
+      cycleId:            cycle.id,
+      status:             cycle.status,
+      durationMs,
+      startTime:          cycle.startTime,
+      endTime:            cycle.endTime,
+      totalScheduled:     schedule.length,
+      completedCount:     iterations.length,
+      pendingCount:       pending.length,
+      nextIterationAt:    nextIterTime,
+      iterationsComplete: cycle.iterationsComplete || false,
+      iterations:         enrichedIterations,
+      pending,
+    });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── POST /api/cycles/run-pending-iterations ───────────────────────────────────
+// Ejecuta todas las iteraciones pendientes de todos los ciclos activos.
+// Llamado periódicamente desde el frontend (cada 5 min) para mantener el
+// sistema al día incluso si el usuario no está en la pestaña de validación.
+app.post('/api/cycles/run-pending-iterations', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const activeIds = await cyclesManager.getActiveCycles(redis);
+    if (!activeIds.length) return res.json({ success: true, message: 'No hay ciclos activos', processed: [] });
+
+    const cycles       = await cyclesManager.getCyclesDetails(redis, activeIds);
+    const positions    = await getPositions();
+    const investConfig = await getInvestConfig();
+    const apiKeys      = { cryptocompare: process.env.CRYPTOCOMPARE_API_KEY || '' };
+
+    const processed = [];
+    for (const cycle of cycles) {
+      if (cycle.status === 'completed') continue;
+      if (!iterationEngine.hasIterationDue(cycle)) continue;
+
+      try {
+        const result = await iterationEngine.executeIteration(
+          redis, cycle.id, cyclesManager, positions, investConfig, apiKeys
+        );
+        processed.push({
+          cycleId:         cycle.id,
+          iterationNumber: result.iterationNumber,
+          fetchedCount:    result.fetchedCount,
+          staleCount:      result.staleCount,
+          sellsTriggered:  result.toSell.length,
+          isLastIteration: result.isLastIteration,
+          shouldComplete:  result.isLastIteration,
+        });
+        // Pausa entre ciclos para no saturar APIs
+        await new Promise(r => setTimeout(r, 1500));
+      } catch (err) {
+        processed.push({ cycleId: cycle.id, error: err.message });
+      }
+    }
+
+    res.json({ success: true, processed, count: processed.length });
+  } catch (e) {
+    res.status(500).json({ success: false, error: e.message });
+  }
 });
 
 // ── Arranque local ────────────────────────────────────────────────────────────
