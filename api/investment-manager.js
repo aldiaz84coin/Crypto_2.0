@@ -148,9 +148,18 @@ function evaluatePosition(position, currentPrice, cycleId, investConfig) {
   let decision = 'hold';
   let reason   = '';
 
+  const predictedTarget = (position.predictedChange || 0);
+  const hitPredictionTarget = predictedTarget > 0
+    && pnlPct > 0
+    && pnlPct >= predictedTarget
+    && pnlPct < cfg.takeProfitPct; // solo si NO alcanzó ya el TP configurado
+
   if (pnlPct >= cfg.takeProfitPct) {
     decision = 'sell';
     reason   = `take_profit: +${pnlPct.toFixed(2)}% ≥ umbral ${cfg.takeProfitPct}%`;
+  } else if (hitPredictionTarget) {
+    decision = 'sell';
+    reason   = `prediction_target: +${pnlPct.toFixed(2)}% ≥ predicción +${predictedTarget.toFixed(2)}%`;
   } else if (pnlPct <= -cfg.stopLossPct) {
     decision = 'sell';
     reason   = `stop_loss: ${pnlPct.toFixed(2)}% ≤ −${cfg.stopLossPct}%`;

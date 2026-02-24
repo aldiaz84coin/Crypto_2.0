@@ -221,6 +221,17 @@ function evaluateSellDecision(position, currentPrice, investConfig, iterationInd
     };
   }
 
+  // ── Predicción del algoritmo alcanzada (aunque sea menor que el TP) ────────
+  const predictedTarget = position.predictedChange || 0;
+  if (predictedTarget > 0 && pnlPct > 0 && pnlPct >= predictedTarget) {
+    return {
+      action:  'sell',
+      reason:  `Predicción alcanzada: +${pnlPct.toFixed(2)}% ≥ predicción +${predictedTarget.toFixed(2)}%`,
+      urgency: 'medium',
+      pnlPct,
+    };
+  }
+
   // ── Última iteración: cierre obligatorio si no hay ganancia ───────────────
   if (isLastIter) {
     if (pnlPct <= 0) {
