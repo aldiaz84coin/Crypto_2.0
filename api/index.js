@@ -3371,19 +3371,55 @@ app.post('/api/invest/watchdog', async (req, res) => {
           posChanged = true;
           actions.push({ ...checkEntry, sold: true, reason, pnlUSD: parseFloat(pnlUSD.toFixed(4)), netPnL: parseFloat(netPnL.toFixed(4)), order });
 
+          const _wdHoldMs  = position.openedAt ? Date.now() - new Date(position.openedAt).getTime() : null;
+          const _predicted = position.predictedChange || 0;
+          const _pnlPctF   = parseFloat(pnlPct.toFixed(2));
           await appendInvestLog({
-            type: 'watchdog_close', subtype: hitSL ? 'stop_loss' : 'take_profit',
-            cycleId: position.cycleId || null, timestamp: new Date().toISOString(),
-            config: { mode: cfg.mode, exchange: cfg.exchange, takeProfitPct: cfg.takeProfitPct, stopLossPct: cfg.stopLossPct },
+            type:      'watchdog_close',
+            subtype:   hitSL ? 'stop_loss' : 'take_profit',
+            cycleId:   position.cycleId || null,
+            timestamp: new Date().toISOString(),
+            origin:    'frontend_watchdog',
+            config: {
+              mode: cfg.mode, exchange: cfg.exchange,
+              takeProfitPct: cfg.takeProfitPct, stopLossPct: cfg.stopLossPct,
+            },
             position: {
-              id: position.id, symbol: position.symbol, assetId: position.assetId,
-              capitalUSD: position.capitalUSD, units: position.units,
+              id: position.id, symbol: position.symbol, name: position.name || position.symbol,
+              assetId: position.assetId, capitalUSD: position.capitalUSD, units: position.units,
               entryPrice: position.entryPrice, exitPrice: currentPrice,
               takeProfitPrice: tpPrice, stopLossPrice: slPrice,
-              pnlPct: parseFloat(pnlPct.toFixed(2)), pnlUSD: parseFloat(pnlUSD.toFixed(4)),
-              netPnL: parseFloat(netPnL.toFixed(4)), priceSource: priceInfo?.source || meta.source,
+              pnlPct: _pnlPctF, pnlUSD: parseFloat(pnlUSD.toFixed(4)),
+              netPnL: parseFloat(netPnL.toFixed(4)),
+              exitFeeUSD: parseFloat(exitFee.toFixed(4)),
+              totalFeesUSD: parseFloat(((position.entryFeeUSD || 0) + exitFee).toFixed(4)),
+              priceSource: priceInfo?.source || meta.source,
             },
+            holdInfo: {
+              openedAt:        position.openedAt || null,
+              closedAt:        new Date().toISOString(),
+              holdDurationMs:  _wdHoldMs,
+              holdDurationHrs: _wdHoldMs ? parseFloat((_wdHoldMs / 3600000).toFixed(2)) : null,
+              holdCycles:      position.holdCycles || 0,
+            },
+            prediction: {
+              predictedChangePct: _predicted,
+              actualChangePct:    _pnlPctF,
+              deviationPct:       parseFloat((_pnlPctF - _predicted).toFixed(2)),
+              correct: _predicted !== 0
+                ? ((_predicted > 0 && _pnlPctF > 0) || (_predicted < 0 && _pnlPctF < 0))
+                : null,
+              boostPower: position.boostPower || null,
+            },
+            levels: {
+              tpPct:    parseFloat(tpPct.toFixed(2)),
+              slPct:    parseFloat(slPct.toFixed(2)),
+              distToTP: tpPrice ? parseFloat(((currentPrice - tpPrice) / tpPrice * 100).toFixed(2)) : null,
+              distToSL: slPrice ? parseFloat(((currentPrice - slPrice) / slPrice * 100).toFixed(2)) : null,
+            },
+            trigger: hitSL ? 'stop_loss' : 'take_profit',
             reason,
+            order: order ? { orderId: order.orderId, status: order.status } : null,
           });
         } catch (sellErr) {
           console.error(`[watchdog] Error cerrando ${position.symbol}:`, sellErr.message);
@@ -3396,13 +3432,75 @@ app.post('/api/invest/watchdog', async (req, res) => {
 
     if (posChanged) await savePositions(positions);
 
+    const _wdSellsCount  = actions.filter(a => a.sold).length;
+    const _wdErrorsCount = actions.filter(a => !a.sold && a.error).length;
+    const _wdHoldsCount  = checked.length;
+
+    // ── Snapshot de posiciones en hold para trazabilidad ─────────────────
+    const _wdHoldSnapshot = checked.map(c => {
+      const pos      = open.find(p => p.assetId === c.assetId);
+      const pred     = pos?.predictedChange || 0;
+      const pnlF     = c.pnlPct ?? 0;
+      const holdMs   = pos?.openedAt ? Date.now() - new Date(pos.openedAt).getTime() : null;
+      const distToTP = c.takeProfitPrice && c.currentPrice
+        ? parseFloat(((c.takeProfitPrice - c.currentPrice) / c.currentPrice * 100).toFixed(2)) : null;
+      const distToSL = c.stopLossPrice && c.currentPrice
+        ? parseFloat(((c.currentPrice - c.stopLossPrice) / c.stopLossPrice * 100).toFixed(2)) : null;
+      return {
+        symbol:          c.symbol,
+        assetId:         c.assetId,
+        entryPrice:      c.entryPrice,
+        currentPrice:    c.currentPrice,
+        pnlPct:          pnlF,
+        predictedPct:    pred,
+        deviationPct:    parseFloat((pnlF - pred).toFixed(2)),
+        distToTP,
+        distToSL,
+        holdDurationHrs: holdMs ? parseFloat((holdMs / 3600000).toFixed(1)) : null,
+        holdCycles:      pos?.holdCycles || 0,
+        boostPower:      pos?.boostPower || null,
+        priceSource:     c.priceSource,
+        isStale:         c.isStale || false,
+      };
+    });
+
+    // ── PnL acumulado de este scan ───────────────────────────────────────
+    const _soldActs   = actions.filter(a => a.sold);
+    const _scanPnlUSD = _soldActs.reduce((acc, a) => acc + (a.pnlUSD  || 0), 0);
+    const _scanNetPnL = _soldActs.reduce((acc, a) => acc + (a.netPnL  || 0), 0);
+
+    // ── Registrar el scan SIEMPRE (haya o no ventas) ─────────────────────
+    await appendInvestLog({
+      type:      'watchdog_scan',
+      timestamp: new Date().toISOString(),
+      trigger:   'frontend_timer',
+      config: {
+        mode: cfg.mode, exchange: cfg.exchange,
+        takeProfitPct: cfg.takeProfitPct, stopLossPct: cfg.stopLossPct,
+      },
+      summary: {
+        checked:     open.length,
+        sells:       _wdSellsCount,
+        holds:       _wdHoldsCount,
+        errors:      _wdErrorsCount,
+        staleCount:  meta.staleIds?.length  || 0,
+        failedCount: meta.failedIds?.length || 0,
+        priceSource: meta.source,
+        scanPnlUSD:  parseFloat(_scanPnlUSD.toFixed(4)),
+        scanNetPnL:  parseFloat(_scanNetPnL.toFixed(4)),
+      },
+      holdSnapshot: _wdHoldSnapshot,
+      staleIds:  meta.staleIds  || [],
+      failedIds: meta.failedIds || [],
+    });
+
     res.json({
       success: true, timestamp: new Date().toISOString(),
       checked: open.length, priceSource: meta.source,
       staleIds: meta.staleIds || [], failedIds: meta.failedIds || [],
-      sells:  actions.filter(a => a.sold).length,
-      holds:  checked.length,
-      errors: actions.filter(a => !a.sold).length,
+      sells:   _wdSellsCount,
+      holds:   _wdHoldsCount,
+      errors:  _wdErrorsCount,
       actions,
       checkedDetails: checked,
     });
@@ -3622,6 +3720,8 @@ async function serverWatchdog(source = 'internal') {
 
     const { prices, meta } = await fetchAndCachePrices(assetIds, symbolMap);
     let sells = 0; let holds = 0; let posChanged = false;
+    const _svCloses = [];
+    const _svHolds  = [];
 
     for (const position of open) {
       const priceInfo    = prices[position.assetId];
@@ -3638,18 +3738,120 @@ async function serverWatchdog(source = 'internal') {
       const hitSL   = !isStale && (slPrice ? currentPrice <= slPrice : pnlPct <= -Math.abs(slPct));
 
       if (hitTP || hitSL) {
+        const _svPnlUSD  = (currentPrice - position.entryPrice) * position.units;
+        const _svExitFee = position.capitalUSD * (cfg.feePct || 0.10) / 100;
+        const _svNetPnL  = _svPnlUSD - _svExitFee;
+        const _svHoldMs  = position.openedAt ? Date.now() - new Date(position.openedAt).getTime() : null;
+        const _svPred    = position.predictedChange || 0;
+        const _svPnlF    = parseFloat(pnlPct.toFixed(2));
+
         position.status      = 'closed';
         position.closedAt    = new Date().toISOString();
         position.closePrice  = currentPrice;
         position.closeReason = hitTP ? 'takeProfit_server_wd' : 'stopLoss_server_wd';
-        position.pnlUSD      = parseFloat(((currentPrice - position.entryPrice) * position.units).toFixed(4));
-        position.pnlPct      = parseFloat(pnlPct.toFixed(2));
-        sells++; posChanged = true;
-        console.log(`[server-wd] 🔔 ${hitTP ? 'TP' : 'SL'} — ${position.symbol} · ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% · fuente: ${source}`);
-      } else { holds++; }
+        position.pnlUSD      = parseFloat(_svPnlUSD.toFixed(4));
+        position.pnlPct      = _svPnlF;
+        position.exitFeeUSD  = parseFloat(_svExitFee.toFixed(4));
+        position.netPnL      = parseFloat(_svNetPnL.toFixed(4));
+        sells++; posChanged  = true;
+
+        _svCloses.push({
+          type:      'watchdog_close',
+          subtype:   hitSL ? 'stop_loss' : 'take_profit',
+          cycleId:   position.cycleId || null,
+          timestamp: new Date().toISOString(),
+          origin:    'server_watchdog',
+          trigger:   source,
+          config: {
+            mode: cfg.mode, exchange: cfg.exchange,
+            takeProfitPct: cfg.takeProfitPct, stopLossPct: cfg.stopLossPct,
+          },
+          position: {
+            id: position.id, symbol: position.symbol, name: position.name || position.symbol,
+            assetId: position.assetId, capitalUSD: position.capitalUSD, units: position.units,
+            entryPrice: position.entryPrice, exitPrice: currentPrice,
+            takeProfitPrice: tpPrice, stopLossPrice: slPrice,
+            pnlPct: _svPnlF, pnlUSD: parseFloat(_svPnlUSD.toFixed(4)),
+            netPnL: parseFloat(_svNetPnL.toFixed(4)),
+            exitFeeUSD: parseFloat(_svExitFee.toFixed(4)),
+            totalFeesUSD: parseFloat(((position.entryFeeUSD || 0) + _svExitFee).toFixed(4)),
+            priceSource: priceInfo?.source || source,
+          },
+          holdInfo: {
+            openedAt:        position.openedAt || null,
+            closedAt:        position.closedAt,
+            holdDurationMs:  _svHoldMs,
+            holdDurationHrs: _svHoldMs ? parseFloat((_svHoldMs / 3600000).toFixed(2)) : null,
+            holdCycles:      position.holdCycles || 0,
+          },
+          prediction: {
+            predictedChangePct: _svPred,
+            actualChangePct:    _svPnlF,
+            deviationPct:       parseFloat((_svPnlF - _svPred).toFixed(2)),
+            correct: _svPred !== 0
+              ? ((_svPred > 0 && _svPnlF > 0) || (_svPred < 0 && _svPnlF < 0))
+              : null,
+            boostPower: position.boostPower || null,
+          },
+          levels: {
+            tpPct:    parseFloat(tpPct.toFixed(2)),
+            slPct:    parseFloat(slPct.toFixed(2)),
+            distToTP: tpPrice ? parseFloat(((currentPrice - tpPrice) / tpPrice * 100).toFixed(2)) : null,
+            distToSL: slPrice ? parseFloat(((currentPrice - slPrice) / slPrice * 100).toFixed(2)) : null,
+          },
+        });
+        console.log(`[server-wd] 🔔 ${hitTP ? 'TP' : 'SL'} — ${position.symbol} · ${_svPnlF >= 0 ? '+' : ''}${_svPnlF}% · pred:${_svPred >= 0 ? '+' : ''}${_svPred}% dev:${parseFloat((_svPnlF - _svPred).toFixed(2))}% · ${source}`);
+      } else {
+        // Hold snapshot
+        const _svHoldMs2 = position.openedAt ? Date.now() - new Date(position.openedAt).getTime() : null;
+        const _svPred2   = position.predictedChange || 0;
+        const _svPnlF2   = parseFloat(pnlPct.toFixed(2));
+        _svHolds.push({
+          symbol:          position.symbol,
+          assetId:         position.assetId,
+          pnlPct:          _svPnlF2,
+          predictedPct:    _svPred2,
+          deviationPct:    parseFloat((_svPnlF2 - _svPred2).toFixed(2)),
+          distToTP: tpPrice ? parseFloat(((tpPrice - currentPrice) / currentPrice * 100).toFixed(2)) : null,
+          distToSL: slPrice ? parseFloat(((currentPrice - slPrice) / slPrice * 100).toFixed(2)) : null,
+          holdDurationHrs: _svHoldMs2 ? parseFloat((_svHoldMs2 / 3600000).toFixed(1)) : null,
+          holdCycles:      position.holdCycles || 0,
+          boostPower:      position.boostPower || null,
+          priceSource:     priceInfo?.source || source,
+        });
+        holds++;
+      }
     }
 
     if (posChanged) await savePositions(positions);
+
+    // Registrar cada cierre individual en el log
+    for (const _svEntry of _svCloses) await appendInvestLog(_svEntry);
+
+    // Registrar el scan completo (siempre, haya o no ventas)
+    const _svScanPnl = _svCloses.reduce((acc, e) => acc + (e.position?.pnlUSD || 0), 0);
+    const _svScanNet = _svCloses.reduce((acc, e) => acc + (e.position?.netPnL  || 0), 0);
+    await appendInvestLog({
+      type:      'watchdog_scan',
+      timestamp: new Date().toISOString(),
+      trigger:   source,
+      config: {
+        mode: cfg.mode, exchange: cfg.exchange,
+        takeProfitPct: cfg.takeProfitPct, stopLossPct: cfg.stopLossPct,
+      },
+      summary: {
+        checked:     open.length,
+        sells:       sells,
+        holds:       holds,
+        errors:      0,
+        staleCount:  meta?.staleIds?.length || 0,
+        priceSource: meta?.source || source,
+        scanPnlUSD:  parseFloat(_svScanPnl.toFixed(4)),
+        scanNetPnL:  parseFloat(_svScanNet.toFixed(4)),
+      },
+      holdSnapshot: _svHolds,
+    });
+
     await redisSet(SCHED_WD_KEY, { runAt: Date.now(), checked: open.length, sells, holds, source: meta?.source || source });
     await redis.del(SCHED_WD_LOCK);
     console.log(`[server-wd] ✅ ${open.length} pos. · ${sells} ventas · ${holds} hold · fuente: ${source}`);
