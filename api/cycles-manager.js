@@ -69,36 +69,32 @@ async function createCycle(redis, snapshot, config, durationMs, mode = 'normal')
   if (!redis) throw new Error('Redis no disponible');
 
   // Solo campos esenciales — evitar objetos grandes que superen el límite de Upstash
-  // Escalar la predicción a la ventana temporal del ciclo
-  // La predicción base del algoritmo asume 12h (43200000ms)
-  // Pro-rata: si el ciclo es de 6h, la predicción se ajusta x0.5
-  const BASE_DURATION_MS = 43200000; // 12h
-  const dur = (typeof durationMs === 'number' && durationMs >= 60000) ? durationMs : 43200000;
-  const scaleFactor = Math.min(2.0, Math.max(0.1, dur / BASE_DURATION_MS));
+  // Escalar la predicción a la ventana temporal usando modelo NO-LINEAL:
+  // La señal de momentum no se propaga linealmente en el tiempo.
+  // Fases: momentum (0..halflife) → logarítmica → reversión exponencial.
+  const temporalPrediction = require('./temporal-prediction');
+  const BASE_DURATION_MS   = temporalPrediction.BASE_DURATION_MS; // 12h canónico
+  const dur = (typeof durationMs === 'number' && durationMs >= 60000) ? durationMs : BASE_DURATION_MS;
   const isSignificant = dur >= 6 * 3600000; // ≥6h = significativo
 
-  const cleanSnapshot = snapshot.map(a => {
-    const basePred = typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0);
-    // Solo escalar si no es RUIDOSO (RUIDOSO siempre predice 0)
-    const scaledPred = (a.classification === 'RUIDOSO' || basePred === 0) ? 0 : parseFloat((basePred * scaleFactor).toFixed(2));
-    return {
-      id:                          a.id,
-      symbol:                      a.symbol,
-      name:                        a.name,
-      current_price:               a.current_price,
-      market_cap:                  a.market_cap,
-      total_volume:                a.total_volume,
-      price_change_percentage_24h: a.price_change_percentage_24h,
-      ath:                         a.ath,
-      atl:                         a.atl,
-      boostPower:                  a.boostPower,
-      boostPowerPercent:           a.boostPowerPercent,
-      classification:              a.classification,
-      predictedChange:             scaledPred,
-      basePrediction:              basePred,   // guardar predicción base (12h)
-      predictionScaleFactor:       scaleFactor
-    };
-  });
+  const cleanSnapshot = temporalPrediction.applyTemporalModel(snapshot, dur, mode).map(a => ({
+    id:                          a.id,
+    symbol:                      a.symbol,
+    name:                        a.name,
+    current_price:               a.current_price,
+    market_cap:                  a.market_cap,
+    total_volume:                a.total_volume,
+    price_change_percentage_24h: a.price_change_percentage_24h,
+    ath:                         a.ath,
+    atl:                         a.atl,
+    boostPower:                  a.boostPower,
+    boostPowerPercent:           a.boostPowerPercent,
+    classification:              a.classification,
+    predictedChange:             a.predictedChange,        // escala no-lineal aplicada
+    basePrediction:              a.basePrediction,         // predicción canónica a 12h
+    predictionScaleFactor:       a.temporalScaleFactor,    // factor real por clase/modo
+    temporalModel:               a.temporalModel,          // 'non-linear-v1'
+  }));
 
   const cycleId   = `cycle_${Date.now()}`;
   const startTime = Date.now();
@@ -110,7 +106,7 @@ async function createCycle(redis, snapshot, config, durationMs, mode = 'normal')
     durationMs:      dur,
     isSignificant,   // ≥6h
     mode:            mode === 'speculative' ? 'speculative' : 'normal',  // ← separación de modelos
-    predictionScaleFactor: scaleFactor,
+    temporalModel:   'non-linear-v1',  // predicciones escaladas por clase, no lineal global
     status:          'active',
     snapshot:        cleanSnapshot,
     config:          { boostPowerThreshold: config.boostPowerThreshold, modelType: mode },

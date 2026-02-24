@@ -38,6 +38,7 @@ const exchangeConnector = require('./exchange-connector');
 const pumpDetector      = require('./pump-detector');
 const alertService      = require('./alert-service');
 const iterationEngine   = require('./iteration-engine');
+const scenariosEndpoint = require('./scenarios-endpoint');
 
 const DEFAULT_CONFIG            = algorithmConfig.DEFAULT_CONFIG;
 const DEFAULT_CONFIG_NORMAL     = algorithmConfig.DEFAULT_CONFIG_NORMAL;
@@ -3767,6 +3768,18 @@ if (redis) {
     }
   }
 }
+
+// ── Escenarios alternativos (simulación de duraciones + configs de trading) ───
+scenariosEndpoint(
+  app,
+  redis,
+  cyclesManager,
+  getInvestConfig,
+  async (limit = 20) => {
+    const ids = await cyclesManager.getCompletedCycles(redis);
+    return cyclesManager.getCyclesDetails(redis, ids.slice(0, limit));
+  }
+);
 
 // ── Arranque local ────────────────────────────────────────────────────────────
 if (require.main === module) {
