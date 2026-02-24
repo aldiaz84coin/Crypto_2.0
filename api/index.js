@@ -2209,6 +2209,201 @@ app.post('/api/invest/execute', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ── POST /api/invest/cycle-analysis ─────────────────────────────────────────
+// READ-ONLY — Diagnóstico del ciclo activo sin modificar posiciones ni holdCycles
+app.post('/api/invest/cycle-analysis', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const now       = Date.now();
+
+    const openPositions = positions.filter(p => p.status === 'open');
+    if (!openPositions.length) {
+      return res.json({ success: true, hasCycle: false, message: 'Sin posiciones abiertas.', positions: [], summary: null, recommendations: [] });
+    }
+
+    // ── Precios actuales con fallback ────────────────────────────────────────
+    const assetIds = [...new Set(openPositions.map(p => p.assetId))];
+    let prices = {}, priceSource = 'none';
+
+    // Intento 1: Redis price cache
+    try {
+      const cached = await redisGet('price_cache:latest');
+      if (cached && (now - (cached.fetchedAt || 0)) < 10 * 60 * 1000) {
+        for (const id of assetIds) { if (cached.prices?.[id]?.usd) prices[id] = cached.prices[id]; }
+        if (Object.keys(prices).length > 0) priceSource = 'redis_cache';
+      }
+    } catch(_) {}
+
+    // Intento 2: CoinGecko
+    if (Object.keys(prices).length < assetIds.length) {
+      try {
+        const pRes = await axios.get(
+          `https://api.coingecko.com/api/v3/simple/price?ids=${assetIds.join(',')}&vs_currencies=usd`,
+          { timeout: 6000 }
+        );
+        for (const [id, val] of Object.entries(pRes.data || {})) prices[id] = val;
+        priceSource = 'coingecko';
+      } catch(_) {}
+    }
+
+    // ── Ciclos activos para info de tiempo ───────────────────────────────────
+    let cycleMap = {};
+    try {
+      const activeIds = await cyclesManager.getActiveCycles(redis);
+      if (activeIds.length) {
+        const details = await cyclesManager.getCyclesDetails(redis, activeIds);
+        for (const c of details) cycleMap[c.id] = c;
+      }
+    } catch(_) {}
+
+    // ── Analizar cada posición ────────────────────────────────────────────────
+    const positionAnalysis = [], deviationFlags = [];
+
+    for (const pos of openPositions) {
+      const currentPrice = prices[pos.assetId]?.usd || pos.currentPrice || pos.entryPrice;
+      const entry        = pos.entryPrice;
+      const pnlPct       = ((currentPrice - entry) / entry) * 100;
+      const predicted    = parseFloat(pos.predictedChange || 0);
+      const deviation    = pnlPct - predicted;
+      const absDeviation = Math.abs(deviation);
+      const openedAt     = pos.openedAt ? new Date(pos.openedAt).getTime() : now;
+      const holdMs       = now - openedAt;
+      const cyc          = pos.cycleId ? cycleMap[pos.cycleId] : null;
+      const cycleEndMs   = cyc ? (cyc.endTime - now) : null;
+      const cycleProgPct = cyc ? Math.min(100, Math.round((now - cyc.startTime) / (cyc.durationMs || 1) * 100)) : null;
+      const tpPct        = cfg.takeProfitPct || 10;
+      const slPct        = cfg.stopLossPct   || 5;
+      const distToTP     = tpPct - pnlPct;
+      const distToSL     = pnlPct + slPct;
+
+      let status, statusIcon;
+      if (pnlPct >= tpPct)               { status = 'TP_REACHED';  statusIcon = '🟢'; }
+      else if (pnlPct <= -slPct)         { status = 'SL_REACHED';  statusIcon = '🔴'; }
+      else if (pnlPct >= tpPct * 0.7)   { status = 'NEAR_TP';     statusIcon = '🟡'; }
+      else if (distToSL < slPct * 0.3)  { status = 'NEAR_SL';     statusIcon = '🟠'; }
+      else if (pnlPct >= 0)              { status = 'PROFITABLE';  statusIcon = '🔵'; }
+      else                               { status = 'LOSING';      statusIcon = '⚫'; }
+
+      if (absDeviation > 10) {
+        deviationFlags.push({ symbol: pos.symbol, deviation: parseFloat(deviation.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)), predicted, type: deviation < 0 ? 'underperform' : 'overperform', severity: absDeviation > 20 ? 'high' : 'medium' });
+      }
+
+      positionAnalysis.push({
+        id: pos.id, symbol: pos.symbol, name: pos.name, assetId: pos.assetId,
+        classification: pos.classification || '—',
+        boostPower:     parseFloat(((pos.boostPower || 0) * 100).toFixed(1)),
+        entryPrice:     parseFloat(entry.toFixed(6)),
+        currentPrice:   parseFloat(currentPrice.toFixed(6)),
+        takeProfitPrice: pos.takeProfitPrice, stopLossPrice: pos.stopLossPrice,
+        pnlPct:         parseFloat(pnlPct.toFixed(2)),
+        pnlUSD:         parseFloat(((currentPrice - entry) * pos.units).toFixed(4)),
+        predictedChange: predicted,
+        deviation:      parseFloat(deviation.toFixed(2)),
+        absDeviation:   parseFloat(absDeviation.toFixed(2)),
+        distToTP:       parseFloat(distToTP.toFixed(2)),
+        distToSL:       parseFloat(distToSL.toFixed(2)),
+        capitalUSD:     pos.capitalUSD,
+        holdCycles:     pos.holdCycles || 0,
+        maxHoldCycles:  pos.maxHoldCycles || cfg.maxHoldCycles || 3,
+        holdHrs:        parseFloat((holdMs / 3600000).toFixed(1)),
+        cycleProgressPct: cycleProgPct,
+        cycleRemainingMs: cycleEndMs,
+        status, statusIcon, openedAt: pos.openedAt,
+      });
+    }
+
+    // ── Métricas agregadas ────────────────────────────────────────────────────
+    const totalInvested   = positionAnalysis.reduce((s, p) => s + p.capitalUSD, 0);
+    const totalPnlUSD     = positionAnalysis.reduce((s, p) => s + p.pnlUSD, 0);
+    const totalPnlPct     = totalInvested > 0 ? (totalPnlUSD / totalInvested) * 100 : 0;
+    const avgDeviation    = positionAnalysis.reduce((s, p) => s + p.deviation, 0) / positionAnalysis.length;
+    const avgAbsDeviation = positionAnalysis.reduce((s, p) => s + p.absDeviation, 0) / positionAnalysis.length;
+    const profitableCount = positionAnalysis.filter(p => p.pnlPct > 0).length;
+    const nearTPCount     = positionAnalysis.filter(p => ['TP_REACHED','NEAR_TP'].includes(p.status)).length;
+    const nearSLCount     = positionAnalysis.filter(p => ['SL_REACHED','NEAR_SL'].includes(p.status)).length;
+    const overperforming  = positionAnalysis.filter(p => p.deviation > 5).length;
+    const underperforming = positionAnalysis.filter(p => p.deviation < -5).length;
+    const avgPnl          = positionAnalysis.reduce((s, p) => s + p.pnlPct, 0) / positionAnalysis.length;
+
+    let marketSentiment;
+    if (avgPnl > 3)       marketSentiment = { label: 'Alcista generalizado', icon: '🚀', color: 'green' };
+    else if (avgPnl > 0)  marketSentiment = { label: 'Ligeramente positivo', icon: '📈', color: 'blue' };
+    else if (avgPnl > -3) marketSentiment = { label: 'Lateral / neutro',     icon: '➡️', color: 'gray' };
+    else                  marketSentiment = { label: 'Presión bajista',       icon: '📉', color: 'red' };
+
+    // ── Recomendaciones accionables ────────────────────────────────────────────
+    const recommendations = [];
+
+    if (avgDeviation < -8 && positionAnalysis.length >= 2) {
+      recommendations.push({ type: 'algorithm', severity: 'high', icon: '⚠️',
+        title: 'Sobreestimación sistemática del algoritmo',
+        detail: `Las posiciones rinden ${Math.abs(avgDeviation).toFixed(1)}% por debajo de lo predicho en media. Considera reducir invertibleTarget en config o revisar pesos de potencial.`,
+        action: 'Revisar configuración → reducir invertibleTarget' });
+    }
+
+    if (nearSLCount >= Math.ceil(positionAnalysis.length * 0.5)) {
+      recommendations.push({ type: 'risk', severity: 'high', icon: '🔴',
+        title: `${nearSLCount} posiciones cerca del Stop Loss`,
+        detail: `Más del 50% del portfolio está en zona de riesgo. El mercado puede estar girando. Considera cerrar manualmente las posiciones más comprometidas.`,
+        action: 'Revisar posiciones en rojo y cerrar manualmente si es necesario' });
+    }
+
+    const cycleBound = positionAnalysis.filter(p => p.holdCycles >= p.maxHoldCycles - 1);
+    if (cycleBound.length > 0) {
+      recommendations.push({ type: 'cycle', severity: 'medium', icon: '⏰',
+        title: `${cycleBound.length} posición(es) en último ciclo de hold`,
+        detail: `${cycleBound.map(p => p.symbol).join(', ')} alcanzarán maxHoldCycles en la próxima iteración y se cerrarán automáticamente.`,
+        action: 'Monitorizar — cierre automático en próxima iteración' });
+    }
+
+    if (avgDeviation > 10 && nearTPCount >= 1) {
+      recommendations.push({ type: 'opportunity', severity: 'low', icon: '💡',
+        title: 'Posiciones superando predicciones',
+        detail: `El ciclo va ${avgDeviation.toFixed(1)}% por encima de lo predicho. Posiciones cerca de TP cerrarán con ganancias superiores a lo esperado.`,
+        action: 'Sin acción — sistema funcionando óptimamente' });
+    }
+
+    if (avgAbsDeviation > 12 && overperforming > 0 && underperforming > 0) {
+      recommendations.push({ type: 'algorithm', severity: 'medium', icon: '📊',
+        title: 'Alta varianza entre posiciones',
+        detail: `${overperforming} posiciones superan la predicción y ${underperforming} la incumplen. Alta dispersión intra-categoría INVERTIBLE.`,
+        action: 'Revisar pesos de boostPower para reducir varianza' });
+    }
+
+    if (recommendations.length === 0) {
+      recommendations.push({ type: 'ok', severity: 'low', icon: '✅',
+        title: 'Ciclo en marcha sin desviaciones significativas',
+        detail: `Desempeño promedio (${totalPnlPct.toFixed(2)}%) alineado con predicciones. Desviación media ${avgAbsDeviation.toFixed(1)}% dentro de rango aceptable.`,
+        action: 'Mantener configuración actual' });
+    }
+
+    res.json({
+      success: true, hasCycle: true,
+      timestamp: new Date().toISOString(),
+      priceSource, marketSentiment,
+      summary: {
+        totalPositions: positionAnalysis.length, profitableCount,
+        losingCount: positionAnalysis.length - profitableCount,
+        nearTPCount, nearSLCount,
+        totalInvestedUSD: parseFloat(totalInvested.toFixed(2)),
+        totalPnlUSD:      parseFloat(totalPnlUSD.toFixed(4)),
+        totalPnlPct:      parseFloat(totalPnlPct.toFixed(2)),
+        avgDeviation:     parseFloat(avgDeviation.toFixed(2)),
+        avgAbsDeviation:  parseFloat(avgAbsDeviation.toFixed(2)),
+        overperforming, underperforming, deviationFlags,
+      },
+      positions: positionAnalysis,
+      recommendations,
+    });
+
+  } catch(e) {
+    console.error('[cycle-analysis] Error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ── POST /api/invest/evaluate ────────────────────────────────────────────────
 // Al completar un ciclo: evalúa posiciones abiertas y decide vender/mantener
 app.post('/api/invest/evaluate', async (req, res) => {
