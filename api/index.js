@@ -1672,6 +1672,8 @@ const POSITIONS_KEY      = 'invest-positions';
 const INVEST_LOG_KEY     = 'invest-cycle-log';
 const PRICE_CACHE_KEY    = 'invest-price-cache';
 const PRICE_STALE_MAX_MS = 4 * 60 * 60 * 1000; // 4h
+const INVEST_ROUNDS_KEY  = 'invest-rounds';       // historial de rondas
+const CURR_ROUND_KEY     = 'invest-current-round'; // ronda activa
 
 // ── Caché de precios ─────────────────────────────────────────────────────────
 // REGLA: nunca se persiste un precio 0, null o NaN.
@@ -1822,6 +1824,23 @@ async function getPositions() {
 async function savePositions(positions) {
   await redisSet(POSITIONS_KEY, positions);
 }
+
+// ── Rondas de inversión ───────────────────────────────────────────────────────
+async function getRounds() {
+  const stored = await redisGet(INVEST_ROUNDS_KEY);
+  if (stored && Array.isArray(stored)) return stored;
+  if (stored && typeof stored === 'string') { try { return JSON.parse(stored); } catch(_){} }
+  return [];
+}
+async function saveRounds(rounds) { await redisSet(INVEST_ROUNDS_KEY, rounds); }
+
+async function getCurrentRound() {
+  const stored = await redisGet(CURR_ROUND_KEY);
+  if (stored && typeof stored === 'object') return stored;
+  if (stored && typeof stored === 'string') { try { return JSON.parse(stored); } catch(_){} }
+  return null;
+}
+async function saveCurrentRound(round) { await redisSet(CURR_ROUND_KEY, round); }
 
 async function getInvestLog() {
   const stored = await redisGet(INVEST_LOG_KEY);
@@ -2207,201 +2226,6 @@ app.post('/api/invest/execute', async (req, res) => {
       orders
     });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-// ── POST /api/invest/cycle-analysis ─────────────────────────────────────────
-// READ-ONLY — Diagnóstico del ciclo activo sin modificar posiciones ni holdCycles
-app.post('/api/invest/cycle-analysis', async (req, res) => {
-  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
-  try {
-    const cfg       = await getInvestConfig();
-    const positions = await getPositions();
-    const now       = Date.now();
-
-    const openPositions = positions.filter(p => p.status === 'open');
-    if (!openPositions.length) {
-      return res.json({ success: true, hasCycle: false, message: 'Sin posiciones abiertas.', positions: [], summary: null, recommendations: [] });
-    }
-
-    // ── Precios actuales con fallback ────────────────────────────────────────
-    const assetIds = [...new Set(openPositions.map(p => p.assetId))];
-    let prices = {}, priceSource = 'none';
-
-    // Intento 1: Redis price cache
-    try {
-      const cached = await redisGet('price_cache:latest');
-      if (cached && (now - (cached.fetchedAt || 0)) < 10 * 60 * 1000) {
-        for (const id of assetIds) { if (cached.prices?.[id]?.usd) prices[id] = cached.prices[id]; }
-        if (Object.keys(prices).length > 0) priceSource = 'redis_cache';
-      }
-    } catch(_) {}
-
-    // Intento 2: CoinGecko
-    if (Object.keys(prices).length < assetIds.length) {
-      try {
-        const pRes = await axios.get(
-          `https://api.coingecko.com/api/v3/simple/price?ids=${assetIds.join(',')}&vs_currencies=usd`,
-          { timeout: 6000 }
-        );
-        for (const [id, val] of Object.entries(pRes.data || {})) prices[id] = val;
-        priceSource = 'coingecko';
-      } catch(_) {}
-    }
-
-    // ── Ciclos activos para info de tiempo ───────────────────────────────────
-    let cycleMap = {};
-    try {
-      const activeIds = await cyclesManager.getActiveCycles(redis);
-      if (activeIds.length) {
-        const details = await cyclesManager.getCyclesDetails(redis, activeIds);
-        for (const c of details) cycleMap[c.id] = c;
-      }
-    } catch(_) {}
-
-    // ── Analizar cada posición ────────────────────────────────────────────────
-    const positionAnalysis = [], deviationFlags = [];
-
-    for (const pos of openPositions) {
-      const currentPrice = prices[pos.assetId]?.usd || pos.currentPrice || pos.entryPrice;
-      const entry        = pos.entryPrice;
-      const pnlPct       = ((currentPrice - entry) / entry) * 100;
-      const predicted    = parseFloat(pos.predictedChange || 0);
-      const deviation    = pnlPct - predicted;
-      const absDeviation = Math.abs(deviation);
-      const openedAt     = pos.openedAt ? new Date(pos.openedAt).getTime() : now;
-      const holdMs       = now - openedAt;
-      const cyc          = pos.cycleId ? cycleMap[pos.cycleId] : null;
-      const cycleEndMs   = cyc ? (cyc.endTime - now) : null;
-      const cycleProgPct = cyc ? Math.min(100, Math.round((now - cyc.startTime) / (cyc.durationMs || 1) * 100)) : null;
-      const tpPct        = cfg.takeProfitPct || 10;
-      const slPct        = cfg.stopLossPct   || 5;
-      const distToTP     = tpPct - pnlPct;
-      const distToSL     = pnlPct + slPct;
-
-      let status, statusIcon;
-      if (pnlPct >= tpPct)               { status = 'TP_REACHED';  statusIcon = '🟢'; }
-      else if (pnlPct <= -slPct)         { status = 'SL_REACHED';  statusIcon = '🔴'; }
-      else if (pnlPct >= tpPct * 0.7)   { status = 'NEAR_TP';     statusIcon = '🟡'; }
-      else if (distToSL < slPct * 0.3)  { status = 'NEAR_SL';     statusIcon = '🟠'; }
-      else if (pnlPct >= 0)              { status = 'PROFITABLE';  statusIcon = '🔵'; }
-      else                               { status = 'LOSING';      statusIcon = '⚫'; }
-
-      if (absDeviation > 10) {
-        deviationFlags.push({ symbol: pos.symbol, deviation: parseFloat(deviation.toFixed(2)), pnlPct: parseFloat(pnlPct.toFixed(2)), predicted, type: deviation < 0 ? 'underperform' : 'overperform', severity: absDeviation > 20 ? 'high' : 'medium' });
-      }
-
-      positionAnalysis.push({
-        id: pos.id, symbol: pos.symbol, name: pos.name, assetId: pos.assetId,
-        classification: pos.classification || '—',
-        boostPower:     parseFloat(((pos.boostPower || 0) * 100).toFixed(1)),
-        entryPrice:     parseFloat(entry.toFixed(6)),
-        currentPrice:   parseFloat(currentPrice.toFixed(6)),
-        takeProfitPrice: pos.takeProfitPrice, stopLossPrice: pos.stopLossPrice,
-        pnlPct:         parseFloat(pnlPct.toFixed(2)),
-        pnlUSD:         parseFloat(((currentPrice - entry) * pos.units).toFixed(4)),
-        predictedChange: predicted,
-        deviation:      parseFloat(deviation.toFixed(2)),
-        absDeviation:   parseFloat(absDeviation.toFixed(2)),
-        distToTP:       parseFloat(distToTP.toFixed(2)),
-        distToSL:       parseFloat(distToSL.toFixed(2)),
-        capitalUSD:     pos.capitalUSD,
-        holdCycles:     pos.holdCycles || 0,
-        maxHoldCycles:  pos.maxHoldCycles || cfg.maxHoldCycles || 3,
-        holdHrs:        parseFloat((holdMs / 3600000).toFixed(1)),
-        cycleProgressPct: cycleProgPct,
-        cycleRemainingMs: cycleEndMs,
-        status, statusIcon, openedAt: pos.openedAt,
-      });
-    }
-
-    // ── Métricas agregadas ────────────────────────────────────────────────────
-    const totalInvested   = positionAnalysis.reduce((s, p) => s + p.capitalUSD, 0);
-    const totalPnlUSD     = positionAnalysis.reduce((s, p) => s + p.pnlUSD, 0);
-    const totalPnlPct     = totalInvested > 0 ? (totalPnlUSD / totalInvested) * 100 : 0;
-    const avgDeviation    = positionAnalysis.reduce((s, p) => s + p.deviation, 0) / positionAnalysis.length;
-    const avgAbsDeviation = positionAnalysis.reduce((s, p) => s + p.absDeviation, 0) / positionAnalysis.length;
-    const profitableCount = positionAnalysis.filter(p => p.pnlPct > 0).length;
-    const nearTPCount     = positionAnalysis.filter(p => ['TP_REACHED','NEAR_TP'].includes(p.status)).length;
-    const nearSLCount     = positionAnalysis.filter(p => ['SL_REACHED','NEAR_SL'].includes(p.status)).length;
-    const overperforming  = positionAnalysis.filter(p => p.deviation > 5).length;
-    const underperforming = positionAnalysis.filter(p => p.deviation < -5).length;
-    const avgPnl          = positionAnalysis.reduce((s, p) => s + p.pnlPct, 0) / positionAnalysis.length;
-
-    let marketSentiment;
-    if (avgPnl > 3)       marketSentiment = { label: 'Alcista generalizado', icon: '🚀', color: 'green' };
-    else if (avgPnl > 0)  marketSentiment = { label: 'Ligeramente positivo', icon: '📈', color: 'blue' };
-    else if (avgPnl > -3) marketSentiment = { label: 'Lateral / neutro',     icon: '➡️', color: 'gray' };
-    else                  marketSentiment = { label: 'Presión bajista',       icon: '📉', color: 'red' };
-
-    // ── Recomendaciones accionables ────────────────────────────────────────────
-    const recommendations = [];
-
-    if (avgDeviation < -8 && positionAnalysis.length >= 2) {
-      recommendations.push({ type: 'algorithm', severity: 'high', icon: '⚠️',
-        title: 'Sobreestimación sistemática del algoritmo',
-        detail: `Las posiciones rinden ${Math.abs(avgDeviation).toFixed(1)}% por debajo de lo predicho en media. Considera reducir invertibleTarget en config o revisar pesos de potencial.`,
-        action: 'Revisar configuración → reducir invertibleTarget' });
-    }
-
-    if (nearSLCount >= Math.ceil(positionAnalysis.length * 0.5)) {
-      recommendations.push({ type: 'risk', severity: 'high', icon: '🔴',
-        title: `${nearSLCount} posiciones cerca del Stop Loss`,
-        detail: `Más del 50% del portfolio está en zona de riesgo. El mercado puede estar girando. Considera cerrar manualmente las posiciones más comprometidas.`,
-        action: 'Revisar posiciones en rojo y cerrar manualmente si es necesario' });
-    }
-
-    const cycleBound = positionAnalysis.filter(p => p.holdCycles >= p.maxHoldCycles - 1);
-    if (cycleBound.length > 0) {
-      recommendations.push({ type: 'cycle', severity: 'medium', icon: '⏰',
-        title: `${cycleBound.length} posición(es) en último ciclo de hold`,
-        detail: `${cycleBound.map(p => p.symbol).join(', ')} alcanzarán maxHoldCycles en la próxima iteración y se cerrarán automáticamente.`,
-        action: 'Monitorizar — cierre automático en próxima iteración' });
-    }
-
-    if (avgDeviation > 10 && nearTPCount >= 1) {
-      recommendations.push({ type: 'opportunity', severity: 'low', icon: '💡',
-        title: 'Posiciones superando predicciones',
-        detail: `El ciclo va ${avgDeviation.toFixed(1)}% por encima de lo predicho. Posiciones cerca de TP cerrarán con ganancias superiores a lo esperado.`,
-        action: 'Sin acción — sistema funcionando óptimamente' });
-    }
-
-    if (avgAbsDeviation > 12 && overperforming > 0 && underperforming > 0) {
-      recommendations.push({ type: 'algorithm', severity: 'medium', icon: '📊',
-        title: 'Alta varianza entre posiciones',
-        detail: `${overperforming} posiciones superan la predicción y ${underperforming} la incumplen. Alta dispersión intra-categoría INVERTIBLE.`,
-        action: 'Revisar pesos de boostPower para reducir varianza' });
-    }
-
-    if (recommendations.length === 0) {
-      recommendations.push({ type: 'ok', severity: 'low', icon: '✅',
-        title: 'Ciclo en marcha sin desviaciones significativas',
-        detail: `Desempeño promedio (${totalPnlPct.toFixed(2)}%) alineado con predicciones. Desviación media ${avgAbsDeviation.toFixed(1)}% dentro de rango aceptable.`,
-        action: 'Mantener configuración actual' });
-    }
-
-    res.json({
-      success: true, hasCycle: true,
-      timestamp: new Date().toISOString(),
-      priceSource, marketSentiment,
-      summary: {
-        totalPositions: positionAnalysis.length, profitableCount,
-        losingCount: positionAnalysis.length - profitableCount,
-        nearTPCount, nearSLCount,
-        totalInvestedUSD: parseFloat(totalInvested.toFixed(2)),
-        totalPnlUSD:      parseFloat(totalPnlUSD.toFixed(4)),
-        totalPnlPct:      parseFloat(totalPnlPct.toFixed(2)),
-        avgDeviation:     parseFloat(avgDeviation.toFixed(2)),
-        avgAbsDeviation:  parseFloat(avgAbsDeviation.toFixed(2)),
-        overperforming, underperforming, deviationFlags,
-      },
-      positions: positionAnalysis,
-      recommendations,
-    });
-
-  } catch(e) {
-    console.error('[cycle-analysis] Error:', e.message);
-    res.status(500).json({ success: false, error: e.message });
-  }
 });
 
 // ── POST /api/invest/evaluate ────────────────────────────────────────────────
@@ -3730,6 +3554,323 @@ app.get('/api/invest/prices/status', async (_req, res) => {
 });
 
 // ── POST /api/invest/prices/refresh ──────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// RONDAS DE INVERSIÓN
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ── GET /api/invest/rounds ────────────────────────────────────────────────────
+// Lista el historial de rondas cerradas + la ronda activa si existe
+app.get('/api/invest/rounds', async (_req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const rounds = await getRounds();
+    const current = await getCurrentRound();
+    res.json({ success: true, rounds, current, total: rounds.length });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/rounds/open ─────────────────────────────────────────────
+// Abre una nueva ronda. Recibe config de inversión, guarda como ronda activa.
+app.post('/api/invest/rounds/open', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const positions = await getPositions();
+    const open      = positions.filter(p => p.status === 'open');
+    if (open.length > 0) {
+      return res.status(400).json({ success: false, error: `Hay ${open.length} posiciones abiertas. Cierra la ronda actual antes de abrir una nueva.` });
+    }
+
+    const existing = await getCurrentRound();
+    if (existing && existing.status === 'active') {
+      return res.status(400).json({ success: false, error: 'Ya hay una ronda activa. Ciérrala primero.' });
+    }
+
+    // Config recibida del usuario (merge con defaults)
+    const {
+      capitalTotal, capitalPerCycle, maxPositions, minBoostPower,
+      takeProfitPct, stopLossPct, maxHoldCycles, feePct,
+      mode, exchange, minSignals, diversification
+    } = req.body;
+
+    const currentCfg = await getInvestConfig();
+    const newCfg = {
+      ...currentCfg,
+      ...(capitalTotal    != null && { capitalTotal:    parseFloat(capitalTotal)    }),
+      ...(capitalPerCycle != null && { capitalPerCycle: parseFloat(capitalPerCycle) }),
+      ...(maxPositions    != null && { maxPositions:    parseInt(maxPositions)      }),
+      ...(minBoostPower   != null && { minBoostPower:   parseFloat(minBoostPower)   }),
+      ...(takeProfitPct   != null && { takeProfitPct:   parseFloat(takeProfitPct)   }),
+      ...(stopLossPct     != null && { stopLossPct:     parseFloat(stopLossPct)     }),
+      ...(maxHoldCycles   != null && { maxHoldCycles:   parseInt(maxHoldCycles)     }),
+      ...(feePct          != null && { feePct:          parseFloat(feePct)          }),
+      ...(mode            != null && { mode                                          }),
+      ...(exchange        != null && { exchange                                      }),
+      ...(minSignals      != null && { minSignals:      parseInt(minSignals)        }),
+      ...(diversification != null && { diversification: !!diversification           }),
+    };
+    await redisSet(INVEST_CONFIG_KEY, newCfg);
+
+    // Obtener número de ronda siguiente
+    const rounds = await getRounds();
+    const roundNumber = rounds.length + 1;
+
+    // Obtener config de algoritmo vigente para recomendaciones
+    const algoMode = newCfg.mode === 'speculative' ? 'speculative' : 'normal';
+    let algoConfig = null;
+    try { algoConfig = await getConfig(algoMode); } catch(_) {}
+
+    const newRound = {
+      id:           `round_${Date.now()}`,
+      roundNumber,
+      status:       'active',
+      openedAt:     new Date().toISOString(),
+      closedAt:     null,
+      durationMs:   null,
+      config:       { ...newCfg },
+      algoConfig:   algoConfig || {},
+      report:       null,
+      positionIds:  [],  // se irán añadiendo
+    };
+
+    await saveCurrentRound(newRound);
+    await appendInvestLog({ type: 'round_open', subtype: 'user_action', roundId: newRound.id, roundNumber, timestamp: new Date().toISOString(), config: newCfg });
+
+    res.json({ success: true, round: newRound, config: newCfg });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/rounds/close ────────────────────────────────────────────
+// Cierra la ronda actual: fuerza el cierre de todas las posiciones y genera informe
+app.post('/api/invest/rounds/close', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cfg        = await getInvestConfig();
+    const positions  = await getPositions();
+    const openPos    = positions.filter(p => p.status === 'open');
+    const currentRound = await getCurrentRound();
+    const now        = Date.now();
+
+    // Cerrar todas las posiciones abiertas
+    const keys = await getExchangeKeys(cfg.exchange);
+    const closeResults = [];
+
+    if (openPos.length > 0) {
+      // Obtener precios actuales
+      const assetIds  = [...new Set(openPos.map(p => p.assetId))];
+      const symbolMap = {};
+      openPos.forEach(p => { symbolMap[p.assetId] = p.symbol; });
+      const { prices } = await fetchAndCachePrices(assetIds, symbolMap);
+
+      for (const position of openPos) {
+        const priceInfo    = prices[position.assetId];
+        const currentPrice = priceInfo?.price || position.currentPrice || position.entryPrice;
+        const evaluation   = investManager.evaluatePosition(position, currentPrice, 'round_close', cfg);
+        evaluation.reason  = 'round_close: cierre de ronda';
+        const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
+        investManager.closePosition(position, evaluation);
+        position.exchangeCloseOrderId = order.orderId;
+        closeResults.push({ symbol: position.symbol, pnlPct: evaluation.pnlPct, pnlUSD: evaluation.pnlUSD });
+      }
+      await savePositions(positions);
+    }
+
+    // Recoger TODAS las posiciones de esta ronda (abiertas que acabamos de cerrar + cerradas previas)
+    const roundId    = currentRound?.id;
+    const roundStart = currentRound?.openedAt ? new Date(currentRound.openedAt).getTime() : null;
+
+    // Todas las posiciones cerradas dentro de la ventana de la ronda
+    const allClosed  = positions.filter(p => p.status === 'closed');
+    const roundPositions = roundStart
+      ? allClosed.filter(p => {
+          const closedAt = p.closedAt ? new Date(p.closedAt).getTime() : 0;
+          const openedAt = p.openedAt ? new Date(p.openedAt).getTime() : 0;
+          return openedAt >= roundStart || closedAt >= roundStart;
+        })
+      : allClosed;
+
+    // ── Construir informe de ronda ─────────────────────────────────────────
+    const totalInvested  = roundPositions.reduce((s, p) => s + (p.capitalUSD || 0), 0);
+    const totalPnL       = roundPositions.reduce((s, p) => s + (p.realizedPnL || 0), 0);
+    const entryFees      = roundPositions.reduce((s, p) => s + (p.entryFeeUSD || 0), 0);
+    const exitFees       = roundPositions.reduce((s, p) => s + (p.exitFeeUSD  || 0), 0);
+    const apiCosts       = roundPositions.reduce((s, p) => s + (p.apiCostUSD  || 0), 0);
+    const totalFees      = entryFees + exitFees + apiCosts;
+    const netReturn      = totalPnL - totalFees;
+    const wins           = roundPositions.filter(p => (p.realizedPnL || 0) > 0);
+    const losses         = roundPositions.filter(p => (p.realizedPnL || 0) <= 0);
+
+    const sortedByPnl    = [...roundPositions].sort((a, b) => (b.realizedPnLPct || 0) - (a.realizedPnLPct || 0));
+    const top5Wins       = sortedByPnl.slice(0, 5).filter(p => (p.realizedPnL || 0) > 0).map(p => ({
+      symbol: p.symbol, name: p.name, pnlPct: p.realizedPnLPct, pnlUSD: p.realizedPnL,
+      capitalUSD: p.capitalUSD, entryPrice: p.entryPrice, exitPrice: p.currentPrice,
+      closeReason: p.closeReason, openedAt: p.openedAt, closedAt: p.closedAt,
+    }));
+    const top5Losses     = sortedByPnl.slice(-5).reverse().filter(p => (p.realizedPnL || 0) <= 0).map(p => ({
+      symbol: p.symbol, name: p.name, pnlPct: p.realizedPnLPct, pnlUSD: p.realizedPnL,
+      capitalUSD: p.capitalUSD, entryPrice: p.entryPrice, exitPrice: p.currentPrice,
+      closeReason: p.closeReason, openedAt: p.openedAt, closedAt: p.closedAt,
+    }));
+
+    const closeReasonBreakdown = {};
+    roundPositions.forEach(p => {
+      const r = (p.closeReason || 'unknown').split(':')[0];
+      closeReasonBreakdown[r] = (closeReasonBreakdown[r] || 0) + 1;
+    });
+
+    const durationMs     = roundStart ? (now - roundStart) : null;
+    const durationHrs    = durationMs ? parseFloat((durationMs / 3600000).toFixed(2)) : null;
+
+    // Context de mercado: movimiento promedio de los activos en la ronda
+    const avgMarketPnl   = roundPositions.length > 0
+      ? parseFloat((roundPositions.reduce((s, p) => s + (p.realizedPnLPct || 0), 0) / roundPositions.length).toFixed(2))
+      : 0;
+
+    const algoConfig = currentRound?.algoConfig || {};
+
+    const report = {
+      roundId:       roundId || `round_${now}`,
+      roundNumber:   currentRound?.roundNumber || 1,
+      openedAt:      currentRound?.openedAt || null,
+      closedAt:      new Date(now).toISOString(),
+      durationMs,
+      durationHrs,
+      // Resultados
+      totalOperations:   roundPositions.length,
+      forcedCloses:      closeResults.length,
+      totalInvestedUSD:  parseFloat(totalInvested.toFixed(2)),
+      totalPnLUSD:       parseFloat(totalPnL.toFixed(4)),
+      totalFeesUSD:      parseFloat(totalFees.toFixed(4)),
+      netReturnUSD:      parseFloat(netReturn.toFixed(4)),
+      netReturnPct:      totalInvested > 0 ? parseFloat((netReturn / totalInvested * 100).toFixed(2)) : 0,
+      winRate:           roundPositions.length > 0 ? parseFloat((wins.length / roundPositions.length * 100).toFixed(1)) : null,
+      winsCount:         wins.length,
+      lossesCount:       losses.length,
+      top5Wins,
+      top5Losses,
+      feeBreakdown:      { entryFees: parseFloat(entryFees.toFixed(4)), exitFees: parseFloat(exitFees.toFixed(4)), apiCosts: parseFloat(apiCosts.toFixed(4)), total: parseFloat(totalFees.toFixed(4)) },
+      closeReasonBreakdown,
+      marketContext:     { avgMarketPnl, bestSymbol: top5Wins[0]?.symbol || null, worstSymbol: top5Losses[0]?.symbol || null },
+      // Configuraciones usadas
+      tradingConfig: {
+        takeProfitPct:   cfg.takeProfitPct,
+        stopLossPct:     cfg.stopLossPct,
+        maxHoldCycles:   cfg.maxHoldCycles,
+        capitalTotal:    cfg.capitalTotal,
+        capitalPerCycle: cfg.capitalPerCycle,
+        maxPositions:    cfg.maxPositions,
+        mode:            cfg.mode,
+        exchange:        cfg.exchange,
+        feePct:          cfg.feePct,
+      },
+      algoConfig: {
+        invertibleMinBoost: algoConfig.classification?.invertibleMinBoost,
+        invertibleTarget:   algoConfig.prediction?.invertibleTarget,
+        metaWeights:        algoConfig.metaWeights,
+        potentialWeights:   algoConfig.potentialWeights,
+        resistanceWeights:  algoConfig.resistanceWeights,
+      },
+    };
+
+    // Guardar ronda en historial
+    const closedRound = {
+      ...(currentRound || {}),
+      status:   'closed',
+      closedAt: report.closedAt,
+      durationMs,
+      report,
+      positionIds: roundPositions.map(p => p.id),
+    };
+
+    const rounds = await getRounds();
+    rounds.unshift(closedRound); // más reciente primero
+    await saveRounds(rounds.slice(0, 50)); // max 50 rondas en historial
+
+    // Limpiar ronda activa
+    await saveCurrentRound(null);
+
+    await appendInvestLog({ type: 'round_close', subtype: 'user_action', roundId: report.roundId, roundNumber: report.roundNumber, timestamp: new Date().toISOString(), report: { netReturnPct: report.netReturnPct, totalOperations: report.totalOperations, forcedCloses: closeResults.length } });
+
+    res.json({ success: true, report, forcedCloses: closeResults, positionsClosed: closeResults.length });
+  } catch(e) {
+    console.error('[round/close] Error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── POST /api/invest/rounds/recommendations ───────────────────────────────────
+// Devuelve recomendaciones de config para la nueva ronda basadas en historial
+app.post('/api/invest/rounds/recommendations', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cfg    = await getInvestConfig();
+    const rounds = await getRounds();
+    const mode   = req.body?.mode || cfg.mode || 'normal';
+
+    const algoMode  = mode === 'speculative' ? 'speculative' : 'normal';
+    let algoConfig  = null;
+    try { algoConfig = await getConfig(algoMode); } catch(_) {}
+
+    const suggestions = {
+      takeProfitPct:   cfg.takeProfitPct,
+      stopLossPct:     cfg.stopLossPct,
+      maxHoldCycles:   cfg.maxHoldCycles,
+      capitalTotal:    cfg.capitalTotal,
+      capitalPerCycle: cfg.capitalPerCycle,
+      maxPositions:    cfg.maxPositions,
+      minBoostPower:   cfg.minBoostPower,
+      feePct:          cfg.feePct,
+      mode:            cfg.mode,
+      exchange:        cfg.exchange,
+    };
+
+    // Analizar rondas previas para ajustar sugerencias
+    const reasonedAdjustments = [];
+    if (rounds.length > 0) {
+      const recentRounds = rounds.slice(0, 5);
+      const avgNetPct = recentRounds.reduce((s, r) => s + (r.report?.netReturnPct || 0), 0) / recentRounds.length;
+      const avgWinRate = recentRounds.reduce((s, r) => s + (r.report?.winRate || 0), 0) / recentRounds.length;
+
+      // Si muchas stop losses → subir TP, bajar SL ligeramente (más espacio)
+      const slHeavy = recentRounds.filter(r => (r.report?.closeReasonBreakdown?.stop_loss || 0) > (r.report?.totalOperations || 1) * 0.4);
+      if (slHeavy.length >= 2) {
+        suggestions.stopLossPct = Math.max(3, cfg.stopLossPct - 1);
+        reasonedAdjustments.push({ param: 'stopLossPct', from: cfg.stopLossPct, to: suggestions.stopLossPct, reason: 'Exceso de stop losses en rondas recientes — reducir umbral para dar más margen' });
+      }
+
+      // Si win rate < 40% → ser más selectivo (subir minBoostPower)
+      if (avgWinRate < 40 && rounds.length >= 2) {
+        suggestions.minBoostPower = Math.min(0.85, cfg.minBoostPower + 0.05);
+        reasonedAdjustments.push({ param: 'minBoostPower', from: cfg.minBoostPower, to: suggestions.minBoostPower, reason: `Win rate promedio ${avgWinRate.toFixed(1)}% — ser más selectivo con el umbral de entrada` });
+      }
+
+      // Si retorno neto positivo consistente → aumentar capital por ciclo
+      if (avgNetPct > 3 && rounds.length >= 3) {
+        suggestions.capitalPerCycle = Math.min(0.5, cfg.capitalPerCycle + 0.05);
+        reasonedAdjustments.push({ param: 'capitalPerCycle', from: cfg.capitalPerCycle, to: suggestions.capitalPerCycle, reason: `Retorno promedio +${avgNetPct.toFixed(1)}% — aumentar exposición por ciclo` });
+      }
+
+      // Si retorno neto negativo → reducir capital por ciclo
+      if (avgNetPct < -2 && rounds.length >= 2) {
+        suggestions.capitalPerCycle = Math.max(0.1, cfg.capitalPerCycle - 0.05);
+        reasonedAdjustments.push({ param: 'capitalPerCycle', from: cfg.capitalPerCycle, to: suggestions.capitalPerCycle, reason: `Retorno promedio ${avgNetPct.toFixed(1)}% — reducir exposición hasta mejorar el modelo` });
+      }
+    }
+
+    res.json({
+      success: true,
+      suggestions,
+      reasonedAdjustments,
+      algoConfig: algoConfig ? {
+        invertibleMinBoost: algoConfig.classification?.invertibleMinBoost,
+        invertibleTarget:   algoConfig.prediction?.invertibleTarget,
+        metaWeights:        algoConfig.metaWeights,
+      } : null,
+      basedOnRounds: rounds.length,
+      currentConfig: cfg,
+    });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
 app.post('/api/invest/prices/refresh', async (_req, res) => {
   if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
   try {
