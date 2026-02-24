@@ -20,10 +20,6 @@
 .result-card{cursor:pointer;transition:opacity .2s}
 .excluded{opacity:.4;border-style:dashed!important}
 ::-webkit-scrollbar{width:4px}::-webkit-scrollbar-track{background:#1e293b}::-webkit-scrollbar-thumb{background:#334155;border-radius:2px}
-@keyframes slideInUp{from{opacity:0;transform:translateY(24px) scale(0.98)}to{opacity:1;transform:translateY(0) scale(1)}}
-.cycle-modal-enter{animation:slideInUp 0.28s cubic-bezier(0.22,1,0.36,1) both}
-@keyframes pulse-ring{0%{box-shadow:0 0 0 0 rgba(239,68,68,0.5)}70%{box-shadow:0 0 0 8px rgba(239,68,68,0)}100%{box-shadow:0 0 0 0 rgba(239,68,68,0)}}
-.status-pulse-red{animation:pulse-ring 1.8s ease infinite}
 </style>
 </head>
 <body class="bg-gray-950 text-gray-100 min-h-screen">
@@ -458,6 +454,7 @@
       <button onclick="openTab('inv-performance')" id="invtab-inv-performance" class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">📈 Rendimiento</button>
       <button onclick="openTab('inv-config')"      id="invtab-inv-config"      class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">⚙️ Config</button>
       <button onclick="openTab('inv-log')"         id="invtab-inv-log"         class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">📜 Log</button>
+      <button onclick="openTab('inv-rounds')"      id="invtab-inv-rounds"      class="invtab flex-1 py-1.5 rounded-lg text-sm font-medium text-gray-400 hover:text-white transition-colors">🎯 Rondas</button>
     </div>
 
     <!-- Resumen -->
@@ -486,8 +483,32 @@
 
     <!-- Posiciones -->
     <div id="inv-positions" class="inv-subtab hidden">
+      <!-- Banner de ronda activa -->
+      <div id="inv-round-banner" class="hidden mb-4 bg-indigo-950/60 border border-indigo-800 rounded-xl p-3">
+        <div class="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <p class="text-sm font-semibold text-indigo-300">🎯 <span id="inv-round-label">Ronda #1 activa</span></p>
+            <p class="text-xs text-gray-400 mt-0.5" id="inv-round-info">Iniciada —</p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="evaluateCycle()" class="bg-orange-800 hover:bg-orange-700 px-3 py-1.5 rounded-lg text-xs font-semibold">
+              🔬 Diagnosticar
+            </button>
+            <button onclick="openCloseRoundModal()" class="bg-red-800 hover:bg-red-700 px-3 py-1.5 rounded-lg text-xs font-semibold">
+              🏁 Cerrar Ronda
+            </button>
+          </div>
+        </div>
+      </div>
+      <!-- Sin ronda activa -->
+      <div id="inv-no-round-banner" class="hidden mb-4 bg-gray-900 border border-gray-700 border-dashed rounded-xl p-3 text-center">
+        <p class="text-sm text-gray-500 mb-2">Sin ronda de inversión activa</p>
+        <button onclick="openNewRoundWizard()" class="bg-indigo-700 hover:bg-indigo-600 px-4 py-2 rounded-lg text-sm font-semibold">
+          🚀 Abrir Nueva Ronda
+        </button>
+      </div>
       <div class="flex justify-between items-center mb-4">
-        <p class="font-semibold">Todas las posiciones</p>
+        <p class="font-semibold">Posiciones</p>
         <button onclick="evaluateCycle()" class="bg-orange-700 hover:bg-orange-600 px-4 py-2 rounded-lg text-sm font-semibold">
           ⚖️ Evaluar ciclo actual
         </button>
@@ -672,6 +693,23 @@
       <div id="inv-log-content"><p class="text-gray-500 text-sm">Cargando...</p></div>
       <!-- Resultado análisis Sabios -->
       <div id="inv-log-sabios-result"></div>
+    </div>
+
+    <!-- Rondas -->
+    <div id="inv-rounds" class="inv-subtab hidden">
+      <div class="flex justify-between items-center mb-4">
+        <div>
+          <p class="font-semibold">🎯 Rondas de Inversión</p>
+          <p class="text-xs text-gray-500 mt-0.5">Historial de ciclos completos de inversión</p>
+        </div>
+        <button onclick="openNewRoundWizard()" class="bg-indigo-700 hover:bg-indigo-600 px-4 py-2 rounded-lg text-sm font-semibold">
+          🚀 Nueva Ronda
+        </button>
+      </div>
+      <!-- Ronda activa -->
+      <div id="inv-rounds-active" class="mb-4"></div>
+      <!-- Historial -->
+      <div id="inv-rounds-history"><p class="text-gray-500 text-sm">Cargando...</p></div>
     </div>
 
   </div><!-- /content-invest -->
@@ -2004,6 +2042,7 @@ function openTab(tab) {
   if (tab === 'inv-positions')   loadInvestPositions();
   if (tab === 'inv-performance') loadInvestPerformance();
   if (tab === 'inv-log')         loadInvestLog();
+  if (tab === 'inv-rounds')      loadInvestRounds();
 }
 
 // ── Carga inicial del módulo ─────────────────────────────────────
@@ -2182,6 +2221,7 @@ async function executeInvestment() {
 
 // ── Posiciones ───────────────────────────────────────────────────
 async function loadInvestPositions() {
+  loadCurrentRoundBanner(); // update round banner (non-blocking)
   try {
     const r = await fetch('/api/invest/positions');
     const d = await r.json();
@@ -2411,196 +2451,284 @@ async function closePosition(id) {
   } catch(e) { alert('❌ ' + e.message); }
 }
 
-// ── Evaluar ciclo (READ-ONLY — diagnóstico sin modificar posiciones) ──────────
+// ── Evaluar ciclo ────────────────────────────────────────────────
 async function evaluateCycle() {
-  const btn = document.querySelector('button[onclick="evaluateCycle()"]');
-  const origHTML = btn ? btn.innerHTML : '';
-  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ Analizando...'; }
   try {
-    const r = await fetch('/api/invest/cycle-analysis', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({}),
+    const r = await fetch('/api/invest/evaluate', {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({ cycleId: null })
     });
     const d = await r.json();
-    if (!d.success) { alert('❌ ' + (d.error || 'Error en análisis')); return; }
-    showCycleAnalysisModal(d);
+    if (!d.success) { alert('❌ ' + d.error); return; }
+    const sells = d.evaluations.filter(e => e.sold).length;
+    const holds = d.evaluations.filter(e => !e.sold).length;
+    alert(`Evaluación completada:
+✅ Vendidas: ${sells}
+⏸️ Mantenidas: ${holds}
+P&L neto: $${d.summary?.netReturnUSD??'—'} (${d.summary?.netReturnPct??'—'}%)`);
+    await loadInvestPositions(); await loadInvestOverview();
+  } catch(e) { alert('❌ '+e.message); }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// RONDAS DE INVERSIÓN — JavaScript
+// ═══════════════════════════════════════════════════════════════════════════════
+
+let _currentRoundData = null;
+
+// ── Cargar estado de ronda activa (actualiza banners en Posiciones) ───────────
+async function loadCurrentRoundBanner() {
+  try {
+    const r = await fetch('/api/invest/rounds');
+    const d = await r.json();
+    if (!d.success) return;
+    _currentRoundData = d.current;
+    const hasCurrent = d.current && d.current.status === 'active';
+    document.getElementById('inv-round-banner')?.classList.toggle('hidden', !hasCurrent);
+    document.getElementById('inv-no-round-banner')?.classList.toggle('hidden', hasCurrent);
+    if (hasCurrent) {
+      const rnd = d.current;
+      document.getElementById('inv-round-label').textContent = `Ronda #${rnd.roundNumber} activa`;
+      const since = rnd.openedAt ? ` · Iniciada ${_fmtRelTime(new Date(rnd.openedAt).getTime())}` : '';
+      document.getElementById('inv-round-info').textContent = `Modo ${rnd.config?.mode || '—'} · TP ${rnd.config?.takeProfitPct || '—'}% / SL ${rnd.config?.stopLossPct || '—'}%${since}`;
+    }
+  } catch(_) {}
+}
+
+function _fmtRelTime(ts) {
+  const d = Date.now() - ts;
+  const h = Math.floor(d / 3600000), m = Math.floor((d % 3600000) / 60000);
+  if (h > 24) return `hace ${Math.floor(h/24)}d ${h%24}h`;
+  return h > 0 ? `hace ${h}h ${m}m` : `hace ${m}m`;
+}
+
+// ── Cargar tab Rondas ─────────────────────────────────────────────────────────
+async function loadInvestRounds() {
+  const activeDiv  = document.getElementById('inv-rounds-active');
+  const histDiv    = document.getElementById('inv-rounds-history');
+  try {
+    const r = await fetch('/api/invest/rounds');
+    const d = await r.json();
+    if (!d.success) { histDiv.innerHTML = `<p class="text-red-400 text-sm">❌ ${d.error}</p>`; return; }
+
+    // Ronda activa
+    if (d.current && d.current.status === 'active') {
+      const c = d.current;
+      const since = c.openedAt ? _fmtRelTime(new Date(c.openedAt).getTime()) : '—';
+      activeDiv.innerHTML = `
+        <div class="bg-indigo-950/50 border border-indigo-700 rounded-xl p-4 mb-4">
+          <div class="flex items-center justify-between mb-3">
+            <div>
+              <p class="font-semibold text-indigo-300">🎯 Ronda #${c.roundNumber} — Activa</p>
+              <p class="text-xs text-gray-400 mt-0.5">Iniciada ${since} · Modo ${c.config?.mode || '—'}</p>
+            </div>
+            <div class="flex gap-2">
+              <button onclick="openCloseRoundModal()" class="bg-red-800 hover:bg-red-700 px-4 py-2 rounded-lg text-sm font-bold">🏁 Cerrar Ronda</button>
+            </div>
+          </div>
+          <div class="grid grid-cols-4 gap-2 text-xs">
+            <div class="bg-gray-900 rounded-lg p-2 text-center"><p class="text-gray-500">TP</p><p class="font-bold text-green-400">+${c.config?.takeProfitPct || '—'}%</p></div>
+            <div class="bg-gray-900 rounded-lg p-2 text-center"><p class="text-gray-500">SL</p><p class="font-bold text-red-400">-${c.config?.stopLossPct || '—'}%</p></div>
+            <div class="bg-gray-900 rounded-lg p-2 text-center"><p class="text-gray-500">Capital</p><p class="font-bold text-white">$${c.config?.capitalTotal || '—'}</p></div>
+            <div class="bg-gray-900 rounded-lg p-2 text-center"><p class="text-gray-500">Por ciclo</p><p class="font-bold text-white">${((c.config?.capitalPerCycle || 0)*100).toFixed(0)}%</p></div>
+          </div>
+        </div>`;
+    } else {
+      activeDiv.innerHTML = `
+        <div class="bg-gray-900 border border-gray-700 border-dashed rounded-xl p-4 mb-4 text-center">
+          <p class="text-gray-500 mb-3">Sin ronda activa</p>
+          <button onclick="openNewRoundWizard()" class="bg-indigo-700 hover:bg-indigo-600 px-5 py-2.5 rounded-lg text-sm font-bold">🚀 Abrir Nueva Ronda de Inversión</button>
+        </div>`;
+    }
+
+    // Historial
+    if (!d.rounds || d.rounds.length === 0) {
+      histDiv.innerHTML = '<p class="text-gray-500 text-sm text-center py-4">Sin rondas cerradas aún.</p>';
+      return;
+    }
+
+    histDiv.innerHTML = `
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-3">Historial de Rondas Cerradas (${d.rounds.length})</p>
+      <div class="space-y-3">
+        ${d.rounds.map(rnd => _renderRoundCard(rnd)).join('')}
+      </div>`;
   } catch(e) {
-    alert('❌ ' + e.message);
-  } finally {
-    if (btn) { btn.disabled = false; btn.innerHTML = origHTML; }
+    histDiv.innerHTML = `<p class="text-red-400 text-sm">❌ ${e.message}</p>`;
   }
 }
 
-// ── Modal de diagnóstico del ciclo en curso ───────────────────────────────────
-function showCycleAnalysisModal(data) {
-  document.getElementById('cycle-analysis-modal')?.remove();
-
-  if (!data.hasCycle) {
-    alert('Sin posiciones abiertas en este momento.');
-    return;
-  }
-
-  const { summary, positions, recommendations, marketSentiment, timestamp, priceSource } = data;
-
-  const fmt = {
-    pct:  v => `${v >= 0 ? '+' : ''}${Number(v).toFixed(2)}%`,
-    usd:  v => `$${Number(v).toFixed(2)}`,
-    time: ms => {
-      if (!ms || ms < 0) return '—';
-      const h = Math.floor(ms / 3600000), m = Math.floor((ms % 3600000) / 60000);
-      return h > 0 ? `${h}h ${m}m` : `${m}m`;
-    },
-    color: (v, pos='text-green-400', neg='text-red-400') => v > 0 ? pos : v < 0 ? neg : 'text-gray-400',
-  };
-
-  const sevColor = {
-    high:   { bg:'bg-red-950/60',    border:'border-red-800',    text:'text-red-300',    badge:'bg-red-900 text-red-200' },
-    medium: { bg:'bg-yellow-950/60', border:'border-yellow-800', text:'text-yellow-300', badge:'bg-yellow-900 text-yellow-200' },
-    low:    { bg:'bg-green-950/40',  border:'border-green-800',  text:'text-green-300',  badge:'bg-green-900 text-green-200' },
-  };
-
-  const statusBorder = { TP_REACHED:'border-l-green-400', NEAR_TP:'border-l-lime-500', PROFITABLE:'border-l-blue-500', NEAR_SL:'border-l-orange-500', SL_REACHED:'border-l-red-500', LOSING:'border-l-gray-600' };
-  const statusBg     = { TP_REACHED:'bg-green-950/30', NEAR_TP:'bg-lime-950/20', PROFITABLE:'bg-blue-950/20', NEAR_SL:'bg-orange-950/30', SL_REACHED:'bg-red-950/30', LOSING:'bg-gray-900/50' };
-
-  const kpiBar = `
-    <div class="grid grid-cols-4 gap-2 mb-4">
-      <div class="bg-gray-900 border border-gray-800 rounded-lg p-2.5 text-center">
-        <p class="text-xs text-gray-500">P&L Total</p>
-        <p class="text-lg font-bold mono ${fmt.color(summary.totalPnlPct)}">${fmt.pct(summary.totalPnlPct)}</p>
-        <p class="text-xs ${fmt.color(summary.totalPnlUSD)}">${fmt.usd(summary.totalPnlUSD)}</p>
+function _renderRoundCard(rnd) {
+  const rep = rnd.report || {};
+  const net = rep.netReturnPct || 0;
+  const netColor = net >= 0 ? 'text-green-400' : 'text-red-400';
+  const borderColor = net >= 1.5 ? 'border-green-800' : net >= 0 ? 'border-gray-700' : 'border-red-900';
+  const since = rnd.openedAt ? new Date(rnd.openedAt).toLocaleDateString('es-ES', {day:'2-digit', month:'short', year:'2-digit'}) : '—';
+  const dur = rep.durationHrs ? `${rep.durationHrs >= 24 ? Math.round(rep.durationHrs/24)+'d' : rep.durationHrs.toFixed(1)+'h'}` : '—';
+  return `
+    <div class="bg-gray-900 border ${borderColor} rounded-xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <span class="font-semibold">Ronda #${rnd.roundNumber}</span>
+          <span class="text-xs text-gray-500 ml-2">${since} · ${dur}</span>
+        </div>
+        <div class="flex items-center gap-3">
+          <span class="text-lg font-bold mono ${netColor}">${net >= 0?'+':''}${net.toFixed(2)}%</span>
+          <button onclick="showRoundReport(${JSON.stringify(rnd).replace(/"/g,'&quot;')})" class="text-xs bg-gray-800 hover:bg-gray-700 px-3 py-1.5 rounded-lg">📊 Informe</button>
+        </div>
       </div>
-      <div class="bg-gray-900 border border-gray-800 rounded-lg p-2.5 text-center">
-        <p class="text-xs text-gray-500">Rentables</p>
-        <p class="text-lg font-bold text-blue-400">${summary.profitableCount}/${summary.totalPositions}</p>
-        <p class="text-xs text-gray-500">posiciones</p>
-      </div>
-      <div class="bg-gray-900 border border-gray-800 rounded-lg p-2.5 text-center">
-        <p class="text-xs text-gray-500">Desviación media</p>
-        <p class="text-lg font-bold mono ${fmt.color(summary.avgDeviation)}">${fmt.pct(summary.avgDeviation)}</p>
-        <p class="text-xs text-gray-500">vs predicción</p>
-      </div>
-      <div class="bg-gray-900 border border-gray-800 rounded-lg p-2.5 text-center">
-        <p class="text-xs text-gray-500">Mercado</p>
-        <p class="text-lg">${marketSentiment.icon}</p>
-        <p class="text-xs text-gray-400 leading-tight">${marketSentiment.label}</p>
+      <div class="grid grid-cols-4 gap-2 text-xs">
+        <div class="text-center"><p class="text-gray-500">Operaciones</p><p class="font-semibold">${rep.totalOperations || 0}</p></div>
+        <div class="text-center"><p class="text-gray-500">Win Rate</p><p class="font-semibold ${rep.winRate >= 50 ? 'text-blue-400' : 'text-gray-300'}">${rep.winRate != null ? rep.winRate+'%' : '—'}</p></div>
+        <div class="text-center"><p class="text-gray-500">P&L Neto</p><p class="font-semibold mono ${netColor}">${rep.netReturnUSD >= 0 ? '+' : ''}$${(rep.netReturnUSD||0).toFixed(2)}</p></div>
+        <div class="text-center"><p class="text-gray-500">Fees</p><p class="font-semibold text-orange-400">$${(rep.totalFeesUSD||0).toFixed(3)}</p></div>
       </div>
     </div>`;
+}
 
-  const recsHTML = recommendations.map(r => {
-    const sc = sevColor[r.severity] || sevColor.low;
-    const sevLabel = r.severity === 'high' ? 'URGENTE' : r.severity === 'medium' ? 'ATENCIÓN' : 'INFO';
-    return `
-      <div class="${sc.bg} border ${sc.border} rounded-lg p-3 mb-2">
-        <div class="flex items-start gap-2">
-          <span class="text-base mt-0.5">${r.icon}</span>
-          <div class="flex-1 min-w-0">
-            <div class="flex items-center gap-2 mb-0.5 flex-wrap">
-              <p class="text-sm font-semibold ${sc.text}">${r.title}</p>
-              <span class="text-xs px-1.5 py-0.5 rounded ${sc.badge} font-mono shrink-0">${sevLabel}</span>
-            </div>
-            <p class="text-xs text-gray-400">${r.detail}</p>
-            ${r.action ? `<p class="text-xs ${sc.text} mt-1 font-medium">→ ${r.action}</p>` : ''}
-          </div>
-        </div>
-      </div>`;
-  }).join('');
+// ── Modal: Informe de Ronda ───────────────────────────────────────────────────
+function showRoundReport(rnd) {
+  document.getElementById('round-report-modal')?.remove();
+  const rep = rnd.report || {};
+  const net = rep.netReturnPct || 0;
+  const netColor = net >= 0 ? 'text-green-400' : 'text-red-400';
+  const since = rep.openedAt ? new Date(rep.openedAt).toLocaleString('es-ES') : '—';
+  const until = rep.closedAt ? new Date(rep.closedAt).toLocaleString('es-ES') : '—';
+  const dur   = rep.durationHrs ? `${rep.durationHrs >= 24 ? (rep.durationHrs/24).toFixed(1)+'d' : rep.durationHrs.toFixed(1)+'h'}` : '—';
 
-  const positionsHTML = positions.map(p => {
-    const border   = statusBorder[p.status] || 'border-l-gray-600';
-    const bg       = statusBg[p.status]     || 'bg-gray-900/40';
-    const pnlColor = fmt.color(p.pnlPct);
-    const devColor = fmt.color(p.deviation);
-    const tpFull   = ((p.distToTP || 0) + p.pnlPct).toFixed(1);
-    const slLabel  = (p.distToSL !== undefined ? (p.pnlPct - p.distToSL) : -5).toFixed(1);
-    const range    = (p.distToSL || 0) + (p.distToTP || 0);
-    const barPct   = range > 0 ? Math.min(100, Math.round(((p.distToSL || 0) / range) * 100)) : 50;
-    const barColor = p.pnlPct >= 0 ? 'bg-green-500' : 'bg-red-500';
-    const cycleRem = p.cycleRemainingMs ? `<span class="text-gray-500">⏱ ${fmt.time(p.cycleRemainingMs)} rest.</span>` : '';
-    return `
-      <div class="${bg} border-l-4 ${border} rounded-lg p-3 mb-2">
-        <div class="flex justify-between items-start gap-2">
-          <div class="min-w-0">
-            <div class="flex items-center gap-1.5 mb-0.5 flex-wrap">
-              <span>${p.statusIcon}</span>
-              <span class="font-semibold text-sm">${p.symbol}</span>
-              <span class="text-xs px-1.5 py-0.5 rounded bg-gray-800 text-gray-400 mono">${p.classification}</span>
-              <span class="text-xs text-gray-500">BP ${p.boostPower}%</span>
-            </div>
-            <div class="flex items-center gap-3 text-xs mt-0.5 flex-wrap">
-              <span class="text-gray-500">Entrada <span class="text-gray-300 mono">$${p.entryPrice}</span></span>
-              <span class="text-gray-500">Actual <span class="text-gray-300 mono">$${p.currentPrice}</span></span>
-              ${cycleRem}
-            </div>
-          </div>
-          <div class="text-right shrink-0">
-            <p class="text-sm font-bold mono ${pnlColor}">${fmt.pct(p.pnlPct)}</p>
-            <p class="text-xs ${pnlColor} mono">${fmt.usd(p.pnlUSD)}</p>
-          </div>
-        </div>
-        <div class="flex items-center gap-3 mt-2 text-xs flex-wrap">
-          <span class="text-gray-500">Pred <span class="text-gray-300 mono">${fmt.pct(p.predictedChange)}</span></span>
-          <span class="text-gray-500">Real <span class="mono ${pnlColor}">${fmt.pct(p.pnlPct)}</span></span>
-          <span class="text-gray-500">Desv <span class="mono ${devColor}">${fmt.pct(p.deviation)}</span></span>
-          <span class="text-gray-500 ml-auto">Hold ${p.holdCycles + 1}/${p.maxHoldCycles}</span>
-        </div>
-        <div class="mt-2">
-          <div class="flex justify-between text-xs text-gray-600 mb-0.5">
-            <span>SL ${slLabel}%</span>
-            <span>TP +${tpFull}%</span>
-          </div>
-          <div class="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-            <div class="${barColor} h-full rounded-full" style="width:${barPct}%"></div>
-          </div>
-        </div>
-      </div>`;
-  }).join('');
+  const top5WinsHTML = (rep.top5Wins || []).map(p => `
+    <div class="flex justify-between items-center bg-green-950/30 rounded-lg px-3 py-2 text-xs">
+      <span class="font-semibold">${p.symbol}</span>
+      <span class="text-gray-400">${p.closeReason || '—'}</span>
+      <span class="text-green-400 font-bold mono">+${(p.pnlPct||0).toFixed(2)}%</span>
+      <span class="text-green-300 mono">+$${(p.pnlUSD||0).toFixed(2)}</span>
+    </div>`).join('') || '<p class="text-gray-500 text-xs">—</p>';
 
-  const flagsHTML = summary.deviationFlags && summary.deviationFlags.length > 0
-    ? `<div class="mt-3">
-        <p class="text-xs font-semibold text-orange-400 mb-1.5">⚡ Desviación significativa (&gt;10%)</p>
-        <div class="space-y-1">
-          ${summary.deviationFlags.map(f => `
-            <div class="flex items-center justify-between bg-gray-800/60 rounded px-2 py-1.5 text-xs">
-              <span class="font-semibold">${f.symbol}</span>
-              <span class="text-gray-400">pred <span class="text-gray-300 mono">${fmt.pct(f.predicted)}</span></span>
-              <span class="text-gray-400">real <span class="${f.type==='underperform'?'text-red-400':'text-green-400'} mono">${fmt.pct(f.pnlPct)}</span></span>
-              <span class="${f.type==='underperform'?'text-red-400':'text-green-400'} mono font-bold">${fmt.pct(f.deviation)}</span>
-              <span class="${f.severity==='high'?'text-red-400':'text-orange-400'}">${f.severity==='high'?'‼':'!'}</span>
-            </div>`).join('')}
-        </div>
-      </div>` : '';
+  const top5LossesHTML = (rep.top5Losses || []).map(p => `
+    <div class="flex justify-between items-center bg-red-950/30 rounded-lg px-3 py-2 text-xs">
+      <span class="font-semibold">${p.symbol}</span>
+      <span class="text-gray-400">${p.closeReason || '—'}</span>
+      <span class="text-red-400 font-bold mono">${(p.pnlPct||0).toFixed(2)}%</span>
+      <span class="text-red-300 mono">$${(p.pnlUSD||0).toFixed(2)}</span>
+    </div>`).join('') || '<p class="text-gray-500 text-xs">—</p>';
 
-  const tsStr = new Date(timestamp).toLocaleTimeString('es-ES', { hour:'2-digit', minute:'2-digit', second:'2-digit' });
+  const closeReasons = rep.closeReasonBreakdown || {};
+  const crHTML = Object.entries(closeReasons).map(([k,v]) => `
+    <div class="flex justify-between text-xs bg-gray-800 rounded px-2 py-1.5">
+      <span class="text-gray-400">${k}</span><span class="font-semibold">${v}</span>
+    </div>`).join('');
+
+  const tc = rep.tradingConfig || {};
+  const ac = rep.algoConfig   || {};
 
   const modal = document.createElement('div');
-  modal.id = 'cycle-analysis-modal';
+  modal.id = 'round-report-modal';
   modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
-  modal.style.background = 'rgba(0,0,0,0.75)';
+  modal.style.background = 'rgba(0,0,0,0.8)';
   modal.innerHTML = `
-    <div class="cycle-modal-enter bg-gray-950 border border-gray-800 rounded-2xl w-full max-w-2xl max-h-[90vh] flex flex-col shadow-2xl">
+    <div class="cycle-modal-enter bg-gray-950 border border-gray-800 rounded-2xl w-full max-w-2xl max-h-[92vh] flex flex-col shadow-2xl">
+      <!-- Header -->
       <div class="flex items-center justify-between p-4 border-b border-gray-800 shrink-0">
         <div>
-          <h2 class="text-base font-bold">🔬 Diagnóstico del Ciclo en Curso</h2>
-          <p class="text-xs text-gray-500 mt-0.5">${summary.totalPositions} posiciones · ${tsStr} · <span class="text-gray-600">${priceSource}</span></p>
+          <h2 class="text-base font-bold">📊 Informe — Ronda #${rnd.roundNumber}</h2>
+          <p class="text-xs text-gray-500 mt-0.5">${since} → ${until} · ${dur}</p>
         </div>
-        <button onclick="document.getElementById('cycle-analysis-modal').remove()" class="text-gray-500 hover:text-white transition-colors text-xl leading-none p-1">✕</button>
+        <button onclick="document.getElementById('round-report-modal').remove()" class="text-gray-500 hover:text-white text-xl p-1">✕</button>
       </div>
-      <div class="overflow-y-auto p-4 flex-1 space-y-4">
-        ${kpiBar}
-        <div>
-          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">📋 Recomendaciones</p>
-          ${recsHTML}
+
+      <div class="overflow-y-auto p-4 flex-1 space-y-5">
+
+        <!-- KPIs principales -->
+        <div class="grid grid-cols-4 gap-2">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-3 text-center">
+            <p class="text-xs text-gray-500">Retorno Neto</p>
+            <p class="text-2xl font-bold mono ${netColor}">${net >= 0?'+':''}${net.toFixed(2)}%</p>
+            <p class="text-sm ${netColor} mono">${(rep.netReturnUSD||0) >= 0?'+':''}$${(rep.netReturnUSD||0).toFixed(2)}</p>
+          </div>
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-3 text-center">
+            <p class="text-xs text-gray-500">Operaciones</p>
+            <p class="text-2xl font-bold">${rep.totalOperations || 0}</p>
+            <p class="text-xs text-gray-500">${rep.winsCount||0}W / ${rep.lossesCount||0}L</p>
+          </div>
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-3 text-center">
+            <p class="text-xs text-gray-500">Win Rate</p>
+            <p class="text-2xl font-bold text-blue-400">${rep.winRate != null ? rep.winRate+'%' : '—'}</p>
+            <p class="text-xs text-gray-500">de acierto</p>
+          </div>
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-3 text-center">
+            <p class="text-xs text-gray-500">Total Fees</p>
+            <p class="text-2xl font-bold text-orange-400">$${(rep.totalFeesUSD||0).toFixed(3)}</p>
+            <p class="text-xs text-gray-500">comisiones</p>
+          </div>
         </div>
-        <div>
-          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">📊 Estado por Posición</p>
-          ${positionsHTML}
-          ${flagsHTML}
+
+        <!-- Desglose de fees -->
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">💸 Desglose de Comisiones</p>
+          <div class="grid grid-cols-3 gap-2 text-xs">
+            <div class="text-center"><p class="text-gray-500">Entrada</p><p class="font-semibold mono">$${(rep.feeBreakdown?.entryFees||0).toFixed(4)}</p></div>
+            <div class="text-center"><p class="text-gray-500">Salida</p><p class="font-semibold mono">$${(rep.feeBreakdown?.exitFees||0).toFixed(4)}</p></div>
+            <div class="text-center"><p class="text-gray-500">API</p><p class="font-semibold mono">$${(rep.feeBreakdown?.apiCosts||0).toFixed(4)}</p></div>
+          </div>
+        </div>
+
+        <!-- Top 5 ganancias y pérdidas -->
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <p class="text-xs font-semibold text-green-400 mb-2">🏆 Top 5 Ganancias</p>
+            <div class="space-y-1">${top5WinsHTML}</div>
+          </div>
+          <div>
+            <p class="text-xs font-semibold text-red-400 mb-2">📉 Top 5 Pérdidas</p>
+            <div class="space-y-1">${top5LossesHTML}</div>
+          </div>
+        </div>
+
+        <!-- Razones de cierre -->
+        ${crHTML ? `<div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">🔢 Razones de Cierre</p>
+          <div class="space-y-1">${crHTML}</div>
+        </div>` : ''}
+
+        <!-- Configuraciones usadas -->
+        <div class="grid grid-cols-2 gap-3">
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+            <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">⚙️ Config Compraventa</p>
+            <div class="space-y-1 text-xs">
+              <div class="flex justify-between"><span class="text-gray-500">Take Profit</span><span class="text-green-400 font-bold">+${tc.takeProfitPct||'—'}%</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Stop Loss</span><span class="text-red-400 font-bold">-${tc.stopLossPct||'—'}%</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Max Hold</span><span class="font-semibold">${tc.maxHoldCycles||'—'} ciclos</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Capital total</span><span class="font-semibold mono">$${tc.capitalTotal||'—'}</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Por ciclo</span><span class="font-semibold">${((tc.capitalPerCycle||0)*100).toFixed(0)}%</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Modo</span><span class="font-semibold">${tc.mode||'—'}</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Exchange</span><span class="font-semibold">${tc.exchange||'—'}</span></div>
+            </div>
+          </div>
+          <div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+            <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">🧠 Config Algoritmo</p>
+            <div class="space-y-1 text-xs">
+              <div class="flex justify-between"><span class="text-gray-500">Min Boost</span><span class="font-semibold">${ac.invertibleMinBoost != null ? (ac.invertibleMinBoost*100).toFixed(0)+'%' : '—'}</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Target Invertible</span><span class="font-semibold">${ac.invertibleTarget != null ? ac.invertibleTarget+'%' : '—'}</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Meta potencial</span><span class="font-semibold">${ac.metaWeights?.potential != null ? (ac.metaWeights.potential*100).toFixed(0)+'%' : '—'}</span></div>
+              <div class="flex justify-between"><span class="text-gray-500">Meta resistencia</span><span class="font-semibold">${ac.metaWeights?.resistance != null ? (ac.metaWeights.resistance*100).toFixed(0)+'%' : '—'}</span></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Contexto de mercado -->
+        <div class="bg-gray-900 border border-gray-800 rounded-xl p-3">
+          <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2">🌍 Contexto de Mercado</p>
+          <div class="flex gap-4 text-xs">
+            <span class="text-gray-500">Movimiento medio: <span class="font-bold ${(rep.marketContext?.avgMarketPnl||0) >= 0 ? 'text-green-400':'text-red-400'}">${(rep.marketContext?.avgMarketPnl||0) >= 0?'+':''}${(rep.marketContext?.avgMarketPnl||0).toFixed(2)}%</span></span>
+            ${rep.marketContext?.bestSymbol  ? `<span class="text-gray-500">Mejor: <span class="text-green-400 font-bold">${rep.marketContext.bestSymbol}</span></span>` : ''}
+            ${rep.marketContext?.worstSymbol ? `<span class="text-gray-500">Peor: <span class="text-red-400 font-bold">${rep.marketContext.worstSymbol}</span></span>` : ''}
+          </div>
         </div>
       </div>
+
+      <!-- Footer -->
       <div class="p-3 border-t border-gray-800 shrink-0 flex gap-2">
-        <button onclick="document.getElementById('cycle-analysis-modal').remove()" class="flex-1 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">Cerrar</button>
-        <button onclick="document.getElementById('cycle-analysis-modal').remove(); loadInvestPositions();" class="flex-1 bg-indigo-800 hover:bg-indigo-700 px-4 py-2 rounded-lg text-sm font-semibold transition-colors">🔄 Refrescar posiciones</button>
+        <button onclick="document.getElementById('round-report-modal').remove()" class="flex-1 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-lg text-sm font-semibold">Cerrar</button>
+        <button onclick="document.getElementById('round-report-modal').remove(); openNewRoundWizard();" class="flex-1 bg-indigo-700 hover:bg-indigo-600 px-4 py-2 rounded-lg text-sm font-bold">🚀 Nueva Ronda →</button>
       </div>
     </div>`;
 
@@ -2608,6 +2736,218 @@ function showCycleAnalysisModal(data) {
   document.body.appendChild(modal);
 }
 
+// ── Modal: Confirmar cierre de ronda ─────────────────────────────────────────
+function openCloseRoundModal() {
+  document.getElementById('close-round-modal')?.remove();
+  const modal = document.createElement('div');
+  modal.id = 'close-round-modal';
+  modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  modal.style.background = 'rgba(0,0,0,0.8)';
+  modal.innerHTML = `
+    <div class="cycle-modal-enter bg-gray-950 border border-red-900 rounded-2xl w-full max-w-md shadow-2xl">
+      <div class="p-5">
+        <h2 class="text-base font-bold text-red-400 mb-1">🏁 Cerrar Ronda de Inversión</h2>
+        <p class="text-sm text-gray-400 mb-4">Se cerrarán <strong class="text-white">todas las posiciones abiertas</strong> a precio de mercado actual y se generará el informe de la ronda.</p>
+        <div class="bg-red-950/40 border border-red-900 rounded-lg p-3 mb-4 text-xs text-red-300">
+          ⚠️ Esta acción no se puede deshacer. Las órdenes se ejecutarán inmediatamente.
+        </div>
+        <div id="close-round-status" class="hidden text-sm text-gray-400 mb-3"></div>
+        <div class="flex gap-2">
+          <button onclick="document.getElementById('close-round-modal').remove()" class="flex-1 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-lg text-sm font-semibold">Cancelar</button>
+          <button id="btn-confirm-close-round" onclick="executeCloseRound()" class="flex-1 bg-red-700 hover:bg-red-600 px-4 py-2 rounded-lg text-sm font-bold">🏁 Confirmar Cierre</button>
+        </div>
+      </div>
+    </div>`;
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function executeCloseRound() {
+  const btn    = document.getElementById('btn-confirm-close-round');
+  const status = document.getElementById('close-round-status');
+  btn.disabled = true; btn.innerHTML = '⏳ Cerrando posiciones...';
+  status.classList.remove('hidden'); status.textContent = 'Obteniendo precios actuales y ejecutando cierres...';
+  try {
+    const r = await fetch('/api/invest/rounds/close', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const d = await r.json();
+    if (!d.success) { status.textContent = '❌ ' + d.error; btn.disabled = false; btn.innerHTML = '🏁 Confirmar Cierre'; return; }
+    document.getElementById('close-round-modal').remove();
+    // Recargar datos
+    await loadInvestPositions();
+    await loadInvestOverview();
+    // Mostrar informe
+    showRoundReport({ roundNumber: d.report.roundNumber, report: d.report });
+    await loadCurrentRoundBanner();
+  } catch(e) {
+    status.textContent = '❌ ' + e.message;
+    btn.disabled = false; btn.innerHTML = '🏁 Confirmar Cierre';
+  }
+}
+
+// ── Wizard: Abrir nueva ronda ─────────────────────────────────────────────────
+async function openNewRoundWizard() {
+  document.getElementById('new-round-modal')?.remove();
+
+  // Primero obtener recomendaciones
+  let suggestions = {}, adjustments = [], currentConfig = {}, algoConfig = null, basedOnRounds = 0;
+  try {
+    const r = await fetch('/api/invest/rounds/recommendations', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}) });
+    const d = await r.json();
+    if (d.success) { suggestions = d.suggestions; adjustments = d.reasonedAdjustments || []; currentConfig = d.currentConfig || {}; algoConfig = d.algoConfig; basedOnRounds = d.basedOnRounds || 0; }
+  } catch(_) {}
+
+  const s = { ...suggestions };
+  const adjustmentsHTML = adjustments.length > 0
+    ? `<div class="bg-amber-950/40 border border-amber-800 rounded-lg p-3 mb-3">
+        <p class="text-xs font-semibold text-amber-400 mb-1.5">💡 Ajustes recomendados (basados en ${basedOnRounds} ronda${basedOnRounds!==1?'s':''})</p>
+        ${adjustments.map(a => `<p class="text-xs text-gray-300 mb-1">• <span class="text-amber-300">${a.param}</span>: ${a.from} → <span class="text-white font-bold">${a.to}</span> — ${a.reason}</p>`).join('')}
+      </div>` : '';
+
+  const algoHTML = algoConfig ? `
+    <div class="bg-gray-900 border border-gray-800 rounded-lg p-3 mb-3">
+      <p class="text-xs font-semibold text-gray-400 mb-1.5">🧠 Algoritmo activo</p>
+      <div class="flex gap-4 text-xs text-gray-400">
+        <span>Min Boost: <span class="text-white">${algoConfig.invertibleMinBoost != null ? (algoConfig.invertibleMinBoost*100).toFixed(0)+'%' : '—'}</span></span>
+        <span>Target: <span class="text-white">${algoConfig.invertibleTarget != null ? algoConfig.invertibleTarget+'%' : '—'}</span></span>
+        <span>Potencial: <span class="text-white">${algoConfig.metaWeights?.potential != null ? (algoConfig.metaWeights.potential*100).toFixed(0)+'%' : '—'}</span></span>
+      </div>
+    </div>` : '';
+
+  const modal = document.createElement('div');
+  modal.id = 'new-round-modal';
+  modal.className = 'fixed inset-0 z-50 flex items-center justify-center p-4';
+  modal.style.background = 'rgba(0,0,0,0.8)';
+  modal.innerHTML = `
+    <div class="cycle-modal-enter bg-gray-950 border border-indigo-900 rounded-2xl w-full max-w-lg max-h-[92vh] flex flex-col shadow-2xl">
+      <div class="flex items-center justify-between p-4 border-b border-gray-800 shrink-0">
+        <div>
+          <h2 class="text-base font-bold text-indigo-300">🚀 Nueva Ronda de Inversión</h2>
+          <p class="text-xs text-gray-500 mt-0.5">Configura los parámetros para la siguiente ronda</p>
+        </div>
+        <button onclick="document.getElementById('new-round-modal').remove()" class="text-gray-500 hover:text-white text-xl p-1">✕</button>
+      </div>
+
+      <div class="overflow-y-auto p-4 flex-1">
+
+        ${adjustmentsHTML}
+        ${algoHTML}
+
+        <!-- Formulario de config -->
+        <div class="space-y-3">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Capital Total (USD)</label>
+              <input id="nr-capital" type="number" step="50" value="${s.capitalTotal || 1000}" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Capital por Ciclo</label>
+              <select id="nr-capital-pct" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+                ${[0.10,0.15,0.20,0.25,0.30,0.35,0.40,0.50].map(v => `<option value="${v}" ${Math.abs(v-(s.capitalPerCycle||0.3)) < 0.01 ? 'selected':''}>${(v*100).toFixed(0)}%</option>`).join('')}
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-3 gap-3">
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Take Profit %</label>
+              <input id="nr-tp" type="number" step="0.5" min="1" max="50" value="${s.takeProfitPct || 10}" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Stop Loss %</label>
+              <input id="nr-sl" type="number" step="0.5" min="1" max="30" value="${s.stopLossPct || 5}" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Max Hold Ciclos</label>
+              <select id="nr-hold" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+                ${[1,2,3,4,5,6].map(v => `<option value="${v}" ${v === (s.maxHoldCycles||3) ? 'selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Máx posiciones</label>
+              <select id="nr-maxpos" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+                ${[1,2,3,4,5].map(v => `<option value="${v}" ${v === (s.maxPositions||3) ? 'selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Min BoostPower</label>
+              <select id="nr-boost" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+                ${[0.50,0.55,0.60,0.65,0.70,0.75,0.80,0.85].map(v => `<option value="${v}" ${Math.abs(v-(s.minBoostPower||0.65)) < 0.01 ? 'selected':''}>${(v*100).toFixed(0)}%</option>`).join('')}
+              </select>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Modo</label>
+              <select id="nr-mode" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+                <option value="simulated" ${(s.mode||'simulated') === 'simulated' ? 'selected':''}>⚗️ Simulado</option>
+                <option value="real"      ${s.mode === 'real'      ? 'selected':''}>💰 Real</option>
+              </select>
+            </div>
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">Exchange</label>
+              <select id="nr-exchange" class="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none">
+                <option value="binance"  ${(s.exchange||'binance') === 'binance'  ? 'selected':''}>Binance</option>
+                <option value="coinbase" ${s.exchange === 'coinbase' ? 'selected':''}>Coinbase</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="nr-status" class="hidden mt-3 text-sm text-gray-400"></div>
+      </div>
+
+      <div class="p-3 border-t border-gray-800 shrink-0 flex gap-2">
+        <button onclick="document.getElementById('new-round-modal').remove()" class="flex-1 bg-gray-800 hover:bg-gray-700 px-4 py-2 rounded-lg text-sm font-semibold">Cancelar</button>
+        <button id="btn-open-round" onclick="submitNewRound()" class="flex-1 bg-indigo-700 hover:bg-indigo-600 px-4 py-2 rounded-lg text-sm font-bold">🚀 Abrir Ronda</button>
+      </div>
+    </div>`;
+
+  modal.addEventListener('click', e => { if (e.target === modal) modal.remove(); });
+  document.body.appendChild(modal);
+}
+
+async function submitNewRound() {
+  const btn    = document.getElementById('btn-open-round');
+  const status = document.getElementById('nr-status');
+  btn.disabled = true; btn.innerHTML = '⏳ Abriendo...';
+  status.classList.remove('hidden'); status.textContent = 'Configurando nueva ronda...';
+  try {
+    const payload = {
+      capitalTotal:    parseFloat(document.getElementById('nr-capital').value),
+      capitalPerCycle: parseFloat(document.getElementById('nr-capital-pct').value),
+      takeProfitPct:   parseFloat(document.getElementById('nr-tp').value),
+      stopLossPct:     parseFloat(document.getElementById('nr-sl').value),
+      maxHoldCycles:   parseInt(document.getElementById('nr-hold').value),
+      maxPositions:    parseInt(document.getElementById('nr-maxpos').value),
+      minBoostPower:   parseFloat(document.getElementById('nr-boost').value),
+      mode:            document.getElementById('nr-mode').value,
+      exchange:        document.getElementById('nr-exchange').value,
+    };
+    const r = await fetch('/api/invest/rounds/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+    const d = await r.json();
+    if (!d.success) { status.textContent = '❌ ' + d.error; btn.disabled = false; btn.innerHTML = '🚀 Abrir Ronda'; return; }
+    document.getElementById('new-round-modal').remove();
+    await loadCurrentRoundBanner();
+    await loadInvestPositions();
+    await loadInvestOverview();
+    if (typeof loadInvestRounds === 'function') loadInvestRounds();
+    // Mostrar confirmación breve
+    const toast = document.createElement('div');
+    toast.className = 'fixed bottom-6 left-1/2 -translate-x-1/2 bg-indigo-800 border border-indigo-600 text-white px-5 py-3 rounded-xl shadow-2xl z-50 text-sm font-semibold cycle-modal-enter';
+    toast.textContent = `✅ Ronda #${d.round.roundNumber} abierta — ¡A invertir!`;
+    document.body.appendChild(toast);
+    setTimeout(() => toast.remove(), 3500);
+  } catch(e) {
+    status.textContent = '❌ ' + e.message;
+    btn.disabled = false; btn.innerHTML = '🚀 Abrir Ronda';
+  }
+}
+
+// ── Cargar banner al entrar en Posiciones ─────────────────────────────────────
 
 // ── Rendimiento ──────────────────────────────────────────────────
 async function loadInvestPerformance() {
