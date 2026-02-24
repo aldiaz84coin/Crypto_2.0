@@ -1,12 +1,19 @@
 /**
- * patch-scheduler-sync.js
- * Sincroniza el widget del WD frontend con el último run del scheduler server-side.
- * Al cargar la app (o volver a la pestaña), consulta /api/scheduler/status y
- * actualiza _wd.lastRunAt para que el widget refleje la realidad del servidor.
+ * patch-scheduler-sync.js  v2
+ * Sincroniza el widget del WD frontend con el último run del servidor (Redis).
  *
- * INSTALACIÓN: ya referenciado en index.html después de patch-pump-duration.js
+ * NOVEDADES v2:
+ *  - Sincronización periódica cada 3 min (antes solo al cargar/volver a la pestaña)
+ *  - Detección de WD overdue (>32 min): badge rojo en el widget
+ *  - Fallback de emergencia (>35 min): llama a /api/watchdog/ping antes de ejecutar local
  */
 'use strict';
+
+const _SYNC_INTERVAL_MS     = 3  * 60 * 1000; // consultar estado cada 3 min
+const _WD_OVERDUE_MS        = 32 * 60 * 1000; // >32 min → badge de alerta
+const _WD_EMERGENCY_MS      = 35 * 60 * 1000; // >35 min → disparar ping / fallback local
+
+let _syncTimer = null;
 
 async function syncSchedulerStatus() {
   try {
@@ -39,13 +46,12 @@ async function syncSchedulerStatus() {
           _wd.nextRunAt = serverLastRun + 30 * 60 * 1000;
         }
 
-        // ── Cancelar timeout inicial si el servidor corrió recientemente ──
+        // Cancelar timeout inicial si el servidor ya corrió recientemente
         if (_wd.pendingTimeout !== null && _wd.pendingTimeout !== undefined) {
           clearTimeout(_wd.pendingTimeout);
           _wd.pendingTimeout = null;
           console.log('[scheduler-sync] ⛔ Timeout inicial del WD cancelado');
 
-          // Reprogramar según el tiempo real del servidor
           const WD_MS = _wd.INTERVAL_MS || (30 * 60 * 1000);
           if (timeSince < (WD_MS - 2 * 60 * 1000)) {
             const waitMs = Math.max(10000, WD_MS - timeSince);
@@ -64,16 +70,34 @@ async function syncSchedulerStatus() {
         if (typeof _wdRender   === 'function') _wdRender();
 
         console.log(
-          `[scheduler-sync] WD sincronizado con servidor — ` +
+          `[scheduler-sync] WD sincronizado — ` +
           `último run hace ${Math.round(timeSince / 60000)}min`
         );
+
+        // Si el server corrió recientemente, quitar badge overdue
+        _wdClearOverdueBadge();
       }
+    }
+
+    // ── Detección de WD overdue ───────────────────────────────────────────
+    const wdLastRun  = d.watchdog?.lastRunAt || _wd.lastRunAt || 0;
+    const wdElapsed  = wdLastRun ? now - wdLastRun : 0;
+
+    if (wdLastRun && wdElapsed > _WD_EMERGENCY_MS && !_wd.running) {
+      const min = Math.floor(wdElapsed / 60000);
+      console.warn(`[scheduler-sync] 🚨 WD EMERGENCIA — sin correr hace ${min}min → disparando ping`);
+      _wdSetOverdueBadge(min);
+      _triggerWatchdogEmergency();
+    } else if (wdLastRun && wdElapsed > _WD_OVERDUE_MS) {
+      _wdSetOverdueBadge(Math.floor(wdElapsed / 60000));
+    } else {
+      _wdClearOverdueBadge();
     }
 
     if (d.iterations?.lastRunAt) {
       console.log(
-        `[scheduler-sync] Iteraciones servidor — ` +
-        `último run hace ${Math.round(d.iterations.lastRunAgo / 60000)}min · ` +
+        `[scheduler-sync] Iteraciones — ` +
+        `hace ${Math.round(d.iterations.lastRunAgo / 60000)}min · ` +
         `procesadas: ${d.iterations.lastProcessed}`
       );
     }
@@ -82,14 +106,61 @@ async function syncSchedulerStatus() {
   }
 }
 
-if (document.readyState === 'loading') {
-  document.addEventListener('DOMContentLoaded', () => setTimeout(syncSchedulerStatus, 3500));
-} else {
-  setTimeout(syncSchedulerStatus, 3500);
+// ── Badge overdue en el widget ────────────────────────────────────────────────
+function _wdSetOverdueBadge(minutes) {
+  const w = document.getElementById('watchdog-widget');
+  if (!w) return;
+  w.style.borderColor = '#dc2626';
+  let badge = document.getElementById('wd-overdue-badge');
+  if (!badge) {
+    badge = document.createElement('div');
+    badge.id = 'wd-overdue-badge';
+    badge.style.cssText = 'color:#f87171;font-size:10px;margin-top:4px;font-weight:bold;';
+    w.appendChild(badge);
+  }
+  badge.textContent = `⚠️ Sin ejecutar hace ${minutes}min`;
 }
 
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState === 'visible') setTimeout(syncSchedulerStatus, 1500);
-});
+function _wdClearOverdueBadge() {
+  const badge = document.getElementById('wd-overdue-badge');
+  if (badge) badge.remove();
+}
 
-console.log('[patch-scheduler-sync] ✅ Sincronización con scheduler del servidor activa');
+// ── Fallback de emergencia ────────────────────────────────────────────────────
+async function _triggerWatchdogEmergency() {
+  try {
+    const r = await fetch('/api/watchdog/ping');
+    const d = await r.json();
+    if (d.triggered) {
+      console.log('[scheduler-sync] ✅ Ping de emergencia aceptado — WD en ejecución');
+    } else {
+      console.log('[scheduler-sync] Ping respondió:', d.reason || JSON.stringify(d));
+    }
+  } catch(e) {
+    // Último recurso: ejecutar WD directamente desde el browser
+    console.warn('[scheduler-sync] Ping falló — ejecutando WD local:', e.message);
+    if (typeof _wdRun === 'function') _wdRun();
+  }
+}
+
+// ── Arranque ──────────────────────────────────────────────────────────────────
+(function _initSchedulerSync() {
+  // Sincronización inicial
+  const _initialSync = () => setTimeout(syncSchedulerStatus, 3500);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', _initialSync);
+  } else {
+    _initialSync();
+  }
+
+  // Sincronización periódica cada 3 min
+  _syncTimer = setInterval(syncSchedulerStatus, _SYNC_INTERVAL_MS);
+
+  // Re-sincronizar al volver a la pestaña
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') setTimeout(syncSchedulerStatus, 1500);
+  });
+
+  console.log('[patch-scheduler-sync] ✅ v2 — sync cada 3min + detección overdue activa');
+})();
+
