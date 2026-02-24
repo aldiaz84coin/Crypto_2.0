@@ -525,6 +525,20 @@
 
     <!-- Rendimiento -->
     <div id="inv-performance" class="inv-subtab hidden">
+      <!-- Calibración del modelo de predicción -->
+      <div id="inv-calibration-panel" class="mb-5 bg-gray-900 border border-gray-800 rounded-xl p-4">
+        <div class="flex items-center justify-between mb-3">
+          <div>
+            <p class="text-sm font-semibold text-purple-300">🧪 Calibración del Modelo de Predicción</p>
+            <p class="text-xs text-gray-500 mt-0.5">El algoritmo aprende de cada ejecución real para mejorar sus previsiones</p>
+          </div>
+          <div class="flex gap-2">
+            <button onclick="loadCalibrationStatus()" class="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded-lg text-xs">🔄 Estado</button>
+            <button onclick="rebuildCalibration()" class="bg-purple-800 hover:bg-purple-700 px-3 py-1.5 rounded-lg text-xs font-semibold">⚙️ Recalibrar</button>
+          </div>
+        </div>
+        <div id="inv-calibration-content"><p class="text-gray-600 text-xs">Clic en "Estado" para ver la calibración actual</p></div>
+      </div>
       <div id="inv-perf-content"><p class="text-gray-500 text-sm">Cargando rendimiento...</p></div>
     </div>
 
@@ -1053,7 +1067,7 @@ async function loadCryptos() {
           <div class="text-right ml-4 flex-shrink-0">
             <div class="text-2xl font-bold mono">${c.boostPowerPercent}%</div>
             <div class="text-xs text-gray-500">BoostPower</div>
-            ${c.predictedChange > 0 ? `<div class="text-xs text-green-400 mt-1">+${c.predictedChange}% previsto</div>` : ''}
+            ${c.predictedChange > 0 ? `<div class="text-xs text-green-400 mt-1">+${c.predictedChange}% previsto${c.calibrationApplied ? ' <span title="Calibrado con datos reales">🧪</span>' : ''}</div>` : ''}
           </div>
         </div>`;
       list.appendChild(card);
@@ -2040,7 +2054,7 @@ function openTab(tab) {
   investCurrentSubtab = tab;
   if (tab === 'inv-overview')    loadInvestOverview();
   if (tab === 'inv-positions')   loadInvestPositions();
-  if (tab === 'inv-performance') loadInvestPerformance();
+  if (tab === 'inv-performance') { loadInvestPerformance(); loadCalibrationStatus(); }
   if (tab === 'inv-log')         loadInvestLog();
   if (tab === 'inv-rounds')      loadInvestRounds();
 }
@@ -2948,6 +2962,78 @@ async function submitNewRound() {
 }
 
 // ── Cargar banner al entrar en Posiciones ─────────────────────────────────────
+
+// ── Calibración del modelo de predicción ─────────────────────────────────────
+async function loadCalibrationStatus() {
+  const div = document.getElementById('inv-calibration-content');
+  div.innerHTML = '<p class="text-gray-500 text-xs">Cargando...</p>';
+  try {
+    const r = await fetch('/api/invest/prediction-calibration');
+    const d = await r.json();
+    if (!d.success) { div.innerHTML = `<p class="text-red-400 text-xs">❌ ${d.error}</p>`; return; }
+    const rep = d.report;
+    if (rep.status === 'no_data') {
+      div.innerHTML = '<p class="text-gray-500 text-xs">Sin datos aún. La calibración se construirá automáticamente con cada posición cerrada.</p>';
+      return;
+    }
+    const cats = rep.categories || {};
+    const rows = Object.entries(cats).map(([cat, e]) => {
+      const biasBadge = Math.abs(e.bias) > 5
+        ? `<span class="pill ${e.bias > 0 ? 'bg-orange-900 text-orange-300' : 'bg-blue-900 text-blue-300'}">${e.bias > 0 ? '↓' : '↑'} bias ${Math.abs(e.bias).toFixed(1)}%</span>`
+        : '<span class="pill bg-green-900 text-green-300">✓ bias ok</span>';
+      const qualityColor = e.quality === 'good' ? 'text-green-400' : e.quality === 'growing' ? 'text-yellow-400' : 'text-gray-500';
+      return `
+        <div class="bg-gray-800 rounded-lg p-3">
+          <div class="flex justify-between items-center mb-2">
+            <span class="text-xs font-semibold">${cat}</span>
+            <div class="flex gap-1.5 items-center">
+              ${biasBadge}
+              <span class="text-xs ${qualityColor}">${e.samples} muestras</span>
+            </div>
+          </div>
+          ${e.hasEnough ? `
+            <div class="grid grid-cols-3 gap-2 text-xs mb-2">
+              <div class="text-center"><p class="text-gray-500">Bias</p><p class="font-bold ${Math.abs(e.bias) > 5 ? 'text-orange-400' : 'text-gray-300'}">${e.bias > 0 ? '+' : ''}${e.bias.toFixed(1)}%</p></div>
+              <div class="text-center"><p class="text-gray-500">Scale</p><p class="font-bold ${e.scale < 0.6 ? 'text-red-400' : e.scale > 1.4 ? 'text-blue-400' : 'text-gray-300'}">×${e.scale.toFixed(2)}</p></div>
+              <div class="text-center"><p class="text-gray-500">MAE</p><p class="font-bold ${e.maeEMA > 15 ? 'text-red-400' : 'text-gray-300'}">${e.maeEMA.toFixed(1)}%</p></div>
+            </div>
+            <p class="text-xs text-gray-500 italic">${e.diagnosis}</p>` : `
+            <p class="text-gray-600 text-xs">Necesita ${3 - e.samples} operaciones más para calibrarse</p>`}
+          ${e.recentHistory && e.recentHistory.length > 0 ? `
+            <details class="mt-2">
+              <summary class="text-xs text-gray-500 cursor-pointer hover:text-gray-300">Últimas ${e.recentHistory.length} observaciones</summary>
+              <div class="mt-1.5 space-y-1">
+                ${e.recentHistory.map(h => `
+                  <div class="flex justify-between text-xs bg-gray-900 rounded px-2 py-1">
+                    <span class="text-gray-400">${h.symbol}</span>
+                    <span class="text-blue-400">pred: +${h.predicted}%</span>
+                    <span class="${h.actual >= 0 ? 'text-green-400' : 'text-red-400'}">real: ${h.actual >= 0 ? '+' : ''}${h.actual}%</span>
+                    <span class="${Math.abs(h.error) < 5 ? 'text-gray-500' : 'text-orange-400'}">err: ${h.error > 0 ? '+' : ''}${h.error}%</span>
+                  </div>`).join('')}
+              </div>
+            </details>` : ''}
+        </div>`;
+    });
+
+    const updatedAt = rep.updatedAt ? new Date(rep.updatedAt).toLocaleString('es-ES') : 'Nunca';
+    div.innerHTML = `
+      <div class="grid grid-cols-2 gap-3 mb-3">${rows.join('')}</div>
+      <p class="text-xs text-gray-600">Última actualización: ${updatedAt}</p>`;
+  } catch(e) {
+    div.innerHTML = `<p class="text-red-400 text-xs">❌ ${e.message}</p>`;
+  }
+}
+
+async function rebuildCalibration() {
+  const div = document.getElementById('inv-calibration-content');
+  div.innerHTML = '<p class="text-gray-500 text-xs">⏳ Recalibrando desde historial de posiciones...</p>';
+  try {
+    const r = await fetch('/api/invest/prediction-calibration/rebuild', { method: 'POST' });
+    const d = await r.json();
+    if (!d.success) { div.innerHTML = `<p class="text-red-400 text-xs">❌ ${d.error}</p>`; return; }
+    await loadCalibrationStatus();
+  } catch(e) { div.innerHTML = `<p class="text-red-400 text-xs">❌ ${e.message}</p>`; }
+}
 
 // ── Rendimiento ──────────────────────────────────────────────────
 async function loadInvestPerformance() {
