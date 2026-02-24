@@ -1709,38 +1709,54 @@ async function fetchAndCachePrices(assetIds, symbolMap = {}) {
   }
 
   // Fuente 2: CryptoCompare
+  // FIX: Solo activos con ticker real en symbolMap. CoinGecko usa IDs largos ("bitcoin"),
+  // CryptoCompare usa tickers ("BTC"). Usar symbolMap[id] || id enviaría "BITCOIN" como
+  // símbolo, asignando precios de cryptos incorrectas o datos inválidos.
   if (pending.length > 0) {
     try {
-      const syms    = [...new Set(pending.map(id => (symbolMap[id] || id).toUpperCase()))].join(',');
-      const ccKey   = process.env.CRYPTOCOMPARE_API_KEY || await getRedisKey('CRYPTOCOMPARE_API_KEY') || '';
-      const headers = ccKey ? { authorization: `Apikey ${ccKey}` } : {};
-      const pRes    = await axios.get(
-        `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${syms}&tsyms=USD`,
-        { timeout: 7000, headers }
-      );
-      const data    = pRes.data || {};
-      const idBySym = {};
-      pending.forEach(id => { idBySym[(symbolMap[id] || id).toUpperCase()] = id; });
-      for (const [sym, vals] of Object.entries(data)) {
-        const id = idBySym[sym.toUpperCase()];
-        const p  = vals?.USD;
-        if (id && p && p > 0 && isFinite(p)) {
-          prices[id] = { price: p, source: 'cryptocompare', updatedAt: now, isStale: false };
-          pending.splice(pending.indexOf(id), 1);
-          if (source === 'none') source = 'cryptocompare';
+      const pendingCC = pending.filter(id => symbolMap[id] && symbolMap[id].trim().length > 0);
+      if (pendingCC.length === 0) {
+        console.warn('[price-cache] CryptoCompare: ningún activo tiene ticker en symbolMap → saltando');
+      } else {
+        const syms    = [...new Set(pendingCC.map(id => symbolMap[id].toUpperCase()))].join(',');
+        const ccKey   = process.env.CRYPTOCOMPARE_API_KEY || await getRedisKey('CRYPTOCOMPARE_API_KEY') || '';
+        const headers = ccKey ? { authorization: `Apikey ${ccKey}` } : {};
+        const pRes    = await axios.get(
+          `https://min-api.cryptocompare.com/data/pricemulti?fsyms=${syms}&tsyms=USD`,
+          { timeout: 7000, headers }
+        );
+        const data    = pRes.data || {};
+        // Mapa inverso TICKER → CoinGeckoId (solo activos con ticker válido)
+        const idBySym = {};
+        pendingCC.forEach(id => { idBySym[symbolMap[id].toUpperCase()] = id; });
+        for (const [sym, vals] of Object.entries(data)) {
+          const id = idBySym[sym.toUpperCase()];
+          const p  = vals?.USD;
+          if (id && p && p > 0 && isFinite(p)) {
+            prices[id] = { price: p, source: 'cryptocompare', updatedAt: now, isStale: false };
+            pending.splice(pending.indexOf(id), 1);
+            if (source === 'none') source = 'cryptocompare';
+          }
         }
       }
     } catch (e) { console.warn('[price-cache] CryptoCompare falló:', e.message); }
   }
 
   // Fuente 3: Binance
+  // FIX: Igual que CryptoCompare — solo usar el ticker del symbolMap, nunca el CoinGecko ID.
   if (pending.length > 0) {
     try {
       const pRes    = await axios.get('https://api.binance.com/api/v3/ticker/price', { timeout: 6000 });
       const tickers = {};
       (pRes.data || []).forEach(t => { tickers[t.symbol] = parseFloat(t.price); });
       for (const id of [...pending]) {
-        const sym = (symbolMap[id] || id).toUpperCase() + 'USDT';
+        const rawSym = symbolMap[id];
+        if (!rawSym) {
+          // Sin ticker conocido → no podemos construir el par USDT correcto
+          console.warn(`[price-cache] Binance: sin ticker en symbolMap para ${id} → saltando`);
+          continue;
+        }
+        const sym = rawSym.toUpperCase() + 'USDT';
         const p   = tickers[sym];
         if (p && p > 0 && isFinite(p)) {
           prices[id] = { price: p, source: 'binance', updatedAt: now, isStale: false };
@@ -3303,7 +3319,7 @@ app.post('/api/invest/watchdog', async (req, res) => {
 
     for (const position of open) {
       const priceInfo    = prices[position.assetId];
-      const currentPrice = priceInfo?.usd ?? priceInfo?.price;
+      const currentPrice = priceInfo?.price; // FIX: fetchAndCachePrices usa .price, nunca .usd
 
       if (!currentPrice) {
         checked.push({ assetId: position.assetId, symbol: position.symbol, status: 'no_price' });
@@ -3598,7 +3614,7 @@ async function serverWatchdog() {
 
     for (const position of open) {
       const priceInfo    = prices[position.assetId];
-      const currentPrice = priceInfo?.usd ?? priceInfo?.price;
+      const currentPrice = priceInfo?.price; // FIX: fetchAndCachePrices usa .price, nunca .usd
       if (!currentPrice) continue;
 
       const isStale = priceInfo?.isStale === true;
