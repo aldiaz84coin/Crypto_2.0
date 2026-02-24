@@ -39,6 +39,7 @@ const pumpDetector      = require('./pump-detector');
 const alertService      = require('./alert-service');
 const iterationEngine   = require('./iteration-engine');
 const scenariosEndpoint = require('./scenarios-endpoint');
+const predCalibration   = require('./prediction-calibration');
 
 const DEFAULT_CONFIG            = algorithmConfig.DEFAULT_CONFIG;
 const DEFAULT_CONFIG_NORMAL     = algorithmConfig.DEFAULT_CONFIG_NORMAL;
@@ -777,10 +778,11 @@ app.get('/api/crypto', async (req, res) => {
     });
 
     cryptosWithBoost.sort((a, b) => b.boostPower - a.boostPower);
+    const calibratedCryptos = await applyCalibrationToSnapshot(cryptosWithBoost);
 
     res.json({
       success: true,
-      data: cryptosWithBoost,
+      data: calibratedCryptos,
       marketContext: {
         fearGreed:     fg.success ? { value: fg.value, classification: fg.classification } : null,
         newsCount:     news.count || 0,
@@ -1825,6 +1827,53 @@ async function savePositions(positions) {
   await redisSet(POSITIONS_KEY, positions);
 }
 
+// ── Calibración online de predicciones ───────────────────────────────────────
+async function getPredictionCalibration() {
+  const stored = await redisGet(predCalibration.CALIBRATION_KEY);
+  if (stored && typeof stored === 'object') return stored;
+  if (stored && typeof stored === 'string') { try { return JSON.parse(stored); } catch(_){} }
+  return predCalibration.emptyCalibration();
+}
+async function savePredictionCalibration(cal) { await redisSet(predCalibration.CALIBRATION_KEY, cal); }
+
+async function onPositionClosed(position) {
+  if (!position?.classification || position.classification === 'RUIDOSO') return;
+  if (position.predictedChange == null || position.realizedPnLPct == null) return;
+  try {
+    const cal    = await getPredictionCalibration();
+    const newCal = predCalibration.updateCalibration(cal, {
+      classification:  position.classification,
+      boostPower:      position.boostPower       || 0,
+      predictedChange: position.predictedChange  || 0,
+      realizedPnLPct:  position.realizedPnLPct   || 0,
+      symbol:          position.symbol,
+      closedAt:        position.closedAt || new Date().toISOString(),
+    });
+    await savePredictionCalibration(newCal);
+  } catch(e) { console.warn('[calibration] Error actualizando:', e.message); }
+}
+
+async function applyCalibrationToSnapshot(snapshotAssets) {
+  let cal;
+  try { cal = await getPredictionCalibration(); } catch(_) { return snapshotAssets; }
+  return snapshotAssets.map(asset => {
+    const cat = asset.classification;
+    if (!cat || cat === 'RUIDOSO' || !asset.predictedChange) return asset;
+    const factors = predCalibration.getCorrectionFactors(cal, cat, asset.boostPower);
+    if (!factors) return asset;
+    const raw      = asset.basePrediction || asset.predictedChange;
+    let   calPred  = (raw - factors.biasCorrection) * factors.scaleCorrection;
+    calPred = Math.max(0.5, parseFloat(calPred.toFixed(2)));
+    return {
+      ...asset,
+      basePrediction:     raw,
+      predictedChange:    calPred,
+      calibrationApplied: true,
+      calibrationFactors: { confidence: factors.confidence, samples: factors.samples, source: factors.source }
+    };
+  });
+}
+
 // ── Rondas de inversión ───────────────────────────────────────────────────────
 async function getRounds() {
   const stored = await redisGet(INVEST_ROUNDS_KEY);
@@ -2263,6 +2312,7 @@ app.post('/api/invest/evaluate', async (req, res) => {
         // Ejecutar venta
         const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
         investManager.closePosition(position, evaluation);
+        await onPositionClosed(position);
         position.exchangeCloseOrderId = order.orderId;
         result.sold    = true;
         result.orderOk = order.success;
@@ -2390,6 +2440,7 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
     const keys = await getExchangeKeys(cfg.exchange);
     const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
     investManager.closePosition(position, evaluation);
+    await onPositionClosed(position);
     await savePositions(positions);
 
     // === LOG DETALLADO: manual_close ===
@@ -3668,6 +3719,7 @@ app.post('/api/invest/rounds/close', async (req, res) => {
         evaluation.reason  = 'round_close: cierre de ronda';
         const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
         investManager.closePosition(position, evaluation);
+        await onPositionClosed(position);
         position.exchangeCloseOrderId = order.orderId;
         closeResults.push({ symbol: position.symbol, pnlPct: evaluation.pnlPct, pnlUSD: evaluation.pnlUSD });
       }
@@ -3868,6 +3920,43 @@ app.post('/api/invest/rounds/recommendations', async (req, res) => {
       basedOnRounds: rounds.length,
       currentConfig: cfg,
     });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+
+// ── GET /api/invest/prediction-calibration ────────────────────────────────────
+app.get('/api/invest/prediction-calibration', async (_req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cal    = await getPredictionCalibration();
+    const report = predCalibration.buildCalibrationReport(cal);
+    res.json({ success: true, report });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/prediction-calibration/rebuild ───────────────────────────
+app.post('/api/invest/prediction-calibration/rebuild', async (_req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const positions = await getPositions();
+    const closed    = positions.filter(p =>
+      p.status === 'closed' && p.predictedChange != null && p.realizedPnLPct != null &&
+      ['INVERTIBLE', 'APALANCADO'].includes(p.classification)
+    );
+    if (closed.length === 0) return res.json({ success: true, message: 'Sin datos', samples: 0 });
+    const newCal = predCalibration.rebuildCalibration(closed);
+    await savePredictionCalibration(newCal);
+    const report = predCalibration.buildCalibrationReport(newCal);
+    res.json({ success: true, samplesProcessed: closed.length, report });
+  } catch(e) { res.status(500).json({ success: false, error: e.message }); }
+});
+
+// ── POST /api/invest/prediction-calibration/reset ────────────────────────────
+app.post('/api/invest/prediction-calibration/reset', async (_req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    await savePredictionCalibration(predCalibration.emptyCalibration());
+    res.json({ success: true, message: 'Calibración reseteada' });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 

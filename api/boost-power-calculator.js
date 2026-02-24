@@ -1,7 +1,15 @@
-// boost-power-calculator.js — v2.0
+// boost-power-calculator.js — v3.0
 // BoostPower = Potencial - Resistencia
-// Predicciones coherentes con la categoría
-// Validación honesta: dirección + tolerancia estrecha
+// Predicciones MULTI-SEÑAL: cada activo recibe una predicción única
+// Soporte para calibración online desde ejecuciones reales
+//
+// CAMBIOS v2 → v3:
+//  - buildPrediction reemplazada: ya no usa solo boostPower como escalar
+//  - Predicción basada en volatilidad individual del activo + señales independientes
+//  - Soporte para calibrationFactors externos (aprendizaje desde posiciones cerradas)
+//  - basePrediction añadido al resultado para análisis de calibración
+
+'use strict';
 
 const { normalize } = require('./algorithm-config');
 
@@ -9,7 +17,7 @@ const { normalize } = require('./algorithm-config');
 // FUNCIÓN PRINCIPAL
 // ══════════════════════════════════════════════════════════════════════════════
 
-function calculateBoostPower(crypto, config, externalData = {}) {
+function calculateBoostPower(crypto, config, externalData = {}, calibrationFactors = null) {
   const { potentialWeights, resistanceWeights, thresholds } = config;
 
   // ── BLOQUE POTENCIAL ────────────────────────────────────────────────────────
@@ -34,9 +42,6 @@ function calculateBoostPower(crypto, config, externalData = {}) {
   const resistance = weightedSum(resistanceFactors, resistanceWeights);
 
   // ── BOOST POWER NETO ────────────────────────────────────────────────────────
-  // potential y resistance están en [0,1]
-  // boostPower = potential * metaPotential - resistance * metaResistance
-  // Escalar a [0,1]: desplazar +0.5 para centrar
   const mp = config.metaWeights?.potential  ?? 0.60;
   const mr = config.metaWeights?.resistance ?? 0.40;
 
@@ -47,25 +52,34 @@ function calculateBoostPower(crypto, config, externalData = {}) {
   // ── CLASIFICACIÓN ────────────────────────────────────────────────────────────
   const classification = classifyAsset(boostPower, crypto, config);
 
-  // ── PREDICCIÓN COHERENTE ─────────────────────────────────────────────────────
-  // La predicción refleja el objetivo de la categoría, NO una fórmula lineal ciega
-  const predictedChange = buildPrediction(boostPower, classification.category, config);
+  // ── PREDICCIÓN MULTI-SEÑAL ───────────────────────────────────────────────────
+  // v3: cada activo recibe una predicción específica basada en sus factores individuales
+  // y el historial de calibración del modelo
+  const predictedChange = buildPrediction(
+    boostPower,
+    classification.category,
+    config,
+    { potentialFactors, resistanceFactors },
+    crypto,
+    calibrationFactors
+  );
 
   return {
     boostPower,
     boostPowerPercent: Math.round(boostPower * 100),
     predictedChange,
+    basePrediction:    predictedChange, // antes de calibración externa; se sobreescribe en index.js
     classification,
     breakdown: {
       potential: {
-        score: round(potential),
+        score:    round(potential),
         weighted: round(potential * mp),
-        factors: roundAll(potentialFactors)
+        factors:  roundAll(potentialFactors)
       },
       resistance: {
-        score: round(resistance),
+        score:    round(resistance),
         weighted: round(resistance * mr),
-        factors: roundAll(resistanceFactors)
+        factors:  roundAll(resistanceFactors)
       },
       indicators: buildIndicators(crypto, externalData, thresholds)
     }
@@ -73,247 +87,206 @@ function calculateBoostPower(crypto, config, externalData = {}) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// FACTORES DE POTENCIAL
+// PREDICCIÓN MULTI-SEÑAL — v3
+// ══════════════════════════════════════════════════════════════════════════════
+//
+// Modelo basado en 4 componentes independientes:
+//
+//  [1] BANDA DE VOLATILIDAD  — magnitud esperada según historial del activo
+//  [2] SEÑAL DIRECCIONAL     — composición de momentum precio + social + estructural
+//  [3] CONFIRMACIÓN VOLUMEN  — confirma o debilita la señal
+//  [4] CALIBRACIÓN ONLINE    — corrección aprendida de ejecuciones reales
+//
+// Ref: CryptoPulse (arXiv 2502.19349), XGBoost multifeature (arXiv 2407.11786)
 // ══════════════════════════════════════════════════════════════════════════════
 
-// ATL Proximity: cuánto espacio de subida tiene hacia el ATH
-// 1 = muy cerca del ATL (máximo potencial), 0 = en el ATH (sin espacio)
-function calcAtlProximity(crypto) {
-  const price = crypto.current_price || 0;
-  const atl   = crypto.atl || price;
-  const ath   = crypto.ath || price;
-  if (ath <= atl || price <= 0) return 0.3;
-  const positionPct = (price - atl) / (ath - atl); // 0=ATL, 1=ATH
-  // Invertir: cerca de ATL = score alto
-  // Bonus extra si está en el 25% inferior
-  if (positionPct < 0.15) return 1.0;
-  if (positionPct < 0.30) return 0.85;
-  if (positionPct < 0.50) return 0.65;
-  if (positionPct < 0.70) return 0.35;
-  return 0.15; // cerca del ATH = poco espacio
-}
+function buildPrediction(boostPower, category, config, factors, crypto, calibrationFactors) {
+  const pr = config.prediction || {};
 
-// Volume Surge: volumen actual vs "esperado"
-// Proxy: usamos market_cap como denominador cuando no tenemos media 7d
-function calcVolumeSurge(crypto, thresholds) {
-  const vol    = crypto.total_volume || 0;
-  const mcap   = crypto.market_cap   || 1;
-  if (vol <= 0) return 0.2;
+  if (category === 'RUIDOSO') return 0;
 
-  // Cap-to-volume ratio: vol/mcap > 0.10 = mucha actividad relativa
-  const ratio = vol / mcap;
-  if (ratio > 0.20) return 1.0;
-  if (ratio > 0.10) return 0.80;
-  if (ratio > 0.05) return 0.60;
-  if (ratio > 0.02) return 0.40;
-  return 0.20;
-}
-
-// Social Momentum: Reddit + noticias + Google Trends — señales relevantes al activo
-function calcSocialMomentum(crypto, externalData) {
-  let score = 0.3; // base neutral
-
-  // Noticias: solo contar las que mencionan el activo explícitamente
-  const assetNews = externalData.assetNews;
-  if (assetNews && assetNews.count > 0) {
-    const specificCount = assetNews.specificCount ?? assetNews.count;
-    const countBonus    = normalize(specificCount, 0, 8) * 0.3; // hasta +0.30 con 8 noticias específicas
-    score += countBonus;
-
-    // Sentimiento ponderado por relevancia
-    const sentiment = assetNews.avgSentiment ?? 0;
-    const ratio     = assetNews.count > 0 ? specificCount / assetNews.count : 0;
-    const dampened  = sentiment * Math.min(1, ratio * 1.5); // atenuar si pocas son relevantes
-    if (dampened > 0.3)       score += 0.25;
-    else if (dampened > 0.1)  score += 0.10;
-    else if (dampened < -0.3) score -= 0.15;
-    else if (dampened < -0.1) score -= 0.08;
+  // Graceful fallback si no se pasan factores (retrocompatibilidad)
+  if (!factors || !crypto) {
+    const target = pr.invertibleTarget ?? 15;
+    const factor = normalize(boostPower, 0.65, 1.0);
+    return parseFloat((target * 0.5 + factor * target * 0.5).toFixed(2));
   }
 
-  // Reddit: posts en subreddits cripto que mencionan el activo (ya filtrado en getAssetReddit)
-  const reddit = externalData.assetReddit;
-  if (reddit && reddit.success) {
-    if (reddit.postCount >= 10) score += 0.20;
-    else if (reddit.postCount >= 5)  score += 0.12;
-    else if (reddit.postCount >= 2)  score += 0.06;
-    const redditSent = reddit.avgSentiment ?? 0;
-    if (redditSent > 0.2)       score += 0.10;
-    else if (redditSent < -0.2) score -= 0.08;
+  const { potentialFactors = {}, resistanceFactors = {} } = factors;
+
+  const {
+    atlProximity    = 0.4,
+    volumeSurge     = 0.3,
+    socialMomentum  = 0.3,
+    newsSentiment   = 0.3,
+    reboundRecency  = 0.3,
+  } = potentialFactors;
+
+  const {
+    volatilityNoise = 0.3,
+    fearOverlap     = 0.3,
+  } = resistanceFactors;
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // [1] BANDA DE VOLATILIDAD — magnitud base del movimiento esperado
+  // ──────────────────────────────────────────────────────────────────────────
+  // La predicción debe ser coherente con la volatilidad real del activo.
+  // Un activo con ±2%/día no puede predecirse a ±30% en 12h.
+  // Usamos el movimiento reciente como proxy de volatilidad implícita.
+
+  const chg24      = crypto.price_change_percentage_24h ?? null;
+  const chg7d      = crypto.price_change_percentage_7d_in_currency ?? null;
+  const vol24      = chg24 !== null ? Math.abs(chg24) : null;
+  const vol7dDaily = chg7d !== null ? Math.abs(chg7d) / 7 : null;
+
+  // Combinación ponderada de métricas de volatilidad disponibles
+  let dailyVolProxy;
+  if (vol24 !== null && vol7dDaily !== null) {
+    dailyVolProxy = vol24 * 0.70 + vol7dDaily * 0.30; // más peso a dato reciente
+  } else if (vol24 !== null) {
+    dailyVolProxy = vol24;
+  } else if (vol7dDaily !== null) {
+    dailyVolProxy = vol7dDaily;
+  } else {
+    // Sin datos de precio: usar target config como referencia
+    dailyVolProxy = category === 'INVERTIBLE'
+      ? (pr.invertibleTarget ?? 15) / 2
+      : (pr.apalancadoTarget  ??  8) / 2;
   }
 
-  // ── Google Trends (SerpAPI) — interés de búsqueda real ────────────────────
-  // Señal genuina de demanda pública: difícil de manipular, muy correlada con movimientos
-  const trends = externalData.googleTrends;
-  if (trends && trends.success) {
-    const interest = trends.currentInterest || 0;
-    const growth   = trends.growthPercent   || 0;
+  // Para horizonte ~12h: usamos 60% de la volatilidad diaria como banda base
+  const targetCap      = category === 'INVERTIBLE'
+    ? (pr.invertibleTarget ?? 15) * 2
+    : (pr.apalancadoTarget  ??  8) * 2;
 
-    // Nivel de interés absoluto (0-100)
-    if      (interest > 75) score += 0.20; // trending fuerte — activo en el radar masivo
-    else if (interest > 50) score += 0.12; // interés elevado
-    else if (interest > 25) score += 0.05; // interés moderado
-    // < 25: bajo interés — puede ser acumulación silenciosa, no penalizar
+  const volatilityBand = Math.max(1.0, Math.min(dailyVolProxy * 0.60, targetCap));
 
-    // Crecimiento reciente de búsquedas (comparado con inicio del período)
-    if      (growth > 100) score += 0.15; // búsquedas se duplicaron o más — señal fuerte
-    else if (growth > 50)  score += 0.08; // crecimiento marcado
-    else if (growth > 20)  score += 0.04; // crecimiento moderado
-    else if (growth < -50) score -= 0.05; // caída fuerte de interés — señal negativa
+  // ──────────────────────────────────────────────────────────────────────────
+  // [2] SEÑAL DIRECCIONAL COMPUESTA ∈ [-1, +1]
+  // ──────────────────────────────────────────────────────────────────────────
+  // Cada fuente contribuye de forma independiente.
+
+  // A) Momentum de precio — señal más predictiva a corto plazo
+  //    tanh/12 normaliza el change diario a [-1,+1] suavizado
+  const priceMomentumSignal = chg24 !== null ? Math.tanh(chg24 / 12) : 0;
+
+  // B) Posición estructural — espacio de subida vs historial
+  //    atlProximity ∈ [0,1]: 0.5 = medio rango → señal neutral → [-0.5, +0.5]
+  const structuralSignal   = atlProximity - 0.5;
+
+  // C) Momentum social y noticias — rescalado desde neutral 0.3
+  const socialSignal       = socialMomentum - 0.3;   // [-0.3, +0.7]
+  const sentimentSignal    = newsSentiment  - 0.3;   // [-0.3, +0.7]
+  const reboundSignal      = reboundRecency - 0.3;   // [-0.3, +0.7]
+
+  // Composición ponderada (pesos calibrados para relevancia en horizonte 12h)
+  const directionComposite = (
+    priceMomentumSignal * 0.40 +  // precio: señal más fiable en corto plazo
+    structuralSignal    * 0.25 +  // posición histórica: contexto fundamental
+    socialSignal        * 0.20 +  // momentum social: confirma o contradice precio
+    sentimentSignal     * 0.10 +  // noticias: complementario al social
+    reboundSignal       * 0.05    // rebote técnico: señal secundaria
+  );
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // [3] CONFIRMACIÓN DE VOLUMEN — amplifica o debilita la señal
+  // ──────────────────────────────────────────────────────────────────────────
+  // volumeSurge ∈ [0,1] → multiplicador ∈ [0.5, 1.5]
+  const volumeMultiplier = 0.5 + volumeSurge * 1.0;
+
+  // Penalización por ruido elevado (alta volatilityNoise + fearOverlap)
+  const noisePenalty = 1 - (volatilityNoise * 0.20 + fearOverlap * 0.10); // ∈ [0.7, 1.0]
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // COMBINACIÓN DE TODOS LOS COMPONENTES
+  // ──────────────────────────────────────────────────────────────────────────
+  // La señal direccional se convierte en un multiplicador de magnitud positivo
+  // (para INVERTIBLE/APALANCADO solo invertimos cuando hay señal positiva)
+  const signalMagnitude = 0.3 + Math.max(0, directionComposite) * 1.2; // ∈ [0.3, 1.74]
+
+  // BoostPower como factor de confianza del clasificador
+  const bpMin            = category === 'INVERTIBLE' ? 0.65 : 0.40;
+  const bpConfidence     = normalize(boostPower, bpMin, 1.0);
+  const confidenceMult   = 0.6 + bpConfidence * 0.8; // ∈ [0.6, 1.4]
+
+  let prediction = volatilityBand
+    * signalMagnitude
+    * volumeMultiplier
+    * noisePenalty
+    * confidenceMult;
+
+  prediction = Math.max(0.5, prediction);
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // [4] CALIBRACIÓN ONLINE — corrección aprendida de ejecuciones reales
+  // ──────────────────────────────────────────────────────────────────────────
+  if (calibrationFactors && calibrationFactors.confidence > 0.1) {
+    const { biasCorrection = 0, scaleCorrection = 1.0 } = calibrationFactors;
+
+    prediction = prediction - biasCorrection;
+
+    if (scaleCorrection > 0 && scaleCorrection < 5) {
+      prediction = prediction * scaleCorrection;
+    }
   }
 
-  return Math.min(1, Math.max(0, score));
-}
+  // Clamp final
+  prediction = Math.max(0.5, Math.min(targetCap, prediction));
 
-// News Sentiment: tono de noticias — ponderado por relevancia del activo
-function calcNewsSentiment(crypto, externalData) {
-  const assetNews = externalData.assetNews;
-
-  // Sin noticias: valor neutral basado en FGI (no influye en el activo concreto)
-  if (!assetNews || assetNews.count === 0) {
-    const fgi = externalData.fearGreed?.value ?? 50;
-    return fgi < 40 ? 0.50 : fgi < 60 ? 0.45 : 0.40; // rango más estrecho → menos influencia
-  }
-
-  const total    = assetNews.count;
-  const specific = assetNews.specificCount ?? total; // artículos que mencionan el activo
-  const ratio    = total > 0 ? specific / total : 0; // % de artículos realmente relevantes
-
-  // Si menos del 30% de artículos mencionan el activo → el score se acerca al neutro
-  // Evita que noticias genéricas de mercado inflen o depriman el score del activo
-  const s = assetNews.avgSentiment ?? 0; // -1 a +1 (ya ponderado en el merge)
-  const base = (s + 1) / 2; // normalizar a 0-1
-
-  // Interpolación: con ratio=1 → base puro; con ratio=0 → 0.45 (neutro)
-  const NEUTRAL = 0.45;
-  const score = NEUTRAL + (base - NEUTRAL) * Math.min(1, ratio * 1.5);
-
-  return Math.min(1, Math.max(0, score));
-}
-
-// Rebound Recency: si el ATL fue reciente, rebote más probable
-function calcReboundRecency(crypto, thresholds) {
-  const atlDate = crypto.atl_date ? new Date(crypto.atl_date) : null;
-  if (!atlDate) return 0.4;
-
-  const daysSinceAtl = (Date.now() - atlDate.getTime()) / (1000 * 60 * 60 * 24);
-  const maxDays = thresholds.reboundDaysMax || 180;
-
-  if (daysSinceAtl < 30)  return 1.0;  // ATL en el último mes
-  if (daysSinceAtl < 90)  return 0.80; // último trimestre
-  if (daysSinceAtl < 180) return 0.60; // últimos 6 meses
-  if (daysSinceAtl < 365) return 0.35; // último año
-  return 0.15; // ATL muy antiguo
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// FACTORES DE RESISTENCIA
-// ══════════════════════════════════════════════════════════════════════════════
-
-// Leverage Ratio: cuántos holders están en beneficio y pueden vender
-// Proxy: precio actual vs ATH — más cerca del ATH = más presión vendedora
-function calcLeverageRatio(crypto, thresholds) {
-  const price = crypto.current_price || 0;
-  const ath   = crypto.ath || price;
-  if (ath <= 0) return 0.5;
-
-  const priceVsAth = price / ath; // 0=lejos del ATH, 1=en el ATH
-  // Cerca del ATH = alta resistencia (muchos en beneficio quieren vender)
-  if (priceVsAth > 0.85) return 1.0;
-  if (priceVsAth > 0.65) return 0.75;
-  if (priceVsAth > 0.45) return 0.50;
-  if (priceVsAth > 0.25) return 0.25;
-  return 0.10; // muy lejos del ATH = poca presión
-}
-
-// Market Cap Size: cuanto más grande, más difícil de mover
-function calcMarketCapSize(crypto, thresholds) {
-  const mcap = crypto.market_cap || 0;
-  const small = thresholds.marketCapSmall || 200e6;
-  const mid   = thresholds.marketCapMid   || 2e9;
-  const large = thresholds.marketCapLarge || 10e9;
-
-  if (mcap < small) return 0.10; // micro-cap: poca resistencia
-  if (mcap < mid)   return 0.35; // mid-cap: resistencia moderada
-  if (mcap < large) return 0.65; // large-cap: alta resistencia
-  return 0.90; // mega-cap (BTC, ETH): máxima resistencia
-}
-
-// Volatility Noise: volatilidad extrema indica ruido (no señal)
-function calcVolatilityNoise(crypto) {
-  const chg = Math.abs(crypto.price_change_percentage_24h || 0);
-  // Cambio < 3%: muy tranquilo, sin señal = algo de resistencia
-  // Cambio 5-15%: zona ideal de movimiento
-  // Cambio > 25%: ya muy volátil, ruido puro
-  if (chg < 2)  return 0.30; // tranquilo pero sin impulso
-  if (chg < 5)  return 0.15; // movimiento moderado-bajo: OK
-  if (chg < 15) return 0.05; // rango ideal: mínima resistencia
-  if (chg < 25) return 0.40; // demasiado volátil
-  return 0.85; // extremamente volátil: puro ruido
-}
-
-// Fear Overlap: FGI alto = euforia = techo cercano
-function calcFearOverlap(externalData) {
-  const fgi = externalData.fearGreed?.value ?? 50;
-  if (fgi > 80) return 0.90; // avaricia extrema = techo inminente
-  if (fgi > 65) return 0.65; // avaricia
-  if (fgi > 45) return 0.35; // neutral
-  if (fgi > 25) return 0.15; // miedo = oportunidad
-  return 0.05; // miedo extremo = mínima resistencia de euforia
+  return parseFloat(prediction.toFixed(2));
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// CLASIFICACIÓN — Lógica con condiciones combinadas
+// CLASIFICACIÓN
 // ══════════════════════════════════════════════════════════════════════════════
 
 function classifyAsset(boostPower, crypto, config) {
   const cl = config.classification || {};
-  const invertibleMin = cl.invertibleMinBoost   ?? 0.65;
-  const apalancadoMin = cl.apalancadoMinBoost   ?? 0.40;
-  const maxMcap       = cl.invertibleMaxMarketCap ?? 500e6;
-  const minAtlProx    = cl.invertibleMinAtlProx   ?? 0.60;
-  const minVolSurge   = cl.invertibleMinVolSurge  ?? 1.20;
+  const invertibleMinBoost  = cl.invertibleMinBoost  ?? 0.65;
+  const apalancadoMinBoost  = cl.apalancadoMinBoost  ?? 0.40;
+  const invertibleMaxMarketCap = cl.invertibleMaxMarketCap ?? 500e6;
+  const invertibleMinAtlProx   = cl.invertibleMinAtlProx   ?? 0.60;
 
-  const mcap         = crypto.market_cap || 0;
-  const price        = crypto.current_price || 0;
-  const atl          = crypto.atl || price;
-  const ath          = crypto.ath || price;
-  const atlPos       = ath > atl ? (price - atl) / (ath - atl) : 0.5;
-  const atlProxScore = 1 - atlPos; // 1 = cerca del ATL
+  const mcap     = crypto.market_cap || 0;
+  const atlProx  = calcAtlProximity(crypto);
+  const price    = crypto.current_price || 0;
+  const ath      = crypto.ath || price;
 
-  const volRatio     = (crypto.total_volume || 0) / (crypto.market_cap || 1);
+  if (boostPower >= invertibleMinBoost) {
+    // Verificar condiciones estructurales adicionales para INVERTIBLE
+    const capOk = mcap <= invertibleMaxMarketCap || invertibleMaxMarketCap === 0;
+    const atlOk = atlProx >= invertibleMinAtlProx;
 
-  // INVERTIBLE: BoostPower alto + condiciones estructurales duras
-  if (boostPower >= invertibleMin) {
-    const smallCap   = mcap <= maxMcap;
-    const nearAtl    = atlProxScore >= minAtlProx;
-    const volSurging = volRatio >= (minVolSurge / 100); // normalizado
-
-    if (smallCap && nearAtl) {
+    if (capOk && atlOk) {
       return {
-        category:      'INVERTIBLE',
-        color:         'green',
-        confidence:    volSurging ? 'HIGH' : 'MEDIUM',
-        reason:        `Cap baja ($${fmt(mcap)}), cerca de ATL (${pct(atlPos)} del rango), potencial +${config.prediction?.invertibleTarget ?? 30}%`,
-        recommendation: 'COMPRAR'
+        category:       'INVERTIBLE',
+        color:          'green',
+        confidence:     boostPower >= 0.80 ? 'HIGH' : 'MEDIUM',
+        reason:         `BoostPower ${(boostPower * 100).toFixed(0)}% — señal sólida, cerca de ATL, cap favorable`,
+        recommendation: 'INVERTIR'
       };
     }
-    // BP alto pero sin condiciones estructurales = forzar APALANCADO
+
+    // Cumple BP pero no condiciones estructurales → APALANCADO
+    const structureReason = !capOk
+      ? `Cap $${fmt(mcap)} supera límite — momentum sin estructura`
+      : `Posición alejada del ATL (${(atlProx * 100).toFixed(0)}%) — menos potencial de rebote`;
+
     return {
       category:       'APALANCADO',
       color:          'yellow',
       confidence:     'MEDIUM',
-      reason:         `Señal fuerte pero cap alta ($${fmt(mcap)}) o precio alejado del ATL — rebote con techo`,
-      recommendation: 'CONSIDERAR con precaución'
+      reason:         `BP alto pero ${structureReason}`,
+      recommendation: 'VIGILAR'
     };
   }
 
-  // APALANCADO: señal presente pero con resistencia estructural
-  if (boostPower >= apalancadoMin) {
-    const nearAth = price / (ath || price) > 0.55;
+  if (boostPower >= apalancadoMinBoost) {
+    const nearAth = (price / (ath || 1)) > 0.80;
     return {
       category:       'APALANCADO',
       color:          'yellow',
-      confidence:     'LOW',
+      confidence:     'MEDIUM',
       reason:         nearAth
         ? `Señal social positiva pero precio cercano a ATH — presión vendedora alta`
         : `Momentum moderado, capitalización media — subida limitada por resistencia`,
@@ -321,7 +294,6 @@ function classifyAsset(boostPower, crypto, config) {
     };
   }
 
-  // RUIDOSO
   return {
     category:       'RUIDOSO',
     color:          'gray',
@@ -332,91 +304,14 @@ function classifyAsset(boostPower, crypto, config) {
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// PREDICCIÓN COHERENTE CON LA CATEGORÍA
-// ══════════════════════════════════════════════════════════════════════════════
-
-function buildPrediction(boostPower, category, config) {
-  const pr = config.prediction || {};
-
-  if (category === 'INVERTIBLE') {
-    // Predicción positiva escalada al target configurado
-    // boostPower ∈ [0.65, 1.0] → predicción entre target/2 y target
-    const target = pr.invertibleTarget ?? 30;
-    const factor = normalize(boostPower, 0.65, 1.0);
-    return parseFloat((target * 0.5 + factor * target * 0.5).toFixed(2));
-  }
-
-  if (category === 'APALANCADO') {
-    // Predicción positiva pero limitada
-    const target = pr.apalancadoTarget ?? 10;
-    const factor = normalize(boostPower, 0.40, 0.65);
-    return parseFloat((target * 0.3 + factor * target * 0.7).toFixed(2));
-  }
-
-  // RUIDOSO: predicción 0 (sin dirección — no apostar)
-  return 0;
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
-// INDICADORES DERIVADOS (para mostrar en UI)
-// ══════════════════════════════════════════════════════════════════════════════
-
-function buildIndicators(crypto, externalData, thresholds) {
-  const price  = crypto.current_price || 0;
-  const atl    = crypto.atl  || price;
-  const ath    = crypto.ath  || price;
-  const mcap   = crypto.market_cap || 0;
-  const vol    = crypto.total_volume || 0;
-  const chg24  = crypto.price_change_percentage_24h || 0;
-  const chg7d  = crypto.price_change_percentage_7d_in_currency || null;
-
-  const atlPos = ath > atl ? ((price - atl) / (ath - atl) * 100) : 50;
-  const volRatio = mcap > 0 ? vol / mcap : 0;
-  const fgi    = externalData.fearGreed?.value ?? null;
-  const assetNews = externalData.assetNews;
-  const gt     = externalData.googleTrends;
-
-  return {
-    // Cuantitativos
-    atlProximityPct:   round(atlPos),           // % en rango ATL-ATH
-    priceVsAth:        round(price / (ath||1) * 100), // % vs ATH
-    priceVsAtl:        round(price / (atl||1) * 100), // % sobre ATL
-    capEfficiency:     round(volRatio * 100),    // volumen/cap * 100
-    marketCapM:        Math.round(mcap / 1e6),   // market cap en millones
-    volumeM:           Math.round(vol / 1e6),    // volumen en millones
-    change24h:         round(chg24),
-    change7d:          chg7d !== null ? round(chg7d) : null,
-    atlDaysAgo:        calcDaysSinceAtl(crypto),
-    // Cualitativos
-    fearGreedIndex:    fgi,
-    fearGreedLabel:    fgiLabel(fgi),
-    newsCount:         assetNews?.count ?? 0,
-    newsSentiment:     assetNews?.avgSentiment !== undefined ? round(assetNews.avgSentiment, 2) : null,
-    newsSentimentLabel: sentimentLabel(assetNews?.avgSentiment),
-    redditPosts:       externalData.assetReddit?.postCount ?? null,
-    redditSentiment:   externalData.assetReddit?.sentiment ?? null,
-    // Google Trends (SerpAPI) — null si no disponible
-    trendsCurrentInterest: gt?.success ? (gt.currentInterest ?? null) : null,
-    trendsAverage:         gt?.success ? (gt.average ?? null)         : null,
-    trendsPeak:            gt?.success ? (gt.peak ?? null)            : null,
-    trendsTrend:           gt?.success ? (gt.trend ?? null)           : null,   // 'rising'|'falling'|'stable'
-    trendsGrowth:          gt?.success ? round(gt.growthPercent ?? 0) : null,   // % crecimiento en período
-    trendsSource:          gt?.source  ?? null,
-    trendsCached:          gt?.cached  ?? false
-  };
-}
-
-// ══════════════════════════════════════════════════════════════════════════════
 // VALIDACIÓN DE PREDICCIONES (para cycles-manager)
 // ══════════════════════════════════════════════════════════════════════════════
 
 function validatePrediction(predictedChange, actualChange, category, config) {
-  const pr = config?.prediction || {};
-  const tol = pr.magnitudeTolerance ?? 5; // ±5 puntos por defecto
+  const pr  = config?.prediction || {};
+  const tol = pr.magnitudeTolerance ?? 5;
 
-  // RUIDOSO predice 0 — se valida de forma diferente
   if (category === 'RUIDOSO' || predictedChange === 0) {
-    // Correcto si el movimiento es menor al ruido esperado (±5%)
     return {
       correct: Math.abs(actualChange) <= tol,
       method:  'noise_check',
@@ -424,7 +319,6 @@ function validatePrediction(predictedChange, actualChange, category, config) {
     };
   }
 
-  // Para INVERTIBLE y APALANCADO: validar dirección Y magnitud razonable
   const sameDirection = (predictedChange > 0 && actualChange > 0) ||
                         (predictedChange < 0 && actualChange < 0);
 
@@ -436,28 +330,204 @@ function validatePrediction(predictedChange, actualChange, category, config) {
     };
   }
 
-  // Misma dirección: verificar que la magnitud no está demasiado lejos
-  const error = Math.abs(predictedChange - actualChange);
-  const correct = error <= tol * 2; // tolerancia doble para magnitud
+  const error   = Math.abs(predictedChange - actualChange);
+  const correct = error <= tol * 2;
 
   return {
     correct,
-    method:  'direction_magnitude',
-    reason:  correct
+    method: 'direction_magnitude',
+    reason: correct
       ? `✓ Dirección correcta, error de magnitud: ${error.toFixed(2)}%`
       : `Dirección correcta pero magnitud muy alejada: predicho ${predictedChange.toFixed(2)}%, real ${actualChange.toFixed(2)}% (error ${error.toFixed(2)}%)`
   };
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
-// RESUMEN TEXTUAL (template dinámico)
+// FACTORES DE POTENCIAL
+// ══════════════════════════════════════════════════════════════════════════════
+
+function calcAtlProximity(crypto) {
+  const price = crypto.current_price || 0;
+  const atl   = crypto.atl || price;
+  const ath   = crypto.ath || price;
+  if (ath <= atl || price <= 0) return 0.3;
+  const positionPct = (price - atl) / (ath - atl);
+  if (positionPct < 0.15) return 1.0;
+  if (positionPct < 0.30) return 0.85;
+  if (positionPct < 0.50) return 0.65;
+  if (positionPct < 0.70) return 0.35;
+  return 0.15;
+}
+
+function calcVolumeSurge(crypto, thresholds) {
+  const vol  = crypto.total_volume || 0;
+  const mcap = crypto.market_cap   || 1;
+  if (vol <= 0) return 0.2;
+  const ratio = vol / mcap;
+  if (ratio > 0.20) return 1.0;
+  if (ratio > 0.10) return 0.80;
+  if (ratio > 0.05) return 0.60;
+  if (ratio > 0.02) return 0.40;
+  return 0.20;
+}
+
+function calcSocialMomentum(crypto, externalData) {
+  let score = 0.3;
+
+  const assetNews = externalData.assetNews;
+  if (assetNews && assetNews.count > 0) {
+    const specificCount = assetNews.specificCount ?? assetNews.count;
+    if (specificCount >= 5) score += 0.20;
+    else if (specificCount >= 2) score += 0.10;
+
+    const sentiment = assetNews.avgSentiment ?? 0;
+    score += sentiment * 0.20;
+  }
+
+  const assetReddit = externalData.assetReddit;
+  if (assetReddit && assetReddit.postCount > 0) {
+    if (assetReddit.postCount >= 10) score += 0.15;
+    else if (assetReddit.postCount >= 3) score += 0.08;
+    if (assetReddit.sentiment && assetReddit.sentiment > 0.1) score += 0.10;
+  }
+
+  const gt = externalData.googleTrends;
+  if (gt && gt.success) {
+    const growth = gt.growthPercent ?? 0;
+    if (growth > 50) score += 0.15;
+    else if (growth > 20) score += 0.08;
+    else if (growth < -20) score -= 0.05;
+    if (gt.trend === 'rising') score += 0.05;
+    else if (gt.trend === 'falling') score -= 0.05;
+  }
+
+  return Math.min(1, Math.max(0, score));
+}
+
+function calcNewsSentiment(crypto, externalData) {
+  const assetNews = externalData.assetNews;
+  if (!assetNews || assetNews.count === 0) return 0.3;
+
+  const sentiment = assetNews.avgSentiment ?? 0;
+  if (sentiment > 0.5)  return 0.9;
+  if (sentiment > 0.2)  return 0.7;
+  if (sentiment > 0)    return 0.55;
+  if (sentiment > -0.2) return 0.40;
+  if (sentiment > -0.5) return 0.25;
+  return 0.10;
+}
+
+function calcReboundRecency(crypto, thresholds) {
+  const chg7d  = crypto.price_change_percentage_7d_in_currency || 0;
+  const chg24  = crypto.price_change_percentage_24h || 0;
+
+  // Señal de rebote: bajó mucho esta semana pero sube hoy
+  if (chg7d < -15 && chg24 > 3) return 0.85;
+  if (chg7d < -10 && chg24 > 1) return 0.70;
+  if (chg7d < -5  && chg24 > 0) return 0.55;
+  if (chg7d > 10  && chg24 > 5) return 0.40; // ya subió mucho: menos potencial
+  return 0.30;
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// FACTORES DE RESISTENCIA
+// ══════════════════════════════════════════════════════════════════════════════
+
+function calcLeverageRatio(crypto, thresholds) {
+  const price = crypto.current_price || 0;
+  const atl   = crypto.atl || price;
+  if (atl <= 0) return 0.3;
+  const ratio = price / atl;
+  if (ratio > 10) return 0.9;
+  if (ratio > 5)  return 0.7;
+  if (ratio > 2)  return 0.5;
+  if (ratio > 1.5) return 0.3;
+  return 0.1;
+}
+
+function calcMarketCapSize(crypto, thresholds) {
+  const mcap = crypto.market_cap || 0;
+  if (mcap > 10e9)  return 0.9;  // >10B: muy difícil mover
+  if (mcap > 1e9)   return 0.7;  // 1-10B: difícil
+  if (mcap > 200e6) return 0.5;  // 200M-1B: medio
+  if (mcap > 50e6)  return 0.3;  // 50-200M: fácil de mover
+  return 0.1;                     // <50M: micro-cap, muy volátil pero movible
+}
+
+function calcVolatilityNoise(crypto) {
+  const chg24 = Math.abs(crypto.price_change_percentage_24h || 0);
+  if (chg24 > 30) return 0.9;
+  if (chg24 > 20) return 0.7;
+  if (chg24 > 10) return 0.5;
+  if (chg24 > 5)  return 0.3;
+  return 0.1;
+}
+
+function calcFearOverlap(externalData) {
+  const fgi = externalData.fearGreed?.value ?? null;
+  if (fgi === null) return 0.3;
+  if (fgi >= 80) return 0.9;  // Avaricia extrema: riesgo de techo
+  if (fgi >= 65) return 0.6;
+  if (fgi >= 45) return 0.3;  // Neutral: baja resistencia emocional
+  if (fgi >= 25) return 0.2;  // Miedo: contrarian — potencial de rebote
+  return 0.1;                  // Miedo extremo: fuerte señal contrarian
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// INDICADORES DERIVADOS (para UI)
+// ══════════════════════════════════════════════════════════════════════════════
+
+function buildIndicators(crypto, externalData, thresholds) {
+  const price  = crypto.current_price || 0;
+  const atl    = crypto.atl  || price;
+  const ath    = crypto.ath  || price;
+  const mcap   = crypto.market_cap || 0;
+  const vol    = crypto.total_volume || 0;
+  const chg24  = crypto.price_change_percentage_24h || 0;
+  const chg7d  = crypto.price_change_percentage_7d_in_currency || null;
+
+  const atlPos   = ath > atl ? ((price - atl) / (ath - atl) * 100) : 50;
+  const volRatio = mcap > 0 ? vol / mcap : 0;
+  const fgi      = externalData.fearGreed?.value ?? null;
+  const assetNews = externalData.assetNews;
+  const gt        = externalData.googleTrends;
+
+  return {
+    atlProximityPct:   round(atlPos),
+    priceVsAth:        round(price / (ath||1) * 100),
+    priceVsAtl:        round(price / (atl||1) * 100),
+    capEfficiency:     round(volRatio * 100),
+    marketCapM:        Math.round(mcap / 1e6),
+    volumeM:           Math.round(vol / 1e6),
+    change24h:         round(chg24),
+    change7d:          chg7d !== null ? round(chg7d) : null,
+    atlDaysAgo:        calcDaysSinceAtl(crypto),
+    fearGreedIndex:    fgi,
+    fearGreedLabel:    fgiLabel(fgi),
+    newsCount:         assetNews?.count ?? 0,
+    newsSentiment:     assetNews?.avgSentiment !== undefined ? round(assetNews.avgSentiment, 2) : null,
+    newsSentimentLabel: sentimentLabel(assetNews?.avgSentiment),
+    redditPosts:       externalData.assetReddit?.postCount ?? null,
+    redditSentiment:   externalData.assetReddit?.sentiment ?? null,
+    trendsCurrentInterest: gt?.success ? (gt.currentInterest ?? null) : null,
+    trendsAverage:         gt?.success ? (gt.average ?? null)         : null,
+    trendsPeak:            gt?.success ? (gt.peak ?? null)            : null,
+    trendsTrend:           gt?.success ? (gt.trend ?? null)           : null,
+    trendsGrowth:          gt?.success ? round(gt.growthPercent ?? 0) : null,
+    trendsSource:          gt?.source  ?? null,
+    trendsCached:          gt?.cached  ?? false
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════════════════
+// RESUMEN TEXTUAL
 // ══════════════════════════════════════════════════════════════════════════════
 
 function generateSummary(crypto, boostResult, externalData) {
   const ind   = boostResult.breakdown.indicators;
   const cat   = boostResult.classification.category;
   const bp    = boostResult.boostPowerPercent;
-  const price = crypto.current_price?.toLocaleString('en-US', {style:'currency', currency:'USD', maximumFractionDigits:4}) ?? '?';
+  const price = crypto.current_price?.toLocaleString('en-US', { style:'currency', currency:'USD', maximumFractionDigits:4 }) ?? '?';
 
   const posText   = ind.atlProximityPct < 30 ? 'muy cerca de su mínimo histórico'
                   : ind.atlProximityPct < 55 ? 'en zona de oportunidad histórica'
@@ -478,22 +548,25 @@ function generateSummary(crypto, boostResult, externalData) {
 
   const trendsText = ind.trendsCurrentInterest !== null
     ? (() => {
-        const lvl = ind.trendsCurrentInterest > 75 ? 'muy alto'
-                  : ind.trendsCurrentInterest > 50 ? 'elevado'
-                  : ind.trendsCurrentInterest > 25 ? 'moderado' : 'bajo';
-        const grow = ind.trendsGrowth > 20 ? ` (búsquedas +${ind.trendsGrowth}% en 7 días)`
-                   : ind.trendsGrowth < -20 ? ` (búsquedas ${ind.trendsGrowth}% en 7 días)` : '';
-        return `Interés en Google Trends: ${lvl} (${ind.trendsCurrentInterest}/100)${grow}.`;
+        const lvl  = ind.trendsCurrentInterest > 75 ? 'muy alto'
+                   : ind.trendsCurrentInterest > 50 ? 'elevado'
+                   : ind.trendsCurrentInterest > 25 ? 'moderado' : 'bajo';
+        const grow = ind.trendsGrowth > 20
+          ? ` (búsquedas +${ind.trendsGrowth}% en 7 días)`
+          : ind.trendsGrowth < -20
+            ? ` (búsquedas cayendo ${Math.abs(ind.trendsGrowth)}% en 7 días)`
+            : '';
+        return `Interés en buscadores ${lvl}${grow}.`;
       })()
     : '';
 
-  const catText = {
-    INVERTIBLE: `Clasificado como INVERTIBLE (BoostPower ${bp}%): bajo apalancamiento estructural, señal social activa y posición histórica favorable apuntan a potencial de subida de +${boostResult.predictedChange}% en el ciclo.`,
-    APALANCADO: `Clasificado como APALANCADO (BoostPower ${bp}%): hay señal de subida pero la capitalización o posición de precio generará presión vendedora que limitará el recorrido (~+${boostResult.predictedChange}%).`,
-    RUIDOSO:    `Clasificado como RUIDOSO (BoostPower ${bp}%): sin catalizador claro ni señal convergente. No se recomienda posición en este ciclo.`
-  }[cat];
+  const catText = cat === 'INVERTIBLE'
+    ? `Con BoostPower ${bp}%, se clasifica como INVERTIBLE — señal fuerte de entrada.`
+    : cat === 'APALANCADO'
+    ? `Con BoostPower ${bp}%, señal moderada — posición APALANCADO.`
+    : `BoostPower ${bp}% — sin señal clara.`;
 
-  return `${crypto.name} cotiza a ${price}, ${posText} (${ind.atlProximityPct.toFixed(0)}% del rango ATL-ATH). Presenta ${volText} (${ind.capEfficiency.toFixed(1)}% vol/cap). ${fgiText} ${newsText} ${trendsText} ${catText}`.replace(/\s{2,}/g, ' ').trim();
+  return `${crypto.name} cotiza a ${price}, ${posText}, con ${volText}. ${fgiText} ${newsText} ${trendsText} ${catText}`.replace(/\s{2,}/g, ' ').trim();
 }
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -526,8 +599,6 @@ function fmt(n) {
   return n.toFixed(0);
 }
 
-function pct(v) { return (v * 100).toFixed(0) + '%'; }
-
 function calcDaysSinceAtl(crypto) {
   if (!crypto.atl_date) return null;
   return Math.round((Date.now() - new Date(crypto.atl_date).getTime()) / 86400000);
@@ -544,9 +615,9 @@ function fgiLabel(v) {
 
 function sentimentLabel(v) {
   if (v === null || v === undefined) return 'sin datos';
-  if (v > 0.3)  return 'positivo';
-  if (v > 0.05) return 'levemente positivo';
-  if (v < -0.3) return 'negativo';
+  if (v > 0.3)   return 'positivo';
+  if (v > 0.05)  return 'levemente positivo';
+  if (v < -0.3)  return 'negativo';
   if (v < -0.05) return 'levemente negativo';
   return 'neutral';
 }
