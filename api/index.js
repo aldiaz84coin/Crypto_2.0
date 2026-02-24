@@ -3594,16 +3594,26 @@ async function serverRunPendingIterations() {
   }
 }
 
-async function serverWatchdog() {
+async function serverWatchdog(source = 'internal') {
   if (!redis) return;
   try {
     const lockOk = await redis.set(SCHED_WD_LOCK, '1', { NX: true, EX: 180 });
-    if (!lockOk) return;
+    if (!lockOk) {
+      console.log(`[server-wd] ⏭ Skip — lock activo (fuente: ${source})`);
+      return;
+    }
 
     const cfg       = await getInvestConfig();
     const positions = await getPositions();
     const open      = positions.filter(p => p.status === 'open');
-    if (!open.length) { await redis.del(SCHED_WD_LOCK); return; }
+
+    if (!open.length) {
+      // Registrar el run igualmente para que el cooldown del pinger funcione
+      await redisSet(SCHED_WD_KEY, { runAt: Date.now(), checked: 0, sells: 0, holds: 0, source });
+      await redis.del(SCHED_WD_LOCK);
+      console.log(`[server-wd] 💤 Sin posiciones abiertas (fuente: ${source})`);
+      return;
+    }
 
     const assetIds  = [...new Set(open.map(p => p.assetId))];
     const symbolMap = {};
@@ -3614,7 +3624,7 @@ async function serverWatchdog() {
 
     for (const position of open) {
       const priceInfo    = prices[position.assetId];
-      const currentPrice = priceInfo?.price; // FIX: fetchAndCachePrices usa .price, nunca .usd
+      const currentPrice = priceInfo?.price;
       if (!currentPrice) continue;
 
       const isStale = priceInfo?.isStale === true;
@@ -3634,19 +3644,84 @@ async function serverWatchdog() {
         position.pnlUSD      = parseFloat(((currentPrice - position.entryPrice) * position.units).toFixed(4));
         position.pnlPct      = parseFloat(pnlPct.toFixed(2));
         sells++; posChanged = true;
-        console.log(`[server-wd] 🔔 ${hitTP ? 'TP' : 'SL'} — ${position.symbol} · ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%`);
+        console.log(`[server-wd] 🔔 ${hitTP ? 'TP' : 'SL'} — ${position.symbol} · ${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}% · fuente: ${source}`);
       } else { holds++; }
     }
 
     if (posChanged) await savePositions(positions);
-    await redisSet(SCHED_WD_KEY, { runAt: Date.now(), checked: open.length, sells, holds, source: meta?.source || 'unknown' });
+    await redisSet(SCHED_WD_KEY, { runAt: Date.now(), checked: open.length, sells, holds, source: meta?.source || source });
     await redis.del(SCHED_WD_LOCK);
-    console.log(`[server-wd] ✅ ${open.length} pos. · ${sells} ventas · ${holds} hold · ${meta?.source}`);
+    console.log(`[server-wd] ✅ ${open.length} pos. · ${sells} ventas · ${holds} hold · fuente: ${source}`);
   } catch(err) {
     console.error('[server-wd] Error:', err.message);
     try { await redis.del(SCHED_WD_LOCK); } catch(_) {}
   }
 }
+
+// ── GET /api/watchdog/ping ────────────────────────────────────────────────────
+// Llamar cada 5 min desde UptimeRobot / BetterUptime / GitHub Actions / QStash.
+// Solo ejecuta el WD si han pasado ≥28 min desde el último run (idempotente).
+// Responde siempre 200 para que el monitor no lo marque como caído.
+const WD_PING_COOLDOWN_MS   = 28 * 60 * 1000; // 28 min (margen 2 min antes de los 30)
+const ITER_PING_COOLDOWN_MS =  4 * 60 * 1000; //  4 min (margen 1 min antes de los 5)
+
+function _validatePingToken(req) {
+  const token    = req.query.token || req.headers['x-watchdog-token'];
+  const expected = process.env.WATCHDOG_PING_TOKEN;
+  if (!expected) return true; // sin token configurado → abierto (configúralo en producción)
+  return token === expected;
+}
+
+app.get('/api/watchdog/ping', async (req, res) => {
+  if (!redis) return res.json({ success: false, skipped: true, reason: 'redis_unavailable' });
+  if (!_validatePingToken(req)) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
+  try {
+    const wdState   = await redisGet(SCHED_WD_KEY);
+    const lastRunAt = wdState?.runAt || 0;
+    const elapsed   = Date.now() - lastRunAt;
+
+    if (elapsed < WD_PING_COOLDOWN_MS) {
+      const remainingMin = Math.ceil((WD_PING_COOLDOWN_MS - elapsed) / 60000);
+      return res.json({ success: true, skipped: true, reason: 'not_due_yet',
+        lastRunAt, nextRunIn: `${remainingMin}min`, elapsedMin: Math.floor(elapsed / 60000) });
+    }
+
+    // Responder ANTES de ejecutar — evita timeout del pinger en caso de lentitud
+    res.json({ success: true, skipped: false, triggered: true,
+      lastRunAt, elapsedMin: Math.floor(elapsed / 60000) });
+
+    setImmediate(() => serverWatchdog('external_ping'));
+
+  } catch(e) {
+    console.error('[watchdog-ping] Error:', e.message);
+    if (!res.headersSent) res.json({ success: false, error: e.message });
+  }
+});
+
+// ── GET /api/scheduler/ping ───────────────────────────────────────────────────
+// Ping para iteraciones de ciclos — mismo patrón que /api/watchdog/ping
+app.get('/api/scheduler/ping', async (req, res) => {
+  if (!redis) return res.json({ success: false, skipped: true, reason: 'redis_unavailable' });
+  if (!_validatePingToken(req)) return res.status(401).json({ success: false, error: 'Unauthorized' });
+
+  try {
+    const iterState = await redisGet(SCHED_ITER_KEY);
+    const lastRunAt = iterState?.runAt || 0;
+    const elapsed   = Date.now() - lastRunAt;
+
+    if (elapsed < ITER_PING_COOLDOWN_MS) {
+      return res.json({ success: true, skipped: true, reason: 'not_due_yet',
+        nextRunIn: `${Math.ceil((ITER_PING_COOLDOWN_MS - elapsed) / 60000)}min` });
+    }
+
+    res.json({ success: true, triggered: true, elapsedMin: Math.floor(elapsed / 60000) });
+    setImmediate(() => serverRunPendingIterations());
+
+  } catch(e) {
+    if (!res.headersSent) res.json({ success: false, error: e.message });
+  }
+});
 
 // Endpoint para que el frontend sincronice su widget con el último run del servidor
 app.get('/api/scheduler/status', async (_req, res) => {
@@ -3662,17 +3737,35 @@ app.get('/api/scheduler/status', async (_req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
-// Arrancar schedulers al iniciar el servidor (esperar 8s a que Redis esté listo)
+// ── Arrancar schedulers ───────────────────────────────────────────────────────
+// En LOCAL: setInterval como siempre.
+// En VERCEL: los setInterval no persisten entre invocaciones serverless.
+//            El pinger externo (UptimeRobot/QStash) llama a /api/watchdog/ping
+//            cada 5 min y es el único mecanismo fiable.
+//            Configura WATCHDOG_PING_TOKEN en Vercel → Environment Variables.
 if (redis) {
-  setTimeout(() => {
-    setInterval(serverRunPendingIterations, SCHED_ITER_INTERVAL_MS);
-    setTimeout(serverRunPendingIterations, 10000); // primera ejecución en 10s
-    console.log('[server-sched] ✅ Scheduler de iteraciones activo (cada 5min)');
+  const isVercel = !!process.env.VERCEL;
 
-    setInterval(serverWatchdog, SCHED_WD_INTERVAL_MS);
-    setTimeout(serverWatchdog, 25000); // primera ejecución en 25s
-    console.log('[server-sched] ✅ Scheduler de watchdog activo (cada 30min)');
-  }, 8000);
+  if (!isVercel) {
+    // ── Entorno local (npm run dev / node api/index.js) ─────────────────
+    setTimeout(() => {
+      setInterval(serverRunPendingIterations, SCHED_ITER_INTERVAL_MS);
+      setTimeout(serverRunPendingIterations, 10000);
+      console.log('[server-sched] ✅ LOCAL — Scheduler iteraciones activo (cada 5min)');
+
+      setInterval(() => serverWatchdog('local_interval'), SCHED_WD_INTERVAL_MS);
+      setTimeout(() => serverWatchdog('local_startup'), 25000);
+      console.log('[server-sched] ✅ LOCAL — Scheduler watchdog activo (cada 30min)');
+    }, 8000);
+  } else {
+    // ── Vercel (producción) ──────────────────────────────────────────────
+    // setInterval muere con cada función serverless → usamos pinger externo.
+    // Setup: UptimeRobot (gratis) → GET /api/watchdog/ping?token=TU_TOKEN cada 5 min
+    console.log('[server-sched] ☁️  VERCEL — Modo pinger externo activo (sin setInterval)');
+    if (!process.env.WATCHDOG_PING_TOKEN) {
+      console.warn('[server-sched] ⚠️  WATCHDOG_PING_TOKEN no configurado — endpoint /api/watchdog/ping abierto');
+    }
+  }
 }
 
 // ── Arranque local ────────────────────────────────────────────────────────────
