@@ -2017,16 +2017,23 @@ app.get('/api/invest/positions', async (_req, res) => {
             };
           } else {
             // Fallback: calcular desde openedAt si no se encuentra el ciclo
-            const openedMs = p.openedAt ? new Date(p.openedAt).getTime() : now;
-            const elapsed  = now - openedMs;
+            // Para posiciones manual_, cycleDurationMs está guardado directamente en la posición
+            const openedMs   = p.openedAt ? new Date(p.openedAt).getTime() : now;
+            const cycleDurMs = p.cycleDurationMs || null;
+            const endTimeFb  = cycleDurMs ? openedMs + cycleDurMs : null;
+            const elapsed    = now - openedMs;
+            const remaining  = endTimeFb ? Math.max(0, endTimeFb - now) : null;
+            const pct        = (cycleDurMs && cycleDurMs > 0)
+                                 ? Math.min(100, Math.round(elapsed / cycleDurMs * 100))
+                                 : null;
             p.cycleInfo = {
               cycleId:          p.cycleId || null,
               startTime:        openedMs,
-              endTime:          null,
-              durationMs:       null,
+              endTime:          endTimeFb,
+              durationMs:       cycleDurMs,
               elapsedMs:        elapsed,
-              remainingMs:      null,
-              progressPct:      null,
+              remainingMs:      remaining,
+              progressPct:      pct,
               isCompleted:      false,
               currentIteration: (p.holdCycles || 0) + 1,
               totalIterations:  p.maxHoldCycles || 3,
@@ -3406,27 +3413,22 @@ app.post('/api/invest/watchdog', async (req, res) => {
       const tpPct   = tpPrice ? ((tpPrice - position.entryPrice) / position.entryPrice) * 100 : cfg.takeProfitPct;
       const slPct   = slPrice ? ((position.entryPrice - slPrice) / position.entryPrice) * 100 : cfg.stopLossPct;
 
-      const hitTP         = !isStale && (tpPrice ? currentPrice >= tpPrice : pnlPct >= tpPct);
-      const hitSL         = slPrice ? currentPrice <= slPrice : pnlPct <= -slPct;
-      const hitPrediction = !isStale && !hitTP && pnlPct > 0
-        && (position.predictedChange || 0) > 0
-        && pnlPct >= (position.predictedChange || 0);
+      const hitTP = !isStale && (tpPrice ? currentPrice >= tpPrice : pnlPct >= tpPct);
+      const hitSL = slPrice ? currentPrice <= slPrice : pnlPct <= -slPct;
 
       const checkEntry = {
         positionId: position.id, assetId: position.assetId, symbol: position.symbol,
         entryPrice: position.entryPrice, currentPrice,
         takeProfitPrice: tpPrice, stopLossPrice: slPrice,
-        pnlPct: parseFloat(pnlPct.toFixed(2)), hitTP, hitSL, hitPrediction, isStale,
+        pnlPct: parseFloat(pnlPct.toFixed(2)), hitTP, hitSL, isStale,
         priceSource: priceInfo?.source || meta.source,
-        action: (hitTP || hitSL || hitPrediction) ? 'sell' : 'hold',
+        action: (hitTP || hitSL) ? 'sell' : 'hold',
       };
 
-      if (hitTP || hitSL || hitPrediction) {
+      if (hitTP || hitSL) {
         const reason = hitSL
           ? `watchdog_stop_loss: ${pnlPct.toFixed(2)}% ≤ −${slPct.toFixed(2)}%`
-          : hitPrediction
-            ? `watchdog_prediction_target: +${pnlPct.toFixed(2)}% ≥ predicción +${(position.predictedChange||0).toFixed(2)}%`
-            : `watchdog_take_profit: +${pnlPct.toFixed(2)}% ≥ +${tpPct.toFixed(2)}%`;
+          : `watchdog_take_profit: +${pnlPct.toFixed(2)}% ≥ +${tpPct.toFixed(2)}%`;
         try {
           const order    = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
           const pnlUSD   = (currentPrice - position.entryPrice) * position.units;
@@ -3440,7 +3442,7 @@ app.post('/api/invest/watchdog', async (req, res) => {
           position.realizedPnLPct       = parseFloat(pnlPct.toFixed(2));
           position.exitFeeUSD           = parseFloat(exitFee.toFixed(4));
           position.totalFeesUSD         = parseFloat(((position.entryFeeUSD||0) + exitFee).toFixed(4));
-          position.closeReason          = hitSL ? 'watchdog_stop_loss' : hitPrediction ? 'watchdog_prediction_target' : 'watchdog_take_profit';
+          position.closeReason          = hitSL ? 'watchdog_stop_loss' : 'watchdog_take_profit';
           position.exchangeCloseOrderId = order.orderId;
 
           posChanged = true;
@@ -3451,7 +3453,7 @@ app.post('/api/invest/watchdog', async (req, res) => {
           const _pnlPctF   = parseFloat(pnlPct.toFixed(2));
           await appendInvestLog({
             type:      'watchdog_close',
-            subtype:   hitSL ? 'stop_loss' : hitPrediction ? 'prediction_target' : 'take_profit',
+            subtype:   hitSL ? 'stop_loss' : 'take_profit',
             cycleId:   position.cycleId || null,
             timestamp: new Date().toISOString(),
             origin:    'frontend_watchdog',
@@ -4166,11 +4168,8 @@ async function serverWatchdog(source = 'internal') {
       const slPct   = slPrice ? ((position.entryPrice - slPrice) / position.entryPrice) * 100 : cfg.stopLossPct;
       const hitTP   = !isStale && (tpPrice ? currentPrice >= tpPrice : pnlPct >= tpPct);
       const hitSL   = !isStale && (slPrice ? currentPrice <= slPrice : pnlPct <= -Math.abs(slPct));
-      const hitPred = !isStale && !hitTP && pnlPct > 0
-        && (position.predictedChange || 0) > 0
-        && pnlPct >= (position.predictedChange || 0);
 
-      if (hitTP || hitSL || hitPred) {
+      if (hitTP || hitSL) {
         const _svPnlUSD  = (currentPrice - position.entryPrice) * position.units;
         const _svExitFee = position.capitalUSD * (cfg.feePct || 0.10) / 100;
         const _svNetPnL  = _svPnlUSD - _svExitFee;
@@ -4181,7 +4180,7 @@ async function serverWatchdog(source = 'internal') {
         position.status      = 'closed';
         position.closedAt    = new Date().toISOString();
         position.closePrice  = currentPrice;
-        position.closeReason = hitSL ? 'stopLoss_server_wd' : hitPred ? 'predictionTarget_server_wd' : 'takeProfit_server_wd';
+        position.closeReason = hitTP ? 'takeProfit_server_wd' : 'stopLoss_server_wd';
         position.pnlUSD      = parseFloat(_svPnlUSD.toFixed(4));
         position.pnlPct      = _svPnlF;
         position.exitFeeUSD  = parseFloat(_svExitFee.toFixed(4));
@@ -4190,7 +4189,7 @@ async function serverWatchdog(source = 'internal') {
 
         _svCloses.push({
           type:      'watchdog_close',
-          subtype:   hitSL ? 'stop_loss' : hitPred ? 'prediction_target' : 'take_profit',
+          subtype:   hitSL ? 'stop_loss' : 'take_profit',
           cycleId:   position.cycleId || null,
           timestamp: new Date().toISOString(),
           origin:    'server_watchdog',
