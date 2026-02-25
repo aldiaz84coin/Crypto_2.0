@@ -34,6 +34,13 @@ const enhancedReportGen = require('./enhanced-report-generator');
 const llmInsights       = require('./llm-insights');
 const apiHealthCheck    = require('./api-health-check');
 const investManager     = require('./investment-manager');
+const getClassificationStr = investManager.getClassificationStr || function(a) {
+  const c = a.classification;
+  if (!c) return 'RUIDOSO';
+  if (typeof c === 'string') return c.toUpperCase();
+  if (typeof c === 'object') return (c.category || c.label || 'RUIDOSO').toUpperCase();
+  return 'RUIDOSO';
+};
 const exchangeConnector = require('./exchange-connector');
 const pumpDetector      = require('./pump-detector');
 const alertService      = require('./alert-service');
@@ -1837,7 +1844,7 @@ async function getPredictionCalibration() {
 async function savePredictionCalibration(cal) { await redisSet(predCalibration.CALIBRATION_KEY, cal); }
 
 async function onPositionClosed(position) {
-  if (!position?.classification || position.classification === 'RUIDOSO') return;
+  if (!position?.classification || getClassificationStr(position) === 'RUIDOSO') return;
   if (position.predictedChange == null || position.realizedPnLPct == null) return;
   try {
     const cal    = await getPredictionCalibration();
@@ -2086,14 +2093,15 @@ app.post('/api/invest/decide', async (req, res) => {
     const available = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
 
     res.json({
-      success:         true,
-      shouldInvest:    decision.shouldInvest,
-      reason:          decision.reason,
+      success:          true,
+      shouldInvest:     decision.shouldInvest,
+      reason:           decision.reason,
       capitalAvailable: parseFloat(available.toFixed(2)),
-      targets:         decision.selected,
-      cycleCapital:    decision.cycleCapital,
-      mode:            cfg.mode,
-      exchange:        cfg.exchange
+      targets:          decision.selected,
+      allCandidates:    decision.allCandidates || [],
+      cycleCapital:     decision.cycleCapital,
+      mode:             cfg.mode,
+      exchange:         cfg.exchange
     });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -2152,10 +2160,10 @@ app.post('/api/invest/execute', async (req, res) => {
         },
         snapshot: {
           totalAssets:        snapshot.length,
-          invertibles:        snapshot.filter(a => a.classification === 'INVERTIBLE').length,
-          apalancados:        snapshot.filter(a => a.classification === 'APALANCADO').length,
-          ruidosos:           snapshot.filter(a => a.classification === 'RUIDOSO').length,
-          candidatesEval:     snapshot.filter(a => a.classification === 'INVERTIBLE' && (a.boostPower||0) > 0).length,
+          invertibles:        snapshot.filter(a => getClassificationStr(a) === 'INVERTIBLE').length,
+          apalancados:        snapshot.filter(a => getClassificationStr(a) === 'APALANCADO').length,
+          ruidosos:           snapshot.filter(a => getClassificationStr(a) === 'RUIDOSO').length,
+          candidatesEval:     snapshot.filter(a => getClassificationStr(a) === 'INVERTIBLE' && (a.boostPower||0) > 0).length,
           topBoostPower:      snapshot.length ? parseFloat(Math.max(...snapshot.map(a => a.boostPower || 0)).toFixed(3)) : 0,
           avgPredictedChange: snapshot.length ? parseFloat((snapshot.reduce((s,a) => s + (a.predictedChange||0), 0) / snapshot.length).toFixed(2)) : 0,
         },
@@ -2166,7 +2174,7 @@ app.post('/api/invest/execute', async (req, res) => {
           minSignalsRequired: cfg.minSignals,
           minBoostRequired:   cfg.minBoostPower,
           topCandidates: snapshot
-            .filter(a => a.classification === 'INVERTIBLE')
+            .filter(a => getClassificationStr(a) === 'INVERTIBLE')
             .sort((a,b) => (b.boostPower||0) - (a.boostPower||0))
             .slice(0, 5)
             .map(a => ({
@@ -2236,9 +2244,9 @@ app.post('/api/invest/execute', async (req, res) => {
       },
       snapshot: {
         totalAssets:    snapshot.length,
-        invertibles:    snapshot.filter(a => a.classification === 'INVERTIBLE').length,
-        apalancados:    snapshot.filter(a => a.classification === 'APALANCADO').length,
-        ruidosos:       snapshot.filter(a => a.classification === 'RUIDOSO').length,
+        invertibles:    snapshot.filter(a => getClassificationStr(a) === 'INVERTIBLE').length,
+        apalancados:    snapshot.filter(a => getClassificationStr(a) === 'APALANCADO').length,
+        ruidosos:       snapshot.filter(a => getClassificationStr(a) === 'RUIDOSO').length,
         candidatesEval: decision.selected?.length || 0,
       },
       execution: {
