@@ -979,6 +979,7 @@ function setTab(tab) {
 // MODO ESPECULATIVO
 // ═══════════════════════════════════════════════════════════
 function setMode(mode) {
+  const modeChanged = currentMode !== mode; // detectar cambio real de modo
   currentMode = mode;
   // Actualizar badge de análisis
   const ab = document.getElementById('analysis-mode-badge');
@@ -992,6 +993,11 @@ function setMode(mode) {
   btn.classList.add('bg-blue-700','text-white');
   btn.classList.remove('text-gray-400');
   document.getElementById('mode-desc').classList.toggle('hidden', mode === 'normal');
+  // FIX: auto-recargar activos si ya estaban cargados y el modo cambió
+  // Evita que Normal muestre los small-caps del modo Especulativo anterior
+  if (modeChanged && cryptos.length > 0) {
+    loadCryptos();
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -2157,7 +2163,8 @@ async function decideCycle() {
   try {
     const r = await fetch('/api/invest/decide', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ snapshot: cryptos })
+      // FIX: pasar currentMode para que el backend sincronice el umbral BP correcto
+      body: JSON.stringify({ snapshot: cryptos, mode: currentMode })
     });
     const d = await r.json();
     renderDecision(d);
@@ -2167,11 +2174,28 @@ async function decideCycle() {
 function renderDecision(d) {
   const div = document.getElementById('inv-decision');
   if (!d.shouldInvest) {
+    // Panel de diagnóstico — ayuda a ver por qué no hay candidatos
+    const debug = d._debug || {};
+    const debugHtml = debug.snapshotTotal != null ? `
+      <details class="mt-3 text-xs text-gray-500">
+        <summary class="cursor-pointer hover:text-gray-300">🔍 Diagnóstico de filtrado</summary>
+        <div class="mt-2 space-y-1 font-mono bg-gray-950 p-3 rounded-lg">
+          <p>Activos en snapshot: <span class="text-gray-300">${debug.snapshotTotal}</span></p>
+          <p>INVERTIBLEs detectados: <span class="${debug.invertiblesInSnapshot > 0 ? 'text-green-400' : 'text-red-400'}">${debug.invertiblesInSnapshot ?? '—'}</span></p>
+          <p>Señales mínimas requeridas: <span class="text-yellow-400">${debug.minSignalsRequired ?? 2}</span></p>
+          <p>BP mínimo aplicado: <span class="text-gray-300">${debug.minBoostApplied != null ? (debug.minBoostApplied * 100).toFixed(0) + '%' : '—'}</span></p>
+          <p>BP desde Algo A (${d.snapshotMode === 'speculative' ? 'especulativo' : 'normal'}): <span class="text-blue-400">${debug.minBoostFromAlgoA != null ? (debug.minBoostFromAlgoA * 100).toFixed(0) + '%' : '—'}</span></p>
+          <p>Modo del snapshot: <span class="text-purple-400">${d.snapshotMode || d.mode || '—'}</span></p>
+          ${debug.topInvertibles?.length ? `<p class="mt-1 text-gray-600">Top INVERTIBLEs:</p>
+          ${debug.topInvertibles.map(a => `<p class="ml-2">• ${a.symbol}: BP=${(a.boostPower*100).toFixed(0)}%, pred=+${a.predicted}%</p>`).join('')}` : ''}
+        </div>
+      </details>` : '';
     div.innerHTML = `
       <div class="bg-yellow-950 border border-yellow-800 rounded-xl p-4">
         <p class="text-yellow-400 font-semibold">⏸️ No invertir en este ciclo</p>
         <p class="text-gray-400 text-sm mt-1">${d.reason}</p>
         <p class="text-gray-500 text-sm mt-1">Capital disponible: $${d.capitalAvailable?.toFixed(2)||'—'} → se mantiene en ${investConfig?.stableCoin||'USDT'}</p>
+        ${debugHtml}
       </div>`;
     return;
   }
