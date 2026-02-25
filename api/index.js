@@ -2431,6 +2431,76 @@ app.post('/api/invest/evaluate', async (req, res) => {
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
 
+// ── POST /api/invest/positions/close-orphaned ────────────────────────────────
+// Cierra todas las posiciones abiertas que quedaron huérfanas (sin ronda activa).
+// Permite desbloquear la apertura de una nueva ronda de inversión.
+// ⚠️ DEBE ir ANTES de /:id/close para que Express no interprete 'close-orphaned' como un :id
+app.post('/api/invest/positions/close-orphaned', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const cfg       = await getInvestConfig();
+    const positions = await getPositions();
+    const openPos   = positions.filter(p => p.status === 'open');
+
+    if (openPos.length === 0)
+      return res.json({ success: true, closedCount: 0, message: 'Sin posiciones huérfanas' });
+
+    const keys    = await getExchangeKeys(cfg.exchange);
+    const results = [];
+
+    for (const position of openPos) {
+      try {
+        // Precio actual con fallback en cadena
+        let currentPrice = position.currentPrice || position.entryPrice;
+        try {
+          const pRes = await axios.get(
+            `https://api.coingecko.com/api/v3/simple/price?ids=${position.assetId}&vs_currencies=usd`,
+            { timeout: 5000 }
+          );
+          currentPrice = pRes.data?.[position.assetId]?.usd || currentPrice;
+        } catch (_) {}
+
+        const evaluation  = investManager.evaluatePosition(position, currentPrice, 'orphan_close', cfg);
+        evaluation.reason = 'orphan_close: cierre de posición huérfana';
+
+        const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
+
+        const closedPos = investManager.closePosition(position, currentPrice, evaluation.reason, cfg);
+        Object.assign(position, closedPos);
+        await onPositionClosed(position);
+        position.exchangeCloseOrderId = order.orderId;
+
+        results.push({ symbol: position.symbol, success: true, pnlPct: evaluation.pnlPct, pnlUSD: evaluation.pnlUSD });
+
+      } catch (e) {
+        // Si el exchange falla, forzar cierre en Redis igualmente para no quedar bloqueados
+        position.status      = 'closed';
+        position.closeReason = 'orphan_force_close: ' + e.message;
+        position.closedAt    = new Date().toISOString();
+        position.exitPrice   = position.currentPrice || position.entryPrice;
+        const grossPnL = (position.exitPrice - position.entryPrice) * (position.units || 0);
+        position.realizedPnL    = parseFloat(grossPnL.toFixed(4));
+        position.realizedPnLPct = parseFloat(((grossPnL / (position.capitalUSD || 1)) * 100).toFixed(2));
+        results.push({ symbol: position.symbol, success: false, forced: true, error: e.message });
+      }
+    }
+
+    await savePositions(positions);
+    await appendInvestLog({
+      type:       'orphan_close',
+      subtype:    'system_action',
+      timestamp:  new Date().toISOString(),
+      closedCount: results.length,
+      results,
+    });
+
+    res.json({ success: true, closedCount: results.length, results });
+  } catch(e) {
+    console.error('[positions/close-orphaned] Error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
 // ── POST /api/invest/positions/:id/close ─────────────────────────────────────
 // Cerrar manualmente una posición
 app.post('/api/invest/positions/:id/close', async (req, res) => {
