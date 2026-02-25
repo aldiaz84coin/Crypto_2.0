@@ -36,7 +36,15 @@ function getClassificationStr(asset) {
 // ─── Lógica de selección de activos ──────────────────────────────────────────
 // Prioriza activos por MAYOR PREDICCIÓN DE CRECIMIENTO (predictedChange DESC).
 // Desempate: boostPower DESC.
-// Filtros: clasificación INVERTIBLE + BP >= minBoostPower + pred >= minPredictedChange.
+//
+// REGLA DE FILTRADO:
+//   Si el activo YA viene clasificado como INVERTIBLE por el Algoritmo A,
+//   confiamos en esa clasificación sin re-aplicar el umbral de BP del investConfig.
+//   El Algoritmo A ya lo validó con su propio invertibleMinBoost.
+//   Solo se aplica cfg.minPredictedChange como filtro adicional de trading.
+//
+//   Si el investConfig incluye _syncedMinBoostPower (inyectado por el endpoint),
+//   se usa ese umbral sincronizado en lugar del default.
 function selectInvestmentTargets(snapshot, investConfig, existingPositions = []) {
   const cfg = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
 
@@ -44,12 +52,28 @@ function selectInvestmentTargets(snapshot, investConfig, existingPositions = [])
     .filter(a => {
       const cat  = getClassificationStr(a);
       const bp   = a.boostPower || 0;
-      const pred = a.predictedChange || 0;
-      return (
-        cat === 'INVERTIBLE' &&
-        bp  >= cfg.minBoostPower &&
-        pred >= (cfg.minPredictedChange || 0)
-      );
+      const pred = typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0);
+
+      // El activo debe estar clasificado como INVERTIBLE por el Algoritmo A.
+      if (cat !== 'INVERTIBLE') return false;
+
+      // Solo aplicar filtro de BP si el activo NO tiene clasificación previa
+      // (snapshot sin clasificar) o si el endpoint sincronizó el umbral.
+      // Si viene con classification='INVERTIBLE', el Algoritmo A ya lo validó.
+      const alreadyValidatedByAlgoA = typeof a.classification === 'string'
+        ? a.classification.toUpperCase() === 'INVERTIBLE'
+        : (a.classification?.category || '').toUpperCase() === 'INVERTIBLE';
+
+      if (!alreadyValidatedByAlgoA) {
+        // Snapshot sin clasificar — aplicar umbral propio del invest config
+        if (bp < cfg.minBoostPower) return false;
+      }
+      // Si ya fue validado por Algo A, no re-filtrar por BP (evita la rotura)
+
+      // Filtro de predicción mínima de trading (siempre aplica)
+      if (pred < (cfg.minPredictedChange || 0)) return false;
+
+      return true;
     })
     .sort((a, b) => {
       const diff = (b.predictedChange || 0) - (a.predictedChange || 0);
@@ -61,9 +85,11 @@ function selectInvestmentTargets(snapshot, investConfig, existingPositions = [])
     return {
       selected:      [],
       reason:        `Solo ${candidates.length} candidatos INVERTIBLE` +
-                     ` (pred ≥ ${cfg.minPredictedChange || 0}%,` +
-                     ` BP ≥ ${(cfg.minBoostPower * 100).toFixed(0)}%)` +
-                     ` — mínimo requerido: ${cfg.minSignals}.`,
+                     ` (pred ≥ ${cfg.minPredictedChange || 0}%` +
+                     (cfg._syncedMinBoostPower
+                       ? `, BP sincronizado con Algo A ≥ ${(cfg._syncedMinBoostPower * 100).toFixed(0)}%`
+                       : `, BP ≥ ${(cfg.minBoostPower * 100).toFixed(0)}%`) +
+                     `) — mínimo requerido: ${cfg.minSignals}.`,
       shouldInvest:  false,
       allCandidates: candidates,
     };

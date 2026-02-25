@@ -2090,8 +2090,35 @@ app.post('/api/invest/decide', async (req, res) => {
 
     if (!snapshot.length) return res.status(400).json({ success: false, error: 'Snapshot vacío' });
 
-    const decision = investManager.selectInvestmentTargets(snapshot, cfg, positions);
+    // ── Sincronizar umbral con el Algoritmo A ─────────────────────────────────
+    // El snapshot viene clasificado por el Algoritmo A con su propio umbral
+    // (algoConfig.classification.invertibleMinBoost). Para que "Analizar & Decidir"
+    // sea coherente con lo que el monitor muestra, leemos ese umbral y lo
+    // pasamos a selectInvestmentTargets vía _syncedMinBoostPower.
+    // Así ambos algoritmos comparten el mismo criterio de clasificación.
+    let algoMinBP = null;
+    try {
+      const algoMode   = cfg.mode === 'speculative' ? 'speculative' : 'normal';
+      const algoConfig = await getConfig(algoMode);
+      algoMinBP = algoConfig?.classification?.invertibleMinBoost ?? null;
+      if (algoMinBP != null && algoMinBP > 0) {
+        cfg._syncedMinBoostPower = algoMinBP;
+        // Si el invest config tiene un umbral MÁS ALTO que el clasificador,
+        // bajarlo al del clasificador para no descartar activos ya validados.
+        if (cfg.minBoostPower > algoMinBP) {
+          cfg.minBoostPower = algoMinBP;
+        }
+      }
+    } catch(_) { /* Si falla, continúa con cfg.minBoostPower original */ }
+    // ─────────────────────────────────────────────────────────────────────────
+
+    const decision  = investManager.selectInvestmentTargets(snapshot, cfg, positions);
     const available = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
+
+    // Diagnóstico de filtrado (visible en allCandidates y en _debug)
+    const invertiblesInSnapshot = snapshot.filter(
+      a => getClassificationStr(a) === 'INVERTIBLE'
+    );
 
     res.json({
       success:          true,
@@ -2102,7 +2129,20 @@ app.post('/api/invest/decide', async (req, res) => {
       allCandidates:    decision.allCandidates || [],
       cycleCapital:     decision.cycleCapital,
       mode:             cfg.mode,
-      exchange:         cfg.exchange
+      exchange:         cfg.exchange,
+      _debug: {
+        snapshotTotal:          snapshot.length,
+        invertiblesInSnapshot:  invertiblesInSnapshot.length,
+        minBoostApplied:        cfg.minBoostPower,
+        minBoostFromAlgoA:      algoMinBP,
+        minSignalsRequired:     cfg.minSignals,
+        minPredictedChange:     cfg.minPredictedChange || 0,
+        topInvertibles: invertiblesInSnapshot.slice(0, 5).map(a => ({
+          symbol:     a.symbol,
+          boostPower: parseFloat((a.boostPower || 0).toFixed(3)),
+          predicted:  a.predictedChange,
+        })),
+      }
     });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -2130,6 +2170,18 @@ app.post('/api/invest/execute', async (req, res) => {
     if (available < 10) {
       return res.status(400).json({ success: false, error: `Capital disponible insuficiente: $${available.toFixed(2)}` });
     }
+
+    // ── Sincronizar umbral con el Algoritmo A (mismo fix que /api/invest/decide) ─
+    try {
+      const algoMode   = cfg.mode === 'speculative' ? 'speculative' : 'normal';
+      const algoConfig = await getConfig(algoMode);
+      const algoMinBP  = algoConfig?.classification?.invertibleMinBoost ?? null;
+      if (algoMinBP != null && algoMinBP > 0) {
+        cfg._syncedMinBoostPower = algoMinBP;
+        if (cfg.minBoostPower > algoMinBP) cfg.minBoostPower = algoMinBP;
+      }
+    } catch(_) {}
+    // ─────────────────────────────────────────────────────────────────────────
 
     const decision = investManager.selectInvestmentTargets(snapshot, cfg, positions);
     if (!decision.shouldInvest) {
