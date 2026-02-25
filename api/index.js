@@ -3647,24 +3647,25 @@ app.post('/api/invest/rounds/open', async (req, res) => {
     const {
       capitalTotal, capitalPerCycle, maxPositions, minBoostPower,
       takeProfitPct, stopLossPct, maxHoldCycles, feePct,
-      mode, exchange, minSignals, diversification
+      mode, exchange, minSignals, diversification, minPredictedChange
     } = req.body;
 
     const currentCfg = await getInvestConfig();
     const newCfg = {
       ...currentCfg,
-      ...(capitalTotal    != null && { capitalTotal:    parseFloat(capitalTotal)    }),
-      ...(capitalPerCycle != null && { capitalPerCycle: parseFloat(capitalPerCycle) }),
-      ...(maxPositions    != null && { maxPositions:    parseInt(maxPositions)      }),
-      ...(minBoostPower   != null && { minBoostPower:   parseFloat(minBoostPower)   }),
-      ...(takeProfitPct   != null && { takeProfitPct:   parseFloat(takeProfitPct)   }),
-      ...(stopLossPct     != null && { stopLossPct:     parseFloat(stopLossPct)     }),
-      ...(maxHoldCycles   != null && { maxHoldCycles:   parseInt(maxHoldCycles)     }),
-      ...(feePct          != null && { feePct:          parseFloat(feePct)          }),
-      ...(mode            != null && { mode                                          }),
-      ...(exchange        != null && { exchange                                      }),
-      ...(minSignals      != null && { minSignals:      parseInt(minSignals)        }),
-      ...(diversification != null && { diversification: !!diversification           }),
+      ...(capitalTotal       != null && { capitalTotal:       parseFloat(capitalTotal)       }),
+      ...(capitalPerCycle    != null && { capitalPerCycle:    parseFloat(capitalPerCycle)    }),
+      ...(maxPositions       != null && { maxPositions:       parseInt(maxPositions)         }),
+      ...(minBoostPower      != null && { minBoostPower:      parseFloat(minBoostPower)      }),
+      ...(takeProfitPct      != null && { takeProfitPct:      parseFloat(takeProfitPct)      }),
+      ...(stopLossPct        != null && { stopLossPct:        parseFloat(stopLossPct)        }),
+      ...(maxHoldCycles      != null && { maxHoldCycles:      parseInt(maxHoldCycles)        }),
+      ...(feePct             != null && { feePct:             parseFloat(feePct)             }),
+      ...(mode               != null && { mode                                               }),
+      ...(exchange           != null && { exchange                                           }),
+      ...(minSignals         != null && { minSignals:         parseInt(minSignals)           }),
+      ...(diversification    != null && { diversification:    !!diversification              }),
+      ...(minPredictedChange != null && { minPredictedChange: parseFloat(minPredictedChange) }),
     };
     await redisSet(INVEST_CONFIG_KEY, newCfg);
 
