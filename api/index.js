@@ -2084,9 +2084,12 @@ app.get('/api/invest/positions', async (_req, res) => {
 // Analiza el snapshot actual y decide dónde invertir (sin ejecutar)
 app.post('/api/invest/decide', async (req, res) => {
   try {
-    const cfg       = await getInvestConfig();
-    const positions = await getPositions();
-    const snapshot  = req.body.snapshot || [];
+    const cfg          = await getInvestConfig();
+    const positions    = await getPositions();
+    const snapshot     = req.body.snapshot || [];
+    // FIX: leer el modo del snapshot enviado por el frontend (currentMode del monitor)
+    // Antes se usaba cfg.mode que es siempre 'simulated' → algoMode nunca era 'speculative'
+    const snapshotMode = req.body.mode || null;
 
     if (!snapshot.length) return res.status(400).json({ success: false, error: 'Snapshot vacío' });
 
@@ -2098,7 +2101,12 @@ app.post('/api/invest/decide', async (req, res) => {
     // Así ambos algoritmos comparten el mismo criterio de clasificación.
     let algoMinBP = null;
     try {
-      const algoMode   = cfg.mode === 'speculative' ? 'speculative' : 'normal';
+      // FIX: usar snapshotMode con prioridad sobre cfg.mode
+      // cfg.mode = 'simulated' siempre → sin este fix algoMode era siempre 'normal'
+      // aunque el snapshot viniera de activos especulativos (small-caps)
+      const algoMode = snapshotMode === 'speculative'
+        ? 'speculative'
+        : (cfg.mode === 'speculative' ? 'speculative' : 'normal');
       const algoConfig = await getConfig(algoMode);
       algoMinBP = algoConfig?.classification?.invertibleMinBoost ?? null;
       if (algoMinBP != null && algoMinBP > 0) {
@@ -2129,7 +2137,10 @@ app.post('/api/invest/decide', async (req, res) => {
       allCandidates:    decision.allCandidates || [],
       cycleCapital:     decision.cycleCapital,
       mode:             cfg.mode,
+      snapshotMode:     snapshotMode,   // devolver modo para diagnóstico en UI
       exchange:         cfg.exchange,
+      takeProfitPct:    cfg.takeProfitPct,
+      stopLossPct:      cfg.stopLossPct,
       _debug: {
         snapshotTotal:          snapshot.length,
         invertiblesInSnapshot:  invertiblesInSnapshot.length,
@@ -2137,6 +2148,7 @@ app.post('/api/invest/decide', async (req, res) => {
         minBoostFromAlgoA:      algoMinBP,
         minSignalsRequired:     cfg.minSignals,
         minPredictedChange:     cfg.minPredictedChange || 0,
+        snapshotMode:           snapshotMode,
         topInvertibles: invertiblesInSnapshot.slice(0, 5).map(a => ({
           symbol:     a.symbol,
           boostPower: parseFloat((a.boostPower || 0).toFixed(3)),
