@@ -2123,10 +2123,16 @@ app.post('/api/invest/decide', async (req, res) => {
     const decision  = investManager.selectInvestmentTargets(snapshot, cfg, positions);
     const available = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
 
-    // Diagnóstico de filtrado (visible en allCandidates y en _debug)
-    const invertiblesInSnapshot = snapshot.filter(
-      a => getClassificationStr(a) === 'INVERTIBLE'
-    );
+    // Diagnóstico de filtrado detallado — pre-computar por cada filtro
+    const invertiblesInSnapshot = snapshot.filter(a => getClassificationStr(a) === 'INVERTIBLE');
+    const failingPred  = invertiblesInSnapshot.filter(a => {
+      const pred = typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0);
+      return pred < (cfg.minPredictedChange || 0);
+    });
+    const passingAll   = invertiblesInSnapshot.filter(a => {
+      const pred = typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0);
+      return pred >= (cfg.minPredictedChange || 0);
+    });
 
     res.json({
       success:          true,
@@ -2142,17 +2148,20 @@ app.post('/api/invest/decide', async (req, res) => {
       takeProfitPct:    cfg.takeProfitPct,
       stopLossPct:      cfg.stopLossPct,
       _debug: {
-        snapshotTotal:          snapshot.length,
-        invertiblesInSnapshot:  invertiblesInSnapshot.length,
-        minBoostApplied:        cfg.minBoostPower,
-        minBoostFromAlgoA:      algoMinBP,
-        minSignalsRequired:     cfg.minSignals,
-        minPredictedChange:     cfg.minPredictedChange || 0,
-        snapshotMode:           snapshotMode,
-        topInvertibles: invertiblesInSnapshot.slice(0, 5).map(a => ({
+        snapshotTotal:                snapshot.length,
+        invertiblesInSnapshot:        invertiblesInSnapshot.length,
+        invertiblesFailingPredFilter: failingPred.length,
+        invertiblesPassingAll:        passingAll.length,
+        minBoostApplied:              cfg.minBoostPower,
+        minBoostFromAlgoA:            algoMinBP,
+        minSignalsRequired:           cfg.minSignals,
+        minPredictedChange:           cfg.minPredictedChange || 0,
+        snapshotMode:                 snapshotMode,
+        topInvertibles: invertiblesInSnapshot.slice(0, 8).map(a => ({
           symbol:     a.symbol,
           boostPower: parseFloat((a.boostPower || 0).toFixed(3)),
           predicted:  a.predictedChange,
+          failsPred:  (typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0)) < (cfg.minPredictedChange || 0),
         })),
       }
     });
@@ -4171,7 +4180,7 @@ app.post('/api/invest/prices/refresh', async (_req, res) => {
   try {
     const positions = await getPositions();
     const open      = positions.filter(p => p.status === 'open');
-    if (!open.length) return res.json({ success: true, message: 'Sin posiciones abiertas', fetchedCount: 0 });
+    if (!open.length) return res.json({ success: true, message: 'Sin posiciones abiertas', fetchedCount: 0, staleCount: 0, failedIds: [], source: 'none', updatedAt: null });
     const assetIds  = [...new Set(open.map(p => p.assetId))];
     const symbolMap = {};
     open.forEach(p => { symbolMap[p.assetId] = p.symbol; });
