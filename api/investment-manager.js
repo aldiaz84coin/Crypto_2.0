@@ -190,6 +190,72 @@ function closePosition(position, exitPrice, reason, investConfig) {
   return p;
 }
 
+// ─── Evaluar posición completa (decide sell/hold + calcula PnL) ──────────────
+// closeReasonContext: 'manual' | 'round_close' fuerzan venta; cualquier otro
+// valor (cycleId, 'evaluate', etc.) deja que evaluateCloseConditions decida.
+function evaluatePosition(position, currentPrice, closeReasonContext, investConfig) {
+  const cfg  = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
+  const pct  = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
+  const fee  = parseFloat((position.capitalUSD * cfg.feePct / 100).toFixed(4));
+  const gross = (currentPrice - position.entryPrice) * position.units;
+
+  const forceClose = ['manual', 'round_close'].includes(closeReasonContext);
+  const closeCheck  = evaluateCloseConditions(position, currentPrice, investConfig);
+  const shouldClose = forceClose || closeCheck.shouldClose;
+  const reason      = closeCheck.reason || closeReasonContext || 'evaluate';
+
+  // Retroalimentación al algoritmo cuando se cierra con predicción registrada
+  let algorithmFeedback = null;
+  if (shouldClose && position.predictedChange != null) {
+    const predictionCorrect = pct >= (position.predictedChange || 0);
+    algorithmFeedback = {
+      predictionCorrect,
+      predictedChange: position.predictedChange,
+      actualChange:    parseFloat(pct.toFixed(2)),
+      errorMagnitude:  parseFloat(Math.abs(pct - (position.predictedChange || 0)).toFixed(2)),
+      closeReason:     reason,
+      suggestion:      predictionCorrect
+        ? 'Predicción correcta — mantener parámetros'
+        : `Revisar predicción: esperado +${position.predictedChange?.toFixed(1)}%, obtenido ${pct.toFixed(1)}%`,
+    };
+  }
+
+  return {
+    decision:          shouldClose ? 'sell' : 'hold',
+    reason,
+    pnlPct:            parseFloat(pct.toFixed(2)),
+    pnlUSD:            parseFloat(gross.toFixed(4)),
+    netPnL:            parseFloat((gross - fee - (position.entryFeeUSD || 0)).toFixed(4)),
+    exitFeeUSD:        fee,
+    algorithmFeedback,
+  };
+}
+
+// ─── Resumen de ciclo/ronda ───────────────────────────────────────────────────
+function buildCycleSummary(positions, cycleId, investConfig) {
+  const cfg    = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
+  const closed = positions.filter(p =>
+    p.status === 'closed' && (!cycleId || p.cycleId === cycleId)
+  );
+  const open = positions.filter(p => p.status === 'open');
+
+  const totalPnLUSD  = closed.reduce((s, p) => s + (p.realizedPnL || 0), 0);
+  const totalFees    = closed.reduce((s, p) => s + (p.totalFeesUSD || 0), 0);
+  const totalInvested = closed.reduce((s, p) => s + (p.capitalUSD || 0), 0);
+
+  return {
+    totalPositions: closed.length,
+    openPositions:  open.length,
+    totalPnLUSD:    parseFloat(totalPnLUSD.toFixed(4)),
+    totalFeesUSD:   parseFloat(totalFees.toFixed(4)),
+    netReturnUSD:   parseFloat(totalPnLUSD.toFixed(4)),
+    netReturnPct:   totalInvested > 0
+      ? parseFloat((totalPnLUSD / totalInvested * 100).toFixed(2))
+      : 0,
+    available:      parseFloat(calculateAvailableCapital(positions, cfg.capitalTotal).toFixed(2)),
+  };
+}
+
 // ─── Evaluar cierre (watchdog) ────────────────────────────────────────────────
 function evaluateCloseConditions(position, currentPrice, investConfig) {
   const cfg = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
@@ -209,4 +275,6 @@ module.exports = {
   updatePositionPnL,
   closePosition,
   evaluateCloseConditions,
+  evaluatePosition,
+  buildCycleSummary,
 };

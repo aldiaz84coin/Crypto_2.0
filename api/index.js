@@ -2326,7 +2326,8 @@ app.post('/api/invest/evaluate', async (req, res) => {
       if (evaluation.decision === 'sell') {
         // Ejecutar venta
         const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-        investManager.closePosition(position, evaluation, currentPrice);
+        const closedPos = investManager.closePosition(position, currentPrice, evaluation.reason, cfg);
+        Object.assign(position, closedPos);
         await onPositionClosed(position);
         position.exchangeCloseOrderId = order.orderId;
         result.sold    = true;
@@ -2454,7 +2455,8 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
     evaluation.reason = 'manual: cierre manual del usuario';
     const keys = await getExchangeKeys(cfg.exchange);
     const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-    investManager.closePosition(position, evaluation, currentPrice);
+    const closedPos = investManager.closePosition(position, currentPrice, evaluation.reason, cfg);
+    Object.assign(position, closedPos);
     await onPositionClosed(position);
     await savePositions(positions);
 
@@ -3734,7 +3736,8 @@ app.post('/api/invest/rounds/close', async (req, res) => {
         const evaluation   = investManager.evaluatePosition(position, currentPrice, 'round_close', cfg);
         evaluation.reason  = 'round_close: cierre de ronda';
         const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-        investManager.closePosition(position, evaluation, currentPrice);
+        const closedPos = investManager.closePosition(position, currentPrice, evaluation.reason, cfg);
+        Object.assign(position, closedPos);
         await onPositionClosed(position);
         position.exchangeCloseOrderId = order.orderId;
         closeResults.push({ symbol: position.symbol, pnlPct: evaluation.pnlPct, pnlUSD: evaluation.pnlUSD });
