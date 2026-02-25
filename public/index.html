@@ -997,6 +997,10 @@ function setMode(mode) {
   // Evita que Normal muestre los small-caps del modo Especulativo anterior
   if (modeChanged && cryptos.length > 0) {
     loadCryptos();
+  } else if (modeChanged && cryptos.length === 0) {
+    // Informar al usuario que debe pulsar Cargar con el nuevo modo
+    const list = document.getElementById('crypto-list');
+    if (list) list.innerHTML = `<p class="text-blue-400 text-sm py-3">🔄 Modo cambiado a <b>${mode === 'speculative' ? 'Especulativo (small-caps)' : 'Normal (large-caps)'}</b> — pulsa <b>Cargar</b> para ver los activos de este modelo.</p>`;
   }
 }
 
@@ -2154,6 +2158,25 @@ async function loadInvestOverview() {
 }
 
 // ── Decidir inversión ────────────────────────────────────────────
+// Acción rápida: bajar minPredictedChange a 0 cuando es la causa del bloqueo
+async function fixMinPredictedChange() {
+  try {
+    const r = await fetch('/api/invest/config', {
+      method: 'POST', headers: {'Content-Type':'application/json'},
+      body: JSON.stringify({ minPredictedChange: 0 })
+    });
+    const d = await r.json();
+    if (d.success) {
+      if (investConfig) investConfig.minPredictedChange = 0;
+      document.getElementById('nr-min-pred') && (document.getElementById('nr-min-pred').value = '0');
+      // Re-ejecutar el análisis automáticamente
+      await decideCycle();
+    } else {
+      alert('❌ Error al actualizar: ' + (d.error || 'desconocido'));
+    }
+  } catch(e) { alert('❌ ' + e.message); }
+}
+
 async function decideCycle() {
   if (!cryptos?.length) {
     document.getElementById('inv-decision').innerHTML = '<p class="text-yellow-400 text-sm">⚠️ Primero carga activos en el Monitor.</p>';
@@ -2174,22 +2197,56 @@ async function decideCycle() {
 function renderDecision(d) {
   const div = document.getElementById('inv-decision');
   if (!d.shouldInvest) {
-    // Panel de diagnóstico — ayuda a ver por qué no hay candidatos
     const debug = d._debug || {};
-    const debugHtml = debug.snapshotTotal != null ? `
-      <details class="mt-3 text-xs text-gray-500">
-        <summary class="cursor-pointer hover:text-gray-300">🔍 Diagnóstico de filtrado</summary>
-        <div class="mt-2 space-y-1 font-mono bg-gray-950 p-3 rounded-lg">
-          <p>Activos en snapshot: <span class="text-gray-300">${debug.snapshotTotal}</span></p>
-          <p>INVERTIBLEs detectados: <span class="${debug.invertiblesInSnapshot > 0 ? 'text-green-400' : 'text-red-400'}">${debug.invertiblesInSnapshot ?? '—'}</span></p>
-          <p>Señales mínimas requeridas: <span class="text-yellow-400">${debug.minSignalsRequired ?? 2}</span></p>
-          <p>BP mínimo aplicado: <span class="text-gray-300">${debug.minBoostApplied != null ? (debug.minBoostApplied * 100).toFixed(0) + '%' : '—'}</span></p>
-          <p>BP desde Algo A (${d.snapshotMode === 'speculative' ? 'especulativo' : 'normal'}): <span class="text-blue-400">${debug.minBoostFromAlgoA != null ? (debug.minBoostFromAlgoA * 100).toFixed(0) + '%' : '—'}</span></p>
-          <p>Modo del snapshot: <span class="text-purple-400">${d.snapshotMode || d.mode || '—'}</span></p>
-          ${debug.topInvertibles?.length ? `<p class="mt-1 text-gray-600">Top INVERTIBLEs:</p>
-          ${debug.topInvertibles.map(a => `<p class="ml-2">• ${a.symbol}: BP=${(a.boostPower*100).toFixed(0)}%, pred=+${a.predicted}%</p>`).join('')}` : ''}
-        </div>
-      </details>` : '';
+
+    // Construir panel de diagnóstico detallado
+    let debugHtml = '';
+    if (debug.snapshotTotal != null) {
+      const predFilterBlocking = debug.invertiblesFailingPredFilter > 0 &&
+        debug.invertiblesPassingAll < (debug.minSignalsRequired ?? 3);
+
+      const filterRows = `
+        <p>Activos en snapshot: <span class="text-gray-300">${debug.snapshotTotal}</span></p>
+        <p>✅ INVERTIBLEs (por Algo A): <span class="text-green-400">${debug.invertiblesInSnapshot ?? '—'}</span></p>
+        ${debug.minPredictedChange > 0 ? `
+        <p class="${predFilterBlocking ? 'text-red-400' : 'text-gray-400'}">
+          ❌ Descartados por pred &lt; ${debug.minPredictedChange}%:
+          <span class="font-bold">${debug.invertiblesFailingPredFilter ?? '—'}</span>
+          ${predFilterBlocking ? ' ← <b>CAUSA DEL PROBLEMA</b>' : ''}
+        </p>` : ''}
+        <p>Pasan todos los filtros: <span class="${(debug.invertiblesPassingAll ?? 0) >= (debug.minSignalsRequired ?? 3) ? 'text-green-400' : 'text-red-400'} font-bold">${debug.invertiblesPassingAll ?? '—'}</span>
+          <span class="text-gray-500"> (mínimo: ${debug.minSignalsRequired ?? 3})</span></p>
+        <p>BP mínimo (Algo A ${d.snapshotMode === 'speculative' ? 'espec.' : 'normal'}): <span class="text-blue-400">${debug.minBoostFromAlgoA != null ? (debug.minBoostFromAlgoA*100).toFixed(0)+'%' : '—'}</span></p>
+        <p>Modo snapshot: <span class="text-purple-400">${d.snapshotMode || d.mode || '—'}</span></p>`;
+
+      const topRows = debug.topInvertibles?.length ? `
+        <p class="mt-2 text-gray-600 border-t border-gray-800 pt-2">Top INVERTIBLEs del snapshot:</p>
+        ${debug.topInvertibles.map(a =>
+          `<p class="ml-2 ${a.failsPred ? 'text-red-500' : 'text-gray-300'}">
+            ${a.failsPred ? '✗' : '✓'} ${a.symbol}: BP=${(a.boostPower*100).toFixed(0)}%
+            pred=+${a.predicted}%${a.failsPred ? ` (falla pred≥${debug.minPredictedChange}%)` : ''}
+          </p>`
+        ).join('')}` : '';
+
+      const quickFix = predFilterBlocking ? `
+        <div class="mt-3 pt-3 border-t border-gray-800">
+          <p class="text-yellow-400 mb-1">💡 Solución rápida:</p>
+          <p class="text-gray-400 mb-2">El filtro <b>pred ≥ ${debug.minPredictedChange}%</b> está descartando ${debug.invertiblesFailingPredFilter} INVERTIBLEs válidos.
+          Los activos ya fueron validados por el Algoritmo A — el filtro pred es redundante.</p>
+          <button onclick="fixMinPredictedChange()" class="bg-blue-700 hover:bg-blue-600 px-3 py-1.5 rounded-lg text-xs font-semibold">
+            🔧 Bajar pred mínima a 0% (recomendado)
+          </button>
+        </div>` : '';
+
+      debugHtml = `
+        <details class="mt-3 text-xs text-gray-500" open>
+          <summary class="cursor-pointer hover:text-gray-300 font-semibold">🔍 Diagnóstico de filtrado</summary>
+          <div class="mt-2 space-y-1 font-mono bg-gray-950 p-3 rounded-lg">
+            ${filterRows}${topRows}${quickFix}
+          </div>
+        </details>`;
+    }
+
     div.innerHTML = `
       <div class="bg-yellow-950 border border-yellow-800 rounded-xl p-4">
         <p class="text-yellow-400 font-semibold">⏸️ No invertir en este ciclo</p>
