@@ -3011,6 +3011,15 @@ async function openNewRoundWizard() {
             </div>
           </div>
 
+          <div class="grid grid-cols-1 gap-3">
+            <div>
+              <label class="text-xs text-gray-400 block mb-1">📈 Subida mínima prevista <span class="text-gray-600">(filtra activos con predicción baja; se priorizan los de mayor subida prevista)</span></label>
+              <select id="nr-min-pred" class="w-full bg-gray-800 border border-indigo-900 rounded-lg px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none text-indigo-200">
+                ${[0,1,2,3,5,7,10,15].map(v => `<option value="${v}" ${Math.abs(v-(s.minPredictedChange||0)) < 0.01 ? 'selected':''}>${v === 0 ? 'Sin filtro — cualquier subida prevista' : '≥ '+v+'%'}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+
           <div class="grid grid-cols-2 gap-3">
             <div>
               <label class="text-xs text-gray-400 block mb-1">Modo</label>
@@ -3049,15 +3058,16 @@ async function submitNewRound() {
   status.classList.remove('hidden'); status.textContent = 'Configurando nueva ronda...';
   try {
     const payload = {
-      capitalTotal:    parseFloat(document.getElementById('nr-capital').value),
-      capitalPerCycle: parseFloat(document.getElementById('nr-capital-pct').value),
-      takeProfitPct:   parseFloat(document.getElementById('nr-tp').value),
-      stopLossPct:     parseFloat(document.getElementById('nr-sl').value),
-      maxHoldCycles:   parseInt(document.getElementById('nr-hold').value),
-      maxPositions:    parseInt(document.getElementById('nr-maxpos').value),
-      minBoostPower:   parseFloat(document.getElementById('nr-boost').value),
-      mode:            document.getElementById('nr-mode').value,
-      exchange:        document.getElementById('nr-exchange').value,
+      capitalTotal:       parseFloat(document.getElementById('nr-capital').value),
+      capitalPerCycle:    parseFloat(document.getElementById('nr-capital-pct').value),
+      takeProfitPct:      parseFloat(document.getElementById('nr-tp').value),
+      stopLossPct:        parseFloat(document.getElementById('nr-sl').value),
+      maxHoldCycles:      parseInt(document.getElementById('nr-hold').value),
+      maxPositions:       parseInt(document.getElementById('nr-maxpos').value),
+      minBoostPower:      parseFloat(document.getElementById('nr-boost').value),
+      minPredictedChange: parseFloat(document.getElementById('nr-min-pred').value),
+      mode:               document.getElementById('nr-mode').value,
+      exchange:           document.getElementById('nr-exchange').value,
     };
     const r = await fetch('/api/invest/rounds/open', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
     const d = await r.json();
