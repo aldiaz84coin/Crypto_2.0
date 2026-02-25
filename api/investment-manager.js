@@ -9,6 +9,7 @@ const DEFAULT_INVEST_CONFIG = {
   capitalPerCycle:    0.30,         // fracción del capital que se mueve por ciclo (30%)
   maxPositions:       3,            // N recomendaciones máximas por ciclo
   minBoostPower:      0.65,         // solo INVERTIBLE con BP >= este umbral
+  minPredictedChange: 0,            // subida mínima prevista (%) para incluir el activo
   minCycleHours:      12,           // solo ciclos >= 12h para operar
   takeProfitPct:      10,           // vender si ganancia >= 10%
   stopLossPct:        5,            // vender si pérdida >= 5%
@@ -22,38 +23,51 @@ const DEFAULT_INVEST_CONFIG = {
 
 // ─── Lógica de selección de activos ──────────────────────────────────────────
 /**
- * Selecciona los N mejores activos en los que invertir dado un snapshot de ciclo.
- * Criterios: solo INVERTIBLE, boostPower >= minBoostPower, ordenados por BP desc.
+ * Selecciona los N mejores activos priorizando MAYOR PREDICCIÓN DE CRECIMIENTO.
+ * Orden de prioridad: predictedChange DESC (primero los de mayor subida prevista).
+ * Filtros: solo INVERTIBLE, boostPower >= minBoostPower, predictedChange >= minPredictedChange.
  * Si hay menos de minSignals candidatos → devuelve [] (no invertir en este ciclo).
  */
 function selectInvestmentTargets(snapshot, investConfig, existingPositions = []) {
   const cfg = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
 
-  // Candidatos: solo INVERTIBLE con BP suficiente
+  // ── Candidatos: INVERTIBLE + umbral BP + umbral predicción mínima ─────────
   const candidates = snapshot
     .filter(a =>
       a.classification === 'INVERTIBLE' &&
       (a.boostPower || 0) >= cfg.minBoostPower &&
-      (a.predictedChange || 0) > 0
+      (a.predictedChange || 0) >= (cfg.minPredictedChange || 0)
     )
-    .sort((a, b) => (b.boostPower || 0) - (a.boostPower || 0));
+    // PRIORIDAD: mayor predicción de crecimiento primero
+    // Desempate: mayor boostPower cuando predicciones son iguales
+    .sort((a, b) => {
+      const predDiff = (b.predictedChange || 0) - (a.predictedChange || 0);
+      if (Math.abs(predDiff) > 0.01) return predDiff;
+      return (b.boostPower || 0) - (a.boostPower || 0);
+    });
 
   // Sin señales suficientes → no invertir
   if (candidates.length < cfg.minSignals) {
     return {
-      selected:    [],
-      reason:      `Solo ${candidates.length} candidatos INVERTIBLE (mínimo: ${cfg.minSignals}). Capital a USDT.`,
-      shouldInvest: false
+      selected:     [],
+      reason:       `Solo ${candidates.length} candidatos INVERTIBLE con pred ≥ ${cfg.minPredictedChange || 0}% y BP ≥ ${(cfg.minBoostPower * 100).toFixed(0)}% (mínimo: ${cfg.minSignals}).`,
+      shouldInvest: false,
+      allCandidates: candidates,
     };
   }
 
-  // Tomar los N mejores, excluyendo activos ya en posición abierta
+  // Excluir activos ya en posición abierta
   const openIds  = new Set((existingPositions || []).filter(p => p.status === 'open').map(p => p.assetId));
   const filtered = candidates.filter(a => !openIds.has(a.id));
   const selected = filtered.slice(0, cfg.maxPositions);
 
   if (selected.length === 0) {
-    return { selected: [], reason: 'Todos los candidatos tienen posición abierta.', shouldInvest: false };
+    return {
+      selected:     [],
+      reason:       'Todos los candidatos tienen posición abierta.',
+      shouldInvest: false,
+      allCandidates: candidates,
+    };
   }
 
   // Calcular capital a asignar por posición
@@ -63,28 +77,43 @@ function selectInvestmentTargets(snapshot, investConfig, existingPositions = [])
     : cycleCapital;  // toda la apuesta en el mejor si no hay diversificación
 
   const targets = selected.map((a, i) => ({
-    assetId:        a.id,
-    symbol:         a.symbol,
-    name:           a.name,
-    boostPower:     a.boostPower,
-    boostPowerPct:  a.boostPowerPercent,
-    classification: a.classification,
-    entryPrice:     a.current_price,
+    assetId:         a.id,
+    symbol:          a.symbol,
+    name:            a.name,
+    boostPower:      a.boostPower,
+    boostPowerPct:   a.boostPowerPercent,
+    classification:  a.classification,
+    entryPrice:      a.current_price,
     predictedChange: a.predictedChange,
-    capitalUSD:     parseFloat(perPosition.toFixed(2)),
-    weight:         parseFloat((perPosition / cycleCapital * 100).toFixed(1)),  // % del capital del ciclo
-    rank:           i + 1,
+    capitalUSD:      parseFloat(perPosition.toFixed(2)),
+    weight:          parseFloat((perPosition / cycleCapital * 100).toFixed(1)),
+    rank:            i + 1,
     takeProfitPrice: parseFloat((a.current_price * (1 + cfg.takeProfitPct / 100)).toFixed(6)),
     stopLossPrice:   parseFloat((a.current_price * (1 - cfg.stopLossPct   / 100)).toFixed(6)),
-    expectedFeeUSD:  parseFloat((perPosition * cfg.feePct / 100).toFixed(4))
+    expectedFeeUSD:  parseFloat((perPosition * cfg.feePct / 100).toFixed(4)),
   }));
 
+  const minPredLabel = cfg.minPredictedChange > 0
+    ? ` · pred ≥ ${cfg.minPredictedChange}%`
+    : '';
+  const topPred = selected[0]?.predictedChange?.toFixed(1) ?? '?';
+
   return {
-    selected:     targets,
-    reason:       `${selected.length} activos seleccionados con BP ≥ ${(cfg.minBoostPower*100).toFixed(0)}%`,
-    shouldInvest: true,
-    cycleCapital: parseFloat(cycleCapital.toFixed(2))
+    selected,
+    reason:          `${selected.length} activos por mayor potencial de crecimiento (top: +${topPred}% previsto)${minPredLabel}`,
+    shouldInvest:    true,
+    cycleCapital:    parseFloat(cycleCapital.toFixed(2)),
+    allCandidates:   candidates,    // lista completa ordenada para mostrar en UI
+    sortedBy:        'predictedChange',
   };
+}
+
+// ─── Capital disponible ───────────────────────────────────────────────────────
+function calculateAvailableCapital(positions, capitalTotal) {
+  const invested = (positions || [])
+    .filter(p => p.status === 'open')
+    .reduce((sum, p) => sum + (p.capitalUSD || 0), 0);
+  return Math.max(0, capitalTotal - invested);
 }
 
 // ─── Crear posición ───────────────────────────────────────────────────────────
@@ -94,15 +123,15 @@ function createPosition(target, cycleId, investConfig) {
   const positionId = `pos_${now}_${target.assetId}`;
   return {
     id:              positionId,
-    cycleId,                          // ciclo que abrió la posición
+    cycleId,
     assetId:         target.assetId,
     symbol:          target.symbol,
     name:            target.name,
-    status:          'open',          // open | closed | holding
-    mode:            cfg.mode,        // simulated | real
+    status:          'open',
+    mode:            cfg.mode,
     exchange:        cfg.exchange,
     entryPrice:      target.entryPrice,
-    currentPrice:    target.entryPrice,  // se actualiza con el precio actual
+    currentPrice:    target.entryPrice,
     capitalUSD:      target.capitalUSD,
     units:           parseFloat((target.capitalUSD / target.entryPrice).toFixed(8)),
     takeProfitPrice: target.takeProfitPrice,
@@ -111,162 +140,69 @@ function createPosition(target, cycleId, investConfig) {
     boostPower:      target.boostPower,
     openedAt:        new Date(now).toISOString(),
     closedAt:        null,
-    holdCycles:      0,              // cuántos ciclos lleva abierta
+    holdCycles:      0,
     maxHoldCycles:   cfg.maxHoldCycles,
-    // P&L
     unrealizedPnL:   0,
     unrealizedPnLPct: 0,
     realizedPnL:     null,
     realizedPnLPct:  null,
-    // Costes
     entryFeeUSD:     target.expectedFeeUSD,
     exitFeeUSD:      null,
     totalFeesUSD:    target.expectedFeeUSD,
     apiCostUSD:      cfg.apiCostPerCycle,
-    // Orden de exchange (simulada o real)
-    exchangeOrderId: cfg.mode === 'simulated' ? `SIM_${positionId}` : null,
-    closeReason:     null,           // take_profit | stop_loss | max_cycles | manual | weak_signal
-    // Retroalimentación al algoritmo
-    algorithmFeedback: null
+    exchangeOrderId: cfg.mode === 'simulated'
+      ? `sim_${positionId}`
+      : null,
   };
 }
 
-// ─── Evaluar posición al completar un ciclo ───────────────────────────────────
-function evaluatePosition(position, currentPrice, cycleId, investConfig) {
-  const cfg     = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
-  const entry   = position.entryPrice;
-  const pnlPct  = ((currentPrice - entry) / entry) * 100;
-  const pnlUSD  = (currentPrice - entry) * position.units;
-  const exitFee = position.capitalUSD * cfg.feePct / 100;
-  const netPnL  = pnlUSD - exitFee;
-
-  position.currentPrice      = currentPrice;
-  position.unrealizedPnL     = parseFloat(pnlUSD.toFixed(4));
-  position.unrealizedPnLPct  = parseFloat(pnlPct.toFixed(2));
-  position.holdCycles        += 1;
-
-  let decision = 'hold';
-  let reason   = '';
-
-  const predictedTarget = (position.predictedChange || 0);
-  const hitPredictionTarget = predictedTarget > 0
-    && pnlPct > 0
-    && pnlPct >= predictedTarget
-    && pnlPct < cfg.takeProfitPct; // solo si NO alcanzó ya el TP configurado
-
-  if (pnlPct >= cfg.takeProfitPct) {
-    decision = 'sell';
-    reason   = `take_profit: +${pnlPct.toFixed(2)}% ≥ umbral ${cfg.takeProfitPct}%`;
-  } else if (hitPredictionTarget) {
-    decision = 'sell';
-    reason   = `prediction_target: +${pnlPct.toFixed(2)}% ≥ predicción +${predictedTarget.toFixed(2)}%`;
-  } else if (pnlPct <= -cfg.stopLossPct) {
-    decision = 'sell';
-    reason   = `stop_loss: ${pnlPct.toFixed(2)}% ≤ −${cfg.stopLossPct}%`;
-  } else if (position.holdCycles >= cfg.maxHoldCycles) {
-    if (pnlPct > 0) {
-      decision = 'sell';
-      reason   = `max_cycles_profit: ${position.holdCycles} ciclos — +${pnlPct.toFixed(2)}%`;
-    } else {
-      decision = 'sell';
-      reason   = `max_cycles_loss: ${position.holdCycles} ciclos — ${pnlPct.toFixed(2)}%`;
-    }
-  } else {
-    decision = 'hold';
-    reason   = `hold: ${pnlPct.toFixed(2)}% en ciclo ${position.holdCycles}/${cfg.maxHoldCycles}`;
-  }
-
-  // Retroalimentación al algoritmo si la predicción fue incorrecta
-  let algorithmFeedback = null;
-  if (decision === 'sell') {
-    const predictedOk = (position.predictedChange || 0) > 0 && pnlPct > 0;
-    const errorMag    = Math.abs(pnlPct - (position.predictedChange || 0));
-    algorithmFeedback = {
-      predictionCorrect: predictedOk,
-      predictedChange:   position.predictedChange,
-      actualChange:      parseFloat(pnlPct.toFixed(2)),
-      errorMagnitude:    parseFloat(errorMag.toFixed(2)),
-      closeReason:       reason.split(':')[0],
-      suggestion:        errorMag > 15
-        ? 'Revisar pesos del algoritmo para este nivel de capitalización'
-        : predictedOk ? null : 'Ajustar umbral de boostPower mínimo'
-    };
-  }
-
-  return {
-    decision,
-    reason,
-    pnlPct:            parseFloat(pnlPct.toFixed(2)),
-    pnlUSD:            parseFloat(pnlUSD.toFixed(4)),
-    netPnL:            parseFloat(netPnL.toFixed(4)),
-    exitFeeUSD:        parseFloat(exitFee.toFixed(4)),
-    algorithmFeedback
-  };
+// ─── Actualizar P&L de posición ───────────────────────────────────────────────
+function updatePositionPnL(position, currentPrice) {
+  const p = { ...position };
+  p.currentPrice     = currentPrice;
+  p.unrealizedPnL    = parseFloat(((currentPrice - p.entryPrice) * p.units - (p.totalFeesUSD || 0)).toFixed(4));
+  p.unrealizedPnLPct = parseFloat((((currentPrice - p.entryPrice) / p.entryPrice) * 100).toFixed(2));
+  return p;
 }
 
 // ─── Cerrar posición ──────────────────────────────────────────────────────────
-// exitPrice: precio real de salida (requerido para calcular PnL correcto en reportes)
-function closePosition(position, evaluation, exitPrice) {
-  const now = Date.now();
-  const resolvedExitPrice  = exitPrice || position.currentPrice || position.entryPrice;
-  position.status          = 'closed';
-  position.closedAt        = new Date(now).toISOString();
-  position.currentPrice    = resolvedExitPrice;   // precio real de salida (antes era no-op)
-  position.exitPrice       = resolvedExitPrice;   // campo explícito para reportes y UI
-  position.realizedPnL     = evaluation.pnlUSD;
-  position.realizedPnLPct  = evaluation.pnlPct;
-  position.exitFeeUSD      = evaluation.exitFeeUSD;
-  position.totalFeesUSD    = (position.entryFeeUSD || 0) + evaluation.exitFeeUSD + (position.apiCostUSD || 0);
-  position.closeReason     = evaluation.reason.split(':')[0];
-  position.algorithmFeedback = evaluation.algorithmFeedback;
-  return position;
+function closePosition(position, exitPrice, reason, investConfig) {
+  const cfg = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
+  const p   = { ...position };
+  const exitFee = parseFloat((p.capitalUSD * cfg.feePct / 100).toFixed(4));
+
+  p.status        = 'closed';
+  p.closedAt      = new Date().toISOString();
+  p.closeReason   = reason;
+  p.exitPrice     = exitPrice;
+  p.exitFeeUSD    = exitFee;
+  p.totalFeesUSD  = parseFloat(((p.entryFeeUSD || 0) + exitFee).toFixed(4));
+
+  const grossPnL   = (exitPrice - p.entryPrice) * p.units;
+  p.realizedPnL    = parseFloat((grossPnL - p.totalFeesUSD).toFixed(4));
+  p.realizedPnLPct = parseFloat((((exitPrice - p.entryPrice) / p.entryPrice) * 100).toFixed(2));
+
+  return p;
 }
 
-// ─── Resumen de ciclo de inversión ────────────────────────────────────────────
-function buildCycleSummary(positions, cycleId, investConfig) {
-  const cfg     = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
-  const closed  = positions.filter(p => p.status === 'closed' && p.cycleId === cycleId);
-  const open    = positions.filter(p => p.status === 'open');
+// ─── Evaluar condiciones de cierre (watchdog) ─────────────────────────────────
+function evaluateCloseConditions(position, currentPrice, investConfig) {
+  const cfg = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
+  const pct = ((currentPrice - position.entryPrice) / position.entryPrice) * 100;
 
-  const totalInvested  = closed.reduce((s, p) => s + p.capitalUSD, 0);
-  const totalPnL       = closed.reduce((s, p) => s + (p.realizedPnL || 0), 0);
-  const totalFees      = closed.reduce((s, p) => s + (p.totalFeesUSD || 0), 0);
-  const netReturn      = totalPnL - totalFees;
-  const pnlPct         = totalInvested > 0 ? (netReturn / totalInvested) * 100 : 0;
-  const wins           = closed.filter(p => (p.realizedPnL || 0) > 0).length;
-  const apiCost        = cfg.apiCostPerCycle * (closed.length + open.length);
-
-  return {
-    cycleId,
-    closedPositions:  closed.length,
-    openPositions:    open.length,
-    totalInvestedUSD: parseFloat(totalInvested.toFixed(2)),
-    totalPnLUSD:      parseFloat(totalPnL.toFixed(4)),
-    totalFeesUSD:     parseFloat(totalFees.toFixed(4)),
-    apiCostUSD:       parseFloat(apiCost.toFixed(4)),
-    netReturnUSD:     parseFloat(netReturn.toFixed(4)),
-    netReturnPct:     parseFloat(pnlPct.toFixed(2)),
-    winRate:          closed.length > 0 ? parseFloat((wins/closed.length*100).toFixed(1)) : null,
-    mode:             cfg.mode,
-    exchange:         cfg.exchange,
-    positions:        closed
-  };
-}
-
-// ─── Calcular capital disponible ──────────────────────────────────────────────
-function calculateAvailableCapital(positions, totalCapital) {
-  const inOpenPositions = positions
-    .filter(p => p.status === 'open')
-    .reduce((s, p) => s + p.capitalUSD, 0);
-  return Math.max(0, totalCapital - inOpenPositions);
+  if (pct >= cfg.takeProfitPct)  return { shouldClose: true,  reason: 'take_profit' };
+  if (pct <= -cfg.stopLossPct)   return { shouldClose: true,  reason: 'stop_loss'   };
+  if ((position.holdCycles || 0) >= cfg.maxHoldCycles)
+                                  return { shouldClose: true,  reason: 'max_hold'    };
+  return { shouldClose: false };
 }
 
 module.exports = {
   DEFAULT_INVEST_CONFIG,
   selectInvestmentTargets,
+  calculateAvailableCapital,
   createPosition,
-  evaluatePosition,
+  updatePositionPnL,
   closePosition,
-  buildCycleSummary,
-  calculateAvailableCapital
+  evaluateCloseConditions,
 };
