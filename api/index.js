@@ -2318,7 +2318,7 @@ app.post('/api/invest/evaluate', async (req, res) => {
       if (evaluation.decision === 'sell') {
         // Ejecutar venta
         const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-        investManager.closePosition(position, evaluation);
+        investManager.closePosition(position, evaluation, currentPrice);
         await onPositionClosed(position);
         position.exchangeCloseOrderId = order.orderId;
         result.sold    = true;
@@ -2446,7 +2446,7 @@ app.post('/api/invest/positions/:id/close', async (req, res) => {
     evaluation.reason = 'manual: cierre manual del usuario';
     const keys = await getExchangeKeys(cfg.exchange);
     const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-    investManager.closePosition(position, evaluation);
+    investManager.closePosition(position, evaluation, currentPrice);
     await onPositionClosed(position);
     await savePositions(positions);
 
@@ -3725,7 +3725,7 @@ app.post('/api/invest/rounds/close', async (req, res) => {
         const evaluation   = investManager.evaluatePosition(position, currentPrice, 'round_close', cfg);
         evaluation.reason  = 'round_close: cierre de ronda';
         const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-        investManager.closePosition(position, evaluation);
+        investManager.closePosition(position, evaluation, currentPrice);
         await onPositionClosed(position);
         position.exchangeCloseOrderId = order.orderId;
         closeResults.push({ symbol: position.symbol, pnlPct: evaluation.pnlPct, pnlUSD: evaluation.pnlUSD });
@@ -3761,12 +3761,12 @@ app.post('/api/invest/rounds/close', async (req, res) => {
     const sortedByPnl    = [...roundPositions].sort((a, b) => (b.realizedPnLPct || 0) - (a.realizedPnLPct || 0));
     const top5Wins       = sortedByPnl.slice(0, 5).filter(p => (p.realizedPnL || 0) > 0).map(p => ({
       symbol: p.symbol, name: p.name, pnlPct: p.realizedPnLPct, pnlUSD: p.realizedPnL,
-      capitalUSD: p.capitalUSD, entryPrice: p.entryPrice, exitPrice: p.currentPrice,
+      capitalUSD: p.capitalUSD, entryPrice: p.entryPrice, exitPrice: p.exitPrice || p.currentPrice,
       closeReason: p.closeReason, openedAt: p.openedAt, closedAt: p.closedAt,
     }));
     const top5Losses     = sortedByPnl.slice(-5).reverse().filter(p => (p.realizedPnL || 0) <= 0).map(p => ({
       symbol: p.symbol, name: p.name, pnlPct: p.realizedPnLPct, pnlUSD: p.realizedPnL,
-      capitalUSD: p.capitalUSD, entryPrice: p.entryPrice, exitPrice: p.currentPrice,
+      capitalUSD: p.capitalUSD, entryPrice: p.entryPrice, exitPrice: p.exitPrice || p.currentPrice,
       closeReason: p.closeReason, openedAt: p.openedAt, closedAt: p.closedAt,
     }));
 

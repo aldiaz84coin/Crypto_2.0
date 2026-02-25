@@ -205,11 +205,14 @@ function evaluatePosition(position, currentPrice, cycleId, investConfig) {
 }
 
 // ─── Cerrar posición ──────────────────────────────────────────────────────────
-function closePosition(position, evaluation) {
+// exitPrice: precio real de salida (requerido para calcular PnL correcto en reportes)
+function closePosition(position, evaluation, exitPrice) {
   const now = Date.now();
+  const resolvedExitPrice  = exitPrice || position.currentPrice || position.entryPrice;
   position.status          = 'closed';
   position.closedAt        = new Date(now).toISOString();
-  position.currentPrice    = position.currentPrice;
+  position.currentPrice    = resolvedExitPrice;   // precio real de salida (antes era no-op)
+  position.exitPrice       = resolvedExitPrice;   // campo explícito para reportes y UI
   position.realizedPnL     = evaluation.pnlUSD;
   position.realizedPnLPct  = evaluation.pnlPct;
   position.exitFeeUSD      = evaluation.exitFeeUSD;
