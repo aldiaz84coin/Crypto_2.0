@@ -2904,11 +2904,12 @@ async function executeCloseRound() {
     const d = await r.json();
     if (!d.success) { status.textContent = '❌ ' + d.error; btn.disabled = false; btn.innerHTML = '🏁 Confirmar Cierre'; return; }
     document.getElementById('close-round-modal').remove();
-    // Recargar datos
+    // Recargar datos (capital ya actualizado en Redis)
     await loadInvestPositions();
     await loadInvestOverview();
-    // Mostrar informe
-    showRoundReport({ roundNumber: d.report.roundNumber, report: d.report });
+    await loadInvestRounds();
+    // Mostrar informe con capitalSnapshot
+    showRoundReport({ roundNumber: d.report.roundNumber, report: d.report, id: d.report.roundId, capitalSnapshot: d.capitalSnapshot });
     await loadCurrentRoundBanner();
   } catch(e) {
     status.textContent = '❌ ' + e.message;
@@ -5088,7 +5089,7 @@ async function applyInsightsConsensus() {
   <script src="/patch-scenario-analysis.js"></script>
   <script src="/patch-performance-v2.js"></script>
   <script src="/patch-status-bar.js"></script>
-  <script src="/patch-rounds-expandable.js"></script>
+  <script src="/patch-rounds-v3.js"></script>
   <script src="/patch-decide-priority.js"></script>
 
 <!-- ══ MODAL: COMPRA MANUAL DESDE DETECTOR PUMP ══════════════════════════════ -->
