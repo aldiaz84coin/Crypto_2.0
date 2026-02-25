@@ -47,6 +47,7 @@ const alertService      = require('./alert-service');
 const iterationEngine   = require('./iteration-engine');
 const scenariosEndpoint = require('./scenarios-endpoint');
 const predCalibration   = require('./prediction-calibration');
+const roundReportGen    = require('./round-report-generator');
 
 const DEFAULT_CONFIG            = algorithmConfig.DEFAULT_CONFIG;
 const DEFAULT_CONFIG_NORMAL     = algorithmConfig.DEFAULT_CONFIG_NORMAL;
@@ -3861,9 +3862,61 @@ app.post('/api/invest/rounds/close', async (req, res) => {
 
     await appendInvestLog({ type: 'round_close', subtype: 'user_action', roundId: report.roundId, roundNumber: report.roundNumber, timestamp: new Date().toISOString(), report: { netReturnPct: report.netReturnPct, totalOperations: report.totalOperations, forcedCloses: closeResults.length } });
 
-    res.json({ success: true, report, forcedCloses: closeResults, positionsClosed: closeResults.length });
+    // ── Actualizar capitalTotal con el resultado neto de la ronda ────────────
+    const newCapitalTotal = parseFloat((cfg.capitalTotal + (report.netReturnUSD || 0)).toFixed(2));
+    const capitalSnapshot = {
+      before:      parseFloat(cfg.capitalTotal.toFixed(2)),
+      after:       newCapitalTotal,
+      netChange:   parseFloat((report.netReturnUSD || 0).toFixed(2)),
+      roundId:     report.roundId,
+      roundNumber: report.roundNumber,
+      updatedAt:   new Date().toISOString(),
+    };
+    // Guardar capitalSnapshot en la ronda cerrada (ya está en historial)
+    const roundsAfterClose = await getRounds();
+    if (roundsAfterClose.length > 0 && roundsAfterClose[0].id === closedRound.id) {
+      roundsAfterClose[0].capitalSnapshot = capitalSnapshot;
+      await saveRounds(roundsAfterClose);
+    }
+    // Actualizar config con nuevo capital total
+    const cfgHistory = Array.isArray(cfg._capitalHistory) ? cfg._capitalHistory.slice(-19) : [];
+    await redisSet(INVEST_CONFIG_KEY, {
+      ...cfg,
+      capitalTotal:    newCapitalTotal,
+      _capitalHistory: [...cfgHistory, capitalSnapshot],
+    });
+
+    res.json({ success: true, report, forcedCloses: closeResults, positionsClosed: closeResults.length, capitalSnapshot });
   } catch(e) {
     console.error('[round/close] Error:', e.message);
+    res.status(500).json({ success: false, error: e.message });
+  }
+});
+
+// ── GET /api/invest/rounds/:roundId/report.docx ──────────────────────────────
+// Genera y descarga el informe Word completo de una ronda cerrada
+app.get('/api/invest/rounds/:roundId/report.docx', async (req, res) => {
+  if (!redis) return res.status(503).json({ success: false, error: 'Redis no disponible' });
+  try {
+    const { roundId } = req.params;
+    const rounds    = await getRounds();
+    const positions = await getPositions();
+
+    // Buscar la ronda por id o por roundNumber
+    const round = rounds.find(r => r.id === roundId || String(r.roundNumber) === roundId);
+    if (!round) return res.status(404).json({ success: false, error: `Ronda ${roundId} no encontrada` });
+    if (round.status !== 'closed') return res.status(400).json({ success: false, error: 'Solo se pueden generar informes de rondas cerradas' });
+
+    const doc     = await roundReportGen.generateRoundReport(round, positions, round.capitalSnapshot || null);
+    const buffer  = await Packer.toBuffer(doc);
+    const filename = `informe-ronda-${round.roundNumber}-${new Date(round.closedAt || Date.now()).toISOString().slice(0,10)}.docx`;
+
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document');
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+    res.setHeader('Content-Length', buffer.length);
+    res.send(buffer);
+  } catch(e) {
+    console.error('[round/report.docx] Error:', e.message);
     res.status(500).json({ success: false, error: e.message });
   }
 });
