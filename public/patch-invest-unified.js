@@ -109,7 +109,9 @@
   // ─── FIX BUG C: override de decideCycle para normalizar snapshot ────────────
   const _origDecideCycle = window.decideCycle;
   window.decideCycle = async function () {
-    const assets = window.cryptos;
+    // FIX: cryptos es variable global del script de index.html, no window.cryptos
+    const assets = (typeof cryptos !== "undefined" && cryptos?.length) ? cryptos
+                  : (window.cryptos?.length ? window.cryptos : null);
     if (!assets?.length) {
       const div = document.getElementById('inv-decision');
       if (div) div.innerHTML = '<p class="text-yellow-400 text-sm">⚠️ Primero carga activos en el Monitor.</p>';
