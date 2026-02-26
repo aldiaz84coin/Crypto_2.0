@@ -3572,18 +3572,24 @@ app.post('/api/invest/watchdog', async (req, res) => {
       const hitTP = !isStale && (tpPrice ? currentPrice >= tpPrice : pnlPct >= tpPct);
       const hitSL = slPrice ? currentPrice <= slPrice : pnlPct <= -slPct;
 
+      // Criterio adicional: predicción del ciclo alcanzada (dispara aunque sea < TP)
+      const predictedTarget = parseFloat(position.predictedChange || 0);
+      const hitPred = !isStale && predictedTarget > 0 && pnlPct > 0 && pnlPct >= predictedTarget;
+
       const checkEntry = {
         positionId: position.id, assetId: position.assetId, symbol: position.symbol,
         entryPrice: position.entryPrice, currentPrice,
         takeProfitPrice: tpPrice, stopLossPrice: slPrice,
-        pnlPct: parseFloat(pnlPct.toFixed(2)), hitTP, hitSL, isStale,
+        pnlPct: parseFloat(pnlPct.toFixed(2)), hitTP, hitSL, hitPred, isStale,
         priceSource: priceInfo?.source || meta.source,
-        action: (hitTP || hitSL) ? 'sell' : 'hold',
+        action: (hitTP || hitSL || hitPred) ? 'sell' : 'hold',
       };
 
-      if (hitTP || hitSL) {
+      if (hitTP || hitSL || hitPred) {
         const reason = hitSL
           ? `watchdog_stop_loss: ${pnlPct.toFixed(2)}% ≤ −${slPct.toFixed(2)}%`
+          : (hitPred && !hitTP)
+          ? `watchdog_predicted_target: +${pnlPct.toFixed(2)}% ≥ predicción +${predictedTarget.toFixed(2)}%`
           : `watchdog_take_profit: +${pnlPct.toFixed(2)}% ≥ +${tpPct.toFixed(2)}%`;
         try {
           const order    = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
@@ -3598,7 +3604,9 @@ app.post('/api/invest/watchdog', async (req, res) => {
           position.realizedPnLPct       = parseFloat(pnlPct.toFixed(2));
           position.exitFeeUSD           = parseFloat(exitFee.toFixed(4));
           position.totalFeesUSD         = parseFloat(((position.entryFeeUSD||0) + exitFee).toFixed(4));
-          position.closeReason          = hitSL ? 'watchdog_stop_loss' : 'watchdog_take_profit';
+          position.closeReason          = hitSL ? 'watchdog_stop_loss'
+                                        : (hitPred && !hitTP) ? 'watchdog_predicted_target'
+                                        : 'watchdog_take_profit';
           position.exchangeCloseOrderId = order.orderId;
 
           posChanged = true;
@@ -3609,7 +3617,7 @@ app.post('/api/invest/watchdog', async (req, res) => {
           const _pnlPctF   = parseFloat(pnlPct.toFixed(2));
           await appendInvestLog({
             type:      'watchdog_close',
-            subtype:   hitSL ? 'stop_loss' : 'take_profit',
+            subtype:   hitSL ? 'stop_loss' : (hitPred && !hitTP) ? 'predicted_target' : 'take_profit',
             cycleId:   position.cycleId || null,
             timestamp: new Date().toISOString(),
             origin:    'frontend_watchdog',
@@ -3650,7 +3658,7 @@ app.post('/api/invest/watchdog', async (req, res) => {
               distToTP: tpPrice ? parseFloat(((currentPrice - tpPrice) / tpPrice * 100).toFixed(2)) : null,
               distToSL: slPrice ? parseFloat(((currentPrice - slPrice) / slPrice * 100).toFixed(2)) : null,
             },
-            trigger: hitSL ? 'stop_loss' : 'take_profit',
+            trigger: hitSL ? 'stop_loss' : (hitPred && !hitTP) ? 'predicted_target' : 'take_profit',
             reason,
             order: order ? { orderId: order.orderId, status: order.status } : null,
           });
