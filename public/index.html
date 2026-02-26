@@ -5278,5 +5278,160 @@ async function applyInsightsConsensus() {
   </div>
 </div>
 
+<!-- ══ FIX INLINE: STATUS BAR — PRECIO ÚLTIMA ACTUALIZACIÓN ══════════════════
+     Problema: _renderPriceCompact() se llama sin argumentos desde el tick de
+     1s (patch-invest-unified.js) → status=undefined → muestra "—" y "nunca".
+     También: timeAgo() no se recalculaba en cada tick → tiempo congelado.
+
+     Solución:
+       1. Sobreescribe _renderPriceCompact con versión que usa _priceStatus
+          como fuente de verdad cuando se invoca sin argumento.
+       2. Normaliza lastUpdate/updatedAt (distintos patches usan distinto campo).
+       3. Engancha el tick de WD (cada 1s) para recalcular timeAgo() en precio.
+       4. Oculta los widgets flotantes originales de precio y WD, que ya no
+          se usan desde que existe la status bar del header.
+══════════════════════════════════════════════════════════════════════════════ -->
+<script>
+(function _fixStatusBarPrice() {
+  'use strict';
+
+  // ─── Helper timeAgo local ─────────────────────────────────────────────────
+  function _tAgo(iso) {
+    if (!iso) return 'nunca';
+    const s = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+    if (s < 60)   return s + 's';
+    if (s < 3600) return Math.floor(s / 60) + 'm';
+    const h = Math.floor(s / 3600);
+    return h + 'h ' + (Math.floor(s / 60) % 60) + 'm';
+  }
+
+  // ─── Versión corregida de _renderPriceCompact ─────────────────────────────
+  // Usa _priceStatus (global de patch-price-status.js) como fuente de verdad
+  // cuando se llama sin argumentos o con status vacío.
+  function _renderPriceCompactFixed(status) {
+    const slot = document.getElementById('status-bar-price');
+    if (!slot) return;
+
+    // Fallback al estado global si no se pasa nada útil
+    const ps = (status && (status.source || status.lastUpdate || status.updatedAt))
+      ? status
+      : (typeof _priceStatus !== 'undefined' ? _priceStatus : null);
+
+    if (!ps) {
+      slot.innerHTML = '<span style="color:#374151">💰 Precios —</span>';
+      return;
+    }
+
+    // Normalizar campos: patch-price-status usa lastUpdate,
+    // updatePriceStatusFromPositions pasa updatedAt
+    const src     = ps.source     || 'none';
+    const stale   = ps.staleCount || 0;
+    const failed  = (ps.failedIds || []).length;
+    const lastUpd = ps.lastUpdate || ps.updatedAt || null;
+
+    // Color del dot según frescura
+    let dot = '#065f46';  // verde
+    if (src === 'none')  dot = '#7f1d1d';  // rojo — sin datos
+    else if (failed > 0) dot = '#7f1d1d';  // rojo — hay fallos
+    else if (stale  > 0) dot = '#78350f';  // naranja — datos stale
+
+    // Etiqueta corta de fuente
+    const srcLabel = {
+      coingecko:                 'CG',
+      cryptocompare:             'CC',
+      'coingecko+cryptocompare': 'CG+CC',
+      binance:                   'BN',
+      stale:                     'CACHÉ',
+      none:                      '—',
+    }[src] || src.toUpperCase().slice(0, 6);
+
+    // Tiempo recalculado ahora (no en el momento del último fetch)
+    const timeText = _tAgo(lastUpd);
+
+    // Badges de advertencia
+    const warns = [
+      stale  > 0 ? `<span style="color:#fbbf24">⚠${stale}</span>`  : '',
+      failed > 0 ? `<span style="color:#f87171">❌${failed}</span>` : '',
+    ].join('');
+
+    slot.innerHTML = `
+      <span title="Estado de precios — click para refrescar"
+        onclick="if(typeof forceRefreshPrices==='function')forceRefreshPrices()"
+        style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;
+               padding:2px 6px;border-radius:6px;
+               border:1px solid ${dot}33;background:${dot}11;transition:background .2s"
+        onmouseover="this.style.background='${dot}22'"
+        onmouseout="this.style.background='${dot}11'">
+        <span style="width:7px;height:7px;border-radius:50%;background:${dot};flex-shrink:0"></span>
+        <span style="color:#9ca3af">💰 ${srcLabel}</span>
+        <span style="color:#d1fae5">${timeText}</span>
+        ${warns}
+      </span>`;
+  }
+
+  // ─── Ocultar widgets flotantes originales (ya no se usan) ─────────────────
+  function _hideFloating() {
+    const ids = ['price-status-widget', 'watchdog-widget'];
+    ids.forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.style.display = 'none';
+    });
+  }
+
+  // ─── Hook: engancharse al tick de WD para recalcular precio cada segundo ──
+  // _renderWdCompact() se ejecuta cada 1s. Lo envolvemos para que también
+  // llame a _renderPriceCompactFixed() → timeAgo() se recalcula en tiempo real.
+  function _hookWdTick() {
+    if (typeof window._renderWdCompact !== 'function') return false;
+    const _origWd = window._renderWdCompact;
+    window._renderWdCompact = function () {
+      try { _origWd.apply(this, arguments); } catch (_) {}
+      try { _renderPriceCompactFixed(); } catch (_) {}
+    };
+    return true;
+  }
+
+  // ─── Aplicar todo una vez el DOM y los patches están listos ───────────────
+  function _apply() {
+    // 1. Exponer la versión corregida globalmente
+    window._renderPriceCompact = _renderPriceCompactFixed;
+
+    // 2. Engancharse al tick de WD
+    if (!_hookWdTick()) {
+      // Si _renderWdCompact aún no existe, reintentar en 500ms
+      setTimeout(function () {
+        _hookWdTick();
+      }, 500);
+    }
+
+    // 3. Ocultar widgets flotantes
+    _hideFloating();
+    // También cuando se creen dinámicamente
+    const _origCreateEl = document.createElement.bind(document);
+    document.createElement = function (tag) {
+      const el = _origCreateEl(tag);
+      if (tag === 'div') {
+        const _origSetId = Object.getOwnPropertyDescriptor(Element.prototype, 'id').set;
+        // Observar si es uno de los widgets flotantes y ocultarlo
+        setTimeout(() => {
+          if (el.id === 'price-status-widget' || el.id === 'watchdog-widget') {
+            el.style.display = 'none';
+          }
+        }, 0);
+      }
+      return el;
+    };
+
+    // 4. Render inmediato con datos actuales
+    _renderPriceCompactFixed();
+
+    console.log('[fix-status-bar-price] ✅ _renderPriceCompact corregida — timeAgo en tiempo real');
+  }
+
+  // Esperar a que todos los patches (incluido patch-invest-unified.js) hayan corrido
+  setTimeout(_apply, 400);
+})();
+</script>
+
 </body>
 </html>
