@@ -2054,6 +2054,34 @@ app.get('/api/invest/positions', async (_req, res) => {
       }
     }
 
+    // BUG FIX: ordenar por closedAt DESC para que las más recientes lleguen primero.
+    // Anteriormente slice(0,20) devolvía las 20 MÁS ANTIGUAS (las posiciones nuevas
+    // se añaden al final del array y quedaban fuera del límite).
+    // También: incluir SIEMPRE las posiciones de la ronda activa aunque superen el límite.
+    const currentRoundForPositions = await getCurrentRound();
+    const roundActiveStart = currentRoundForPositions?.status === 'active' && currentRoundForPositions.openedAt
+      ? new Date(currentRoundForPositions.openedAt).getTime()
+      : null;
+
+    const closedSorted = [...closed].sort((a, b) => {
+      const ta = a.closedAt ? new Date(a.closedAt).getTime() : 0;
+      const tb = b.closedAt ? new Date(b.closedAt).getTime() : 0;
+      return tb - ta; // más reciente primero
+    });
+
+    // Siempre incluir las de la ronda activa + las 50 más recientes en total
+    const closedForResponse = roundActiveStart
+      ? closedSorted.filter(p => {
+          const openedAt = p.openedAt ? new Date(p.openedAt).getTime() : 0;
+          return openedAt >= roundActiveStart;
+        }).concat(
+          closedSorted.filter(p => {
+            const openedAt = p.openedAt ? new Date(p.openedAt).getTime() : 0;
+            return openedAt < roundActiveStart;
+          }).slice(0, 20) // máx 20 históricas de rondas previas
+        )
+      : closedSorted.slice(0, 50);
+
     res.json({
       success: true,
       summary: {
@@ -2075,7 +2103,7 @@ app.get('/api/invest/positions', async (_req, res) => {
         hasFailed:    (priceMeta.failedIds?.length || 0) > 0,
       },
       open,
-      closed: closed.slice(0, 20)
+      closed: closedForResponse
     });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
 });
@@ -2269,6 +2297,10 @@ app.post('/api/invest/execute', async (req, res) => {
     const orders = [];
     const newPositions = [];
 
+    // BUG FIX: leer la ronda activa para enlazar posiciones con la ronda
+    const currentRoundExec = await getCurrentRound();
+    const activeRoundId    = currentRoundExec?.status === 'active' ? currentRoundExec.id : null;
+
     for (const target of decision.selected) {
       // Ejecutar orden (simulada o real)
       const order = await exchangeConnector.placeOrder(target.symbol, 'BUY', target.capitalUSD, cfg, keys);
@@ -2276,6 +2308,8 @@ app.post('/api/invest/execute', async (req, res) => {
       position.exchangeOrderId = order.orderId || position.exchangeOrderId;
       position.orderDetails    = order;
       position.executedAt      = new Date().toISOString();
+      // BUG FIX: guardar roundId en la posición para poder reconstruir la ronda sin depender de timestamps
+      if (activeRoundId) position.roundId = activeRoundId;
       newPositions.push(position);
       orders.push({ symbol: target.symbol, order, position: position.id });
     }
@@ -2283,6 +2317,16 @@ app.post('/api/invest/execute', async (req, res) => {
     // Guardar nuevas posiciones
     const allPositions = [...positions, ...newPositions];
     await savePositions(allPositions);
+
+    // BUG FIX: actualizar positionIds de la ronda activa
+    if (activeRoundId && currentRoundExec && newPositions.length > 0) {
+      const updatedRound = { ...currentRoundExec };
+      updatedRound.positionIds = [
+        ...(updatedRound.positionIds || []),
+        ...newPositions.map(p => p.id),
+      ];
+      await saveCurrentRound(updatedRound);
+    }
 
     // === LOG DETALLADO: invest ===
     const _capitalAfter = investManager.calculateAvailableCapital([...positions, ...newPositions], cfg.capitalTotal);
@@ -2742,8 +2786,20 @@ app.post('/api/invest/buy-manual', async (req, res) => {
     position.source           = 'pump_detector';
     position.cycleDurationMs  = cycleDurationMs || 43200000;
 
+    // BUG FIX: enlazar con la ronda activa si existe
+    const currentRoundBuyManual = await getCurrentRound();
+    const activeRoundIdBM       = currentRoundBuyManual?.status === 'active' ? currentRoundBuyManual.id : null;
+    if (activeRoundIdBM) position.roundId = activeRoundIdBM;
+
     const allPositions = [...positions, position];
     await savePositions(allPositions);
+
+    // BUG FIX: actualizar positionIds de la ronda activa
+    if (activeRoundIdBM && currentRoundBuyManual) {
+      const updatedRoundBM = { ...currentRoundBuyManual };
+      updatedRoundBM.positionIds = [...(updatedRoundBM.positionIds || []), position.id];
+      await saveCurrentRound(updatedRoundBM);
+    }
 
     // Log de la operación
     await appendInvestLog({
@@ -3592,29 +3648,30 @@ app.post('/api/invest/watchdog', async (req, res) => {
           ? `watchdog_predicted_target: +${pnlPct.toFixed(2)}% ≥ predicción +${predictedTarget.toFixed(2)}%`
           : `watchdog_take_profit: +${pnlPct.toFixed(2)}% ≥ +${tpPct.toFixed(2)}%`;
         try {
-          const order    = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
-          const pnlUSD   = (currentPrice - position.entryPrice) * position.units;
-          const exitFee  = position.capitalUSD * (cfg.feePct || 0.10) / 100;
-          const netPnL   = pnlUSD - exitFee;
+          const order = await exchangeConnector.placeOrder(position.symbol, 'SELL', position.units, cfg, keys);
 
-          position.status               = 'closed';
-          position.closedAt             = new Date().toISOString();
-          position.currentPrice         = currentPrice;
-          position.realizedPnL          = parseFloat(pnlUSD.toFixed(4));
-          position.realizedPnLPct       = parseFloat(pnlPct.toFixed(2));
-          position.exitFeeUSD           = parseFloat(exitFee.toFixed(4));
-          position.totalFeesUSD         = parseFloat(((position.entryFeeUSD||0) + exitFee).toFixed(4));
+          // FIX: usar investManager.closePosition() → campos estándar (realizedPnL neto de fees,
+          // exitPrice, grossPnL, totalFeesUSD) — igual que round_close, manual_close, evaluate
+          const closedPos = investManager.closePosition(position, currentPrice, reason, cfg);
+          Object.assign(position, closedPos);
           position.closeReason          = hitSL ? 'watchdog_stop_loss'
                                         : (hitPred && !hitTP) ? 'watchdog_predicted_target'
                                         : 'watchdog_take_profit';
           position.exchangeCloseOrderId = order.orderId;
+
+          // FIX: actualizar calibración de predicciones (faltaba en watchdog)
+          await onPositionClosed(position);
+
+          const pnlUSD = (position.grossPnL != null) ? position.grossPnL
+                       : position.realizedPnL + (position.totalFeesUSD || 0);
+          const netPnL = position.realizedPnL;
 
           posChanged = true;
           actions.push({ ...checkEntry, sold: true, reason, pnlUSD: parseFloat(pnlUSD.toFixed(4)), netPnL: parseFloat(netPnL.toFixed(4)), order });
 
           const _wdHoldMs  = position.openedAt ? Date.now() - new Date(position.openedAt).getTime() : null;
           const _predicted = position.predictedChange || 0;
-          const _pnlPctF   = parseFloat(pnlPct.toFixed(2));
+          const _pnlPctF   = position.realizedPnLPct || parseFloat(pnlPct.toFixed(2));
           await appendInvestLog({
             type:      'watchdog_close',
             subtype:   hitSL ? 'stop_loss' : (hitPred && !hitTP) ? 'predicted_target' : 'take_profit',
@@ -3628,17 +3685,17 @@ app.post('/api/invest/watchdog', async (req, res) => {
             position: {
               id: position.id, symbol: position.symbol, name: position.name || position.symbol,
               assetId: position.assetId, capitalUSD: position.capitalUSD, units: position.units,
-              entryPrice: position.entryPrice, exitPrice: currentPrice,
+              entryPrice: position.entryPrice, exitPrice: position.exitPrice || currentPrice,
               takeProfitPrice: tpPrice, stopLossPrice: slPrice,
               pnlPct: _pnlPctF, pnlUSD: parseFloat(pnlUSD.toFixed(4)),
               netPnL: parseFloat(netPnL.toFixed(4)),
-              exitFeeUSD: parseFloat(exitFee.toFixed(4)),
-              totalFeesUSD: parseFloat(((position.entryFeeUSD || 0) + exitFee).toFixed(4)),
+              exitFeeUSD:  position.exitFeeUSD  || 0,
+              totalFeesUSD: position.totalFeesUSD || 0,
               priceSource: priceInfo?.source || meta.source,
             },
             holdInfo: {
               openedAt:        position.openedAt || null,
-              closedAt:        new Date().toISOString(),
+              closedAt:        position.closedAt,
               holdDurationMs:  _wdHoldMs,
               holdDurationHrs: _wdHoldMs ? parseFloat((_wdHoldMs / 3600000).toFixed(2)) : null,
               holdCycles:      position.holdCycles || 0,
@@ -4001,6 +4058,9 @@ app.post('/api/invest/rounds/close', async (req, res) => {
     };
 
     // Guardar ronda en historial
+    // FIX: incluir las posiciones completas en el objeto de ronda para que el
+    // informe Word y la vista de historial funcionen incluso después de purgar
+    // las posiciones del array principal
     const closedRound = {
       ...(currentRound || {}),
       status:   'closed',
@@ -4008,6 +4068,7 @@ app.post('/api/invest/rounds/close', async (req, res) => {
       durationMs,
       report,
       positionIds: roundPositions.map(p => p.id),
+      positions:   roundPositions,  // FIX: posiciones completas embebidas en la ronda
     };
 
     const rounds = await getRounds();
@@ -4016,6 +4077,14 @@ app.post('/api/invest/rounds/close', async (req, res) => {
 
     // Limpiar ronda activa
     await saveCurrentRound(null);
+
+    // FIX: purgar posiciones de la ronda cerrada del array principal para evitar
+    // que el array crezca indefinidamente y provoque que las nuevas rondas queden
+    // fuera del slice al llamar a GET /api/invest/positions
+    const roundPosIds = new Set(roundPositions.map(p => p.id));
+    const remainingPositions = positions.filter(p => !roundPosIds.has(p.id));
+    await savePositions(remainingPositions);
+    console.log(`[round/close] 🗂 Purgadas ${roundPositions.length} posiciones del array principal (quedan ${remainingPositions.length})`);
 
     await appendInvestLog({ type: 'round_close', subtype: 'user_action', roundId: report.roundId, roundNumber: report.roundNumber, timestamp: new Date().toISOString(), report: { netReturnPct: report.netReturnPct, totalOperations: report.totalOperations, forcedCloses: closeResults.length } });
 
@@ -4057,14 +4126,27 @@ app.get('/api/invest/rounds/:roundId/report.docx', async (req, res) => {
   try {
     const { roundId } = req.params;
     const rounds    = await getRounds();
-    const positions = await getPositions();
 
     // Buscar la ronda por id o por roundNumber
     const round = rounds.find(r => r.id === roundId || String(r.roundNumber) === roundId);
     if (!round) return res.status(404).json({ success: false, error: `Ronda ${roundId} no encontrada` });
     if (round.status !== 'closed') return res.status(400).json({ success: false, error: 'Solo se pueden generar informes de rondas cerradas' });
 
-    const doc     = await roundReportGen.generateRoundReport(round, positions, round.capitalSnapshot || null);
+    // FIX: usar posiciones embebidas en la ronda (disponibles desde que se añadió round.positions)
+    // Si no existen (rondas antiguas), caer al array principal filtrado por openedAt
+    const allPositions = await getPositions();
+    const roundPositionsForReport = (round.positions && round.positions.length > 0)
+      ? round.positions
+      : (() => {
+          const rStart = round.openedAt ? new Date(round.openedAt).getTime() : 0;
+          const rEnd   = round.closedAt ? new Date(round.closedAt).getTime() : Date.now();
+          return allPositions.filter(p => {
+            const t = p.openedAt ? new Date(p.openedAt).getTime() : 0;
+            return rStart > 0 && t >= rStart && t <= rEnd;
+          });
+        })();
+
+    const doc     = await roundReportGen.generateRoundReport(round, roundPositionsForReport, round.capitalSnapshot || null);
     const buffer  = await Packer.toBuffer(doc);
     const filename = `informe-ronda-${round.roundNumber}-${new Date(round.closedAt || Date.now()).toISOString().slice(0,10)}.docx`;
 
@@ -4391,27 +4473,39 @@ async function serverWatchdog(source = 'internal') {
       const hitTP   = !isStale && (tpPrice ? currentPrice >= tpPrice : pnlPct >= tpPct);
       const hitSL   = !isStale && (slPrice ? currentPrice <= slPrice : pnlPct <= -Math.abs(slPct));
 
-      if (hitTP || hitSL) {
-        const _svPnlUSD  = (currentPrice - position.entryPrice) * position.units;
-        const _svExitFee = position.capitalUSD * (cfg.feePct || 0.10) / 100;
-        const _svNetPnL  = _svPnlUSD - _svExitFee;
+      // Criterio adicional: predicción del ciclo alcanzada
+      const _svPredTarget = parseFloat(position.predictedChange || 0);
+      const hitPred = !isStale && _svPredTarget > 0 && pnlPct > 0 && pnlPct >= _svPredTarget;
+
+      if (hitTP || hitSL || hitPred) {
+        const _svReason = hitSL
+          ? `watchdog_stop_loss: ${pnlPct.toFixed(2)}% ≤ −${slPct.toFixed(2)}%`
+          : (hitPred && !hitTP)
+          ? `watchdog_predicted_target: +${pnlPct.toFixed(2)}% ≥ predicción +${_svPredTarget.toFixed(2)}%`
+          : `watchdog_take_profit: +${pnlPct.toFixed(2)}% ≥ +${tpPct.toFixed(2)}%`;
+
+        // FIX: usar investManager.closePosition() → campos estándar (realizedPnL, exitPrice, etc.)
+        const closedPos = investManager.closePosition(position, currentPrice, _svReason, cfg);
+        Object.assign(position, closedPos);
+        position.closeReason = hitSL ? 'stopLoss_server_wd'
+                             : (hitPred && !hitTP) ? 'predictedTarget_server_wd'
+                             : 'takeProfit_server_wd';
+
+        // FIX: actualizar calibración de predicciones (faltaba en server watchdog)
+        await onPositionClosed(position);
+
+        const _svPnlUSD  = position.grossPnL != null ? position.grossPnL
+                         : position.realizedPnL + (position.totalFeesUSD || 0);
+        const _svNetPnL  = position.realizedPnL;
+        const _svPnlF    = position.realizedPnLPct || parseFloat(pnlPct.toFixed(2));
         const _svHoldMs  = position.openedAt ? Date.now() - new Date(position.openedAt).getTime() : null;
         const _svPred    = position.predictedChange || 0;
-        const _svPnlF    = parseFloat(pnlPct.toFixed(2));
 
-        position.status      = 'closed';
-        position.closedAt    = new Date().toISOString();
-        position.closePrice  = currentPrice;
-        position.closeReason = hitTP ? 'takeProfit_server_wd' : 'stopLoss_server_wd';
-        position.pnlUSD      = parseFloat(_svPnlUSD.toFixed(4));
-        position.pnlPct      = _svPnlF;
-        position.exitFeeUSD  = parseFloat(_svExitFee.toFixed(4));
-        position.netPnL      = parseFloat(_svNetPnL.toFixed(4));
-        sells++; posChanged  = true;
+        sells++; posChanged = true;
 
         _svCloses.push({
           type:      'watchdog_close',
-          subtype:   hitSL ? 'stop_loss' : 'take_profit',
+          subtype:   hitSL ? 'stop_loss' : (hitPred && !hitTP) ? 'predicted_target' : 'take_profit',
           cycleId:   position.cycleId || null,
           timestamp: new Date().toISOString(),
           origin:    'server_watchdog',
@@ -4423,12 +4517,12 @@ async function serverWatchdog(source = 'internal') {
           position: {
             id: position.id, symbol: position.symbol, name: position.name || position.symbol,
             assetId: position.assetId, capitalUSD: position.capitalUSD, units: position.units,
-            entryPrice: position.entryPrice, exitPrice: currentPrice,
+            entryPrice: position.entryPrice, exitPrice: position.exitPrice || currentPrice,
             takeProfitPrice: tpPrice, stopLossPrice: slPrice,
             pnlPct: _svPnlF, pnlUSD: parseFloat(_svPnlUSD.toFixed(4)),
             netPnL: parseFloat(_svNetPnL.toFixed(4)),
-            exitFeeUSD: parseFloat(_svExitFee.toFixed(4)),
-            totalFeesUSD: parseFloat(((position.entryFeeUSD || 0) + _svExitFee).toFixed(4)),
+            exitFeeUSD:  position.exitFeeUSD  || 0,
+            totalFeesUSD: position.totalFeesUSD || 0,
             priceSource: priceInfo?.source || source,
           },
           holdInfo: {
@@ -4454,7 +4548,7 @@ async function serverWatchdog(source = 'internal') {
             distToSL: slPrice ? parseFloat(((currentPrice - slPrice) / slPrice * 100).toFixed(2)) : null,
           },
         });
-        console.log(`[server-wd] 🔔 ${hitTP ? 'TP' : 'SL'} — ${position.symbol} · ${_svPnlF >= 0 ? '+' : ''}${_svPnlF}% · pred:${_svPred >= 0 ? '+' : ''}${_svPred}% dev:${parseFloat((_svPnlF - _svPred).toFixed(2))}% · ${source}`);
+        console.log(`[server-wd] 🔔 ${hitTP ? 'TP' : hitPred ? 'PRED' : 'SL'} — ${position.symbol} · ${_svPnlF >= 0 ? '+' : ''}${_svPnlF}% · pred:${_svPred >= 0 ? '+' : ''}${_svPred}% dev:${parseFloat((_svPnlF - _svPred).toFixed(2))}% · ${source}`);
       } else {
         // Hold snapshot
         const _svHoldMs2 = position.openedAt ? Date.now() - new Date(position.openedAt).getTime() : null;
