@@ -2826,9 +2826,10 @@ app.post('/api/invest/log/analyze', async (req, res) => {
     const recent  = log.slice(0, Math.min(limit, log.length));
 
     const totalInvested = closed.reduce((s,p) => s + (p.capitalUSD||0), 0);
+    // realizedPnL ya es NETO de fees — netReturn = totalPnL directamente, sin restar fees de nuevo
     const totalPnL      = closed.reduce((s,p) => s + (p.realizedPnL||0), 0);
-    const totalFees     = closed.reduce((s,p) => s + (p.totalFeesUSD||0), 0);
-    const netReturn     = totalPnL - totalFees;
+    const totalFees     = closed.reduce((s,p) => s + (p.totalFeesUSD||0), 0); // solo informativo
+    const netReturn     = totalPnL;  // FIX: realizedPnL ya incluye el descuento de fees
     const wins          = closed.filter(p => (p.realizedPnL||0) > 0);
     const closeReasons  = {};
     closed.forEach(p => { const r = p.closeReason || 'unknown'; closeReasons[r] = (closeReasons[r]||0) + 1; });
@@ -3034,9 +3035,10 @@ app.get('/api/invest/performance', async (_req, res) => {
     const open      = positions.filter(p => p.status === 'open');
 
     const totalInvested  = closed.reduce((s,p) => s + (p.capitalUSD||0), 0);
+    // realizedPnL ya es NETO de fees — netReturn = totalPnL directamente, sin restar fees de nuevo
     const totalPnL       = closed.reduce((s,p) => s + (p.realizedPnL||0), 0);
-    const totalFees      = closed.reduce((s,p) => s + (p.totalFeesUSD||0), 0);
-    const netReturn      = totalPnL - totalFees;
+    const totalFees      = closed.reduce((s,p) => s + (p.totalFeesUSD||0), 0); // solo informativo
+    const netReturn      = totalPnL;  // FIX: realizedPnL ya incluye el descuento de fees
     const wins           = closed.filter(p => (p.realizedPnL||0) > 0);
     const losses         = closed.filter(p => (p.realizedPnL||0) <= 0);
     const available      = investManager.calculateAvailableCapital(positions, cfg.capitalTotal);
@@ -3905,12 +3907,16 @@ app.post('/api/invest/rounds/close', async (req, res) => {
 
     // ── Construir informe de ronda ─────────────────────────────────────────
     const totalInvested  = roundPositions.reduce((s, p) => s + (p.capitalUSD || 0), 0);
+    // grossPnL: variación de precio × unidades sin fees (campo añadido en closePosition)
+    // Si no existe (posiciones antiguas), se recalcula como realizedPnL + totalFeesUSD
+    const totalGrossPnL  = roundPositions.reduce((s, p) => s + (p.grossPnL ?? (p.realizedPnL || 0) + (p.totalFeesUSD || 0)), 0);
+    // realizedPnL ya es NETO de fees — netReturn = suma de realizedPnL directamente
     const totalPnL       = roundPositions.reduce((s, p) => s + (p.realizedPnL || 0), 0);
     const entryFees      = roundPositions.reduce((s, p) => s + (p.entryFeeUSD || 0), 0);
     const exitFees       = roundPositions.reduce((s, p) => s + (p.exitFeeUSD  || 0), 0);
     const apiCosts       = roundPositions.reduce((s, p) => s + (p.apiCostUSD  || 0), 0);
     const totalFees      = entryFees + exitFees + apiCosts;
-    const netReturn      = totalPnL - totalFees;
+    const netReturn      = totalPnL;  // FIX: realizedPnL ya incluye el descuento de fees — no restar de nuevo
     const wins           = roundPositions.filter(p => (p.realizedPnL || 0) > 0);
     const losses         = roundPositions.filter(p => (p.realizedPnL || 0) <= 0);
 
@@ -3953,9 +3959,9 @@ app.post('/api/invest/rounds/close', async (req, res) => {
       totalOperations:   roundPositions.length,
       forcedCloses:      closeResults.length,
       totalInvestedUSD:  parseFloat(totalInvested.toFixed(2)),
-      totalPnLUSD:       parseFloat(totalPnL.toFixed(4)),
+      totalPnLUSD:       parseFloat(totalGrossPnL.toFixed(4)),  // bruto antes de fees (para desglose)
       totalFeesUSD:      parseFloat(totalFees.toFixed(4)),
-      netReturnUSD:      parseFloat(netReturn.toFixed(4)),
+      netReturnUSD:      parseFloat(netReturn.toFixed(4)),       // neto real = suma de realizedPnL
       netReturnPct:      totalInvested > 0 ? parseFloat((netReturn / totalInvested * 100).toFixed(2)) : 0,
       winRate:           roundPositions.length > 0 ? parseFloat((wins.length / roundPositions.length * 100).toFixed(1)) : null,
       winsCount:         wins.length,

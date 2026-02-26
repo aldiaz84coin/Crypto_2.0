@@ -222,9 +222,10 @@ function closePosition(position, exitPrice, reason, investConfig) {
   p.exitPrice     = exitPrice;
   p.exitFeeUSD    = fee;
   p.totalFeesUSD  = parseFloat(((p.entryFeeUSD || 0) + fee).toFixed(4));
-  const gross     = (exitPrice - p.entryPrice) * p.units;
-  p.realizedPnL    = parseFloat((gross - p.totalFeesUSD).toFixed(4));
-  p.realizedPnLPct = parseFloat((((exitPrice - p.entryPrice) / p.entryPrice) * 100).toFixed(2));
+  const gross      = (exitPrice - p.entryPrice) * p.units;
+  p.grossPnL       = parseFloat(gross.toFixed(4));                             // bruto antes de fees (para informes de desglose)
+  p.realizedPnL    = parseFloat((gross - p.totalFeesUSD).toFixed(4));          // neto real (fees ya incluidas)
+  p.realizedPnLPct = parseFloat((p.realizedPnL / p.capitalUSD * 100).toFixed(2)); // retorno neto sobre capital invertido
   return p;
 }
 
