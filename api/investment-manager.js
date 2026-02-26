@@ -33,6 +33,16 @@ function getClassificationStr(asset) {
   return 'RUIDOSO';
 }
 
+// ─── Helper: precio multi-campo ──────────────────────────────────────────────
+// El snapshot puede usar distintos nombres según la fuente (monitor, pump detector, etc.)
+// Esta función prueba todos los posibles y devuelve el primero válido.
+function getPriceFromAsset(a) {
+  const v = a.current_price ?? a.price ?? a.snapshotPrice ?? a.entryPrice
+          ?? a.lastPrice    ?? a.usd   ?? a.usd_price     ?? null;
+  const n = parseFloat(v);
+  return (n > 0) ? n : null;
+}
+
 // ─── Lógica de selección de activos ──────────────────────────────────────────
 // Prioriza activos por MAYOR PREDICCIÓN DE CRECIMIENTO (predictedChange DESC).
 // Desempate: boostPower DESC.
@@ -120,13 +130,13 @@ function selectInvestmentTargets(snapshot, investConfig, existingPositions = [])
     boostPower:      a.boostPower,
     boostPowerPct:   a.boostPowerPercent ?? Math.round((a.boostPower || 0) * 100),
     classification:  getClassificationStr(a),   // siempre string normalizado
-    entryPrice:      a.current_price,
+    entryPrice:      getPriceFromAsset(a) || a.current_price || 0,
     predictedChange: a.predictedChange,
     capitalUSD:      parseFloat(perPosition.toFixed(2)),
     weight:          parseFloat((perPosition / cycleCapital * 100).toFixed(1)),
     rank:            i + 1,
-    takeProfitPrice: parseFloat((a.current_price * (1 + cfg.takeProfitPct / 100)).toFixed(6)),
-    stopLossPrice:   parseFloat((a.current_price * (1 - cfg.stopLossPct   / 100)).toFixed(6)),
+    takeProfitPrice: parseFloat(((getPriceFromAsset(a) || a.current_price || 0) * (1 + cfg.takeProfitPct / 100)).toFixed(6)),
+    stopLossPrice:   parseFloat(((getPriceFromAsset(a) || a.current_price || 0) * (1 - cfg.stopLossPct   / 100)).toFixed(6)),
     expectedFeeUSD:  parseFloat((perPosition * cfg.feePct / 100).toFixed(4)),
   }));
 
@@ -134,8 +144,8 @@ function selectInvestmentTargets(snapshot, investConfig, existingPositions = [])
   const topPred      = selected[0]?.predictedChange?.toFixed(1) ?? '?';
 
   return {
-    selected,
-    reason:        `${selected.length} activos por mayor potencial (+${topPred}% previsto)${minPredLabel}`,
+    selected:      targets,   // FIX: devolver targets (con entryPrice/capitalUSD calculados), no activos crudos
+    reason:        `${targets.length} activos por mayor potencial (+${topPred}% previsto)${minPredLabel}`,
     shouldInvest:  true,
     cycleCapital:  parseFloat(cycleCapital.toFixed(2)),
     allCandidates: candidates,
@@ -168,7 +178,9 @@ function createPosition(target, cycleId, investConfig) {
     entryPrice:      target.entryPrice,
     currentPrice:    target.entryPrice,
     capitalUSD:      target.capitalUSD,
-    units:           parseFloat((target.capitalUSD / target.entryPrice).toFixed(8)),
+    units:           target.entryPrice > 0
+                       ? parseFloat((target.capitalUSD / target.entryPrice).toFixed(8))
+                       : 0,
     takeProfitPrice: target.takeProfitPrice,
     stopLossPrice:   target.stopLossPrice,
     predictedChange: target.predictedChange,
