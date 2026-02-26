@@ -69,10 +69,20 @@
       ? `${parseFloat(p.predictedChange) >= 0 ? '+' : ''}${parseFloat(p.predictedChange).toFixed(1)}%`
       : '—';
 
-    const realPctVal = p.actualChangePct != null ? parseFloat(p.actualChangePct) : null;
+    const realPctVal = isBuy
+      ? (() => {
+          // Para abiertas: usar unrealizedPnLPct, o calcular de PnL/capital
+          if (p.unrealizedPnLPct != null) return parseFloat(p.unrealizedPnLPct);
+          const cap = parseFloat(p.capitalUSD || p.amountUSD || 0);
+          const unr = parseFloat(p.unrealizedPnL || 0);
+          return cap > 0 ? parseFloat((unr / cap * 100).toFixed(2)) : null;
+        })()
+      : (p.actualChangePct  != null ? parseFloat(p.actualChangePct)
+         : p.realizedPnLPct != null ? parseFloat(p.realizedPnLPct) : null);
+
     const realPct  = realPctVal !== null
       ? `<span class="${_pnlClass(realPctVal)}">${realPctVal >= 0 ? '+' : ''}${realPctVal.toFixed(1)}%</span>`
-      : (isBuy ? '<span class="text-blue-400 opacity-60">viva</span>' : '—');
+      : '—';
 
     const ts = isBuy ? p.openedAt : (p.closedAt || p.openedAt);
 
@@ -161,7 +171,7 @@
         const realPnL   = closedPos.reduce((s, p) => s + (parseFloat(p.realizedPnL)   || 0), 0);
         const unrealPnL = openPos .reduce((s, p) => s + (parseFloat(p.unrealizedPnL)  || 0), 0);
         const invested  = roundPos.reduce((s, p) => {
-          const v = parseFloat(p.amountUSD || p.investedUSD || p.entryAmountUSD || 0);
+          const v = parseFloat(p.capitalUSD || p.amountUSD || p.investedUSD || p.entryAmountUSD || 0);
           return s + v;
         }, 0);
         const netPnL    = realPnL + unrealPnL;
@@ -169,6 +179,40 @@
         const losses    = closedPos.length - wins;
         const winRate   = closedPos.length > 0
           ? Math.round(wins / closedPos.length * 100) : null;
+
+        // ── % actual desde compra (media ponderada capital de posiciones abiertas) ──
+        let avgChangePct = null;
+        if (openPos.length > 0) {
+          const totalCap = openPos.reduce((s, p) => s + (parseFloat(p.capitalUSD || p.amountUSD || 0) || 0), 0);
+          const totalUnr = openPos.reduce((s, p) => s + (parseFloat(p.unrealizedPnL) || 0), 0);
+          if (totalCap > 0) {
+            avgChangePct = parseFloat((totalUnr / totalCap * 100).toFixed(2));
+          } else {
+            // Fallback: media simple de unrealizedPnLPct si está disponible
+            const withPct = openPos.filter(p => p.unrealizedPnLPct != null);
+            if (withPct.length > 0) {
+              avgChangePct = parseFloat(
+                (withPct.reduce((s, p) => s + parseFloat(p.unrealizedPnLPct), 0) / withPct.length).toFixed(2)
+              );
+            }
+          }
+        }
+
+        // ── Target efectivo de venta ──────────────────────────────────────────
+        // Criterio: venta cuando pnlPct >= TP  O  pnlPct >= predictedChange
+        // El target efectivo es el mínimo (el que disparará primero)
+        const cfgTP   = parseFloat(current.config?.takeProfitPct || 0);
+        const minPred = openPos.length > 0
+          ? openPos.reduce((min, p) => {
+              const pred = parseFloat(p.predictedChange || 0);
+              return (pred > 0 && pred < min) ? pred : min;
+            }, cfgTP > 0 ? cfgTP : Infinity)
+          : cfgTP;
+        const effectiveTarget = isFinite(minPred) && minPred > 0 ? minPred : cfgTP;
+        // Nota informativa en sub-label
+        const targetNote = (cfgTP > 0 && effectiveTarget < cfgTP)
+          ? `TP ${cfgTP}% · pred ${effectiveTarget.toFixed(1)}%`
+          : cfgTP > 0 ? `TP config: ${cfgTP}%` : '—';
 
         const isExpanded = window._execViewExpanded;
 
@@ -209,7 +253,7 @@
             </div>
 
             <!-- KPIs -->
-            <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 p-4">
+            <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 p-4">
               ${_kpi('💰 Invertido',    _fmtUsdAbs(invested), 'text-blue-300')}
               ${_kpi('📈 Resultado neto',
                 _fmtUsd(netPnL),
@@ -228,6 +272,22 @@
                   : winRate >= 40 ? 'text-yellow-400' : 'text-red-400',
                 winRate !== null ? `${wins}✓ &nbsp; ${losses}✗` : 'Sin cerradas'
               )}
+              ${openPos.length > 0 && avgChangePct !== null
+                ? _kpi(
+                    `📊 Actual${openPos.length > 1 ? ' (media)' : ''}`,
+                    `${avgChangePct >= 0 ? '+' : ''}${avgChangePct}%`,
+                    avgChangePct > 0  ? 'text-green-400'
+                    : avgChangePct < 0 ? 'text-red-400' : 'text-gray-400',
+                    `${openPos.length} pos. abierta${openPos.length !== 1 ? 's' : ''}`
+                  )
+                : _kpi('📊 Actual', '—', 'text-gray-600', 'Sin pos. abiertas')
+              }
+              ${_kpi(
+                '🎯 Target venta',
+                effectiveTarget > 0 ? `+${effectiveTarget.toFixed(1)}%` : '—',
+                effectiveTarget > 0 ? 'text-yellow-400' : 'text-gray-500',
+                targetNote
+              )}
             </div>
 
             <!-- Tabla compacta de operaciones -->
@@ -241,7 +301,7 @@
                       <th class="py-2 px-3 text-left font-medium">Activo</th>
                       <th class="py-2 px-3 text-left font-medium">Razón</th>
                       <th class="py-2 px-3 text-right font-medium">Pred.</th>
-                      <th class="py-2 px-3 text-right font-medium">Result.</th>
+                      <th class="py-2 px-3 text-right font-medium">% Actual</th>
                       <th class="py-2 px-3 text-right font-medium">P&L</th>
                       <th class="py-2 px-3 text-right font-medium">Hace</th>
                     </tr>
@@ -414,6 +474,6 @@
       </div>`;
   }
 
-  console.log('[patch-rounds-executive] ✅ Vista ejecutiva de ciclo activo cargada');
+  console.log('[patch-rounds-executive] ✅ v2.1 — KPIs: %Actual + Target venta cargados');
 
 })();
