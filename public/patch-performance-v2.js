@@ -48,9 +48,10 @@ function _p2_calcStats(positions) {
   const closed = positions.filter(p => p.status === 'closed');
   const open   = positions.filter(p => p.status === 'open');
   const invested   = closed.reduce((s, p) => s + (p.capitalUSD || 0), 0);
+  // realizedPnL ya es NETO de fees — netReturn = totalPnL directamente, sin restar fees de nuevo
   const pnl        = closed.reduce((s, p) => s + (p.realizedPnL || 0), 0);
-  const fees       = closed.reduce((s, p) => s + ((p.entryFeeUSD||0) + (p.exitFeeUSD||0) + (p.apiCostUSD||0)), 0);
-  const netReturn  = pnl - fees;
+  const fees       = closed.reduce((s, p) => s + (p.totalFeesUSD || 0), 0);  // solo informativo para mostrar desglose
+  const netReturn  = pnl;  // FIX: pnl ya es el retorno neto real
   const unrealized = open.reduce((s, p)   => s + (p.unrealizedPnL || 0), 0);
   const wins       = closed.filter(p => (p.realizedPnL || 0) > 0);
   return { closed, open, invested, pnl, fees, netReturn, unrealized, wins,
