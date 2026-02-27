@@ -926,6 +926,7 @@
 // ═══════════════════════════════════════════════════════════
 let cryptos = [], config = null, metadata = null;
 let currentMode = 'normal';
+window.currentMode = 'normal';  // expuesto para patches externos (patch-invest-unified, etc.)
 let selectedDuration = 12 * 3600000;
 let cycleTimers = {};
 let currentApiKeyName = null;
@@ -991,6 +992,7 @@ function setTab(tab) {
 function setMode(mode) {
   const modeChanged = currentMode !== mode; // detectar cambio real de modo
   currentMode = mode;
+  window.currentMode = mode;  // mantener sincronizado para patches externos
   // Actualizar badge de análisis
   const ab = document.getElementById('analysis-mode-badge');
   if (ab) { ab.textContent = mode==='speculative' ? '🎯 Modelo: Especulativo' : '📊 Modelo: Generalista';
@@ -1732,6 +1734,7 @@ setInterval(async ()=>{
 
 function switchAnalysisMode(mode) {
   currentMode = mode;
+  window.currentMode = mode;  // mantener sincronizado para patches externos
   const label = document.getElementById('analysis-mode-label');
   const info  = document.getElementById('analysis-mode-info');
   if (mode === 'speculative') {
