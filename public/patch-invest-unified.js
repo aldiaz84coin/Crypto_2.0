@@ -117,6 +117,28 @@
       if (div) div.innerHTML = '<p class="text-yellow-400 text-sm">⚠️ Primero carga activos en el Monitor.</p>';
       return;
     }
+
+    // Validar coherencia: si el snapshot se cargó con un modo distinto al activo, bloquear
+    const loadedMode = window._snapshotLoadedMode || 'normal';
+    const activeMode = window.currentMode || 'normal';
+    if (loadedMode !== activeMode) {
+      const div = document.getElementById('inv-decision');
+      if (div) div.innerHTML = `
+        <div class="bg-yellow-950 border border-yellow-700 rounded-xl p-4">
+          <p class="text-yellow-400 font-semibold mb-1">⚠️ Inconsistencia de modo detectada</p>
+          <p class="text-sm text-gray-300 mb-3">
+            Los activos del Monitor se cargaron en modo
+            <b>${loadedMode === 'speculative' ? '🎯 Especulativo' : '📊 Normal'}</b>
+            pero el selector está ahora en modo
+            <b>${activeMode === 'speculative' ? '🎯 Especulativo' : '📊 Normal'}</b>.
+          </p>
+          <p class="text-xs text-gray-500 mb-3">Recarga el Monitor con el modo correcto antes de analizar para que algoritmo y snapshot sean coherentes.</p>
+          <button onclick="setTab('monitor')" class="bg-blue-700 hover:bg-blue-600 px-3 py-1.5 rounded-lg text-xs font-semibold">
+            🔄 Ir al Monitor a recargar
+          </button>
+        </div>`;
+      return;
+    }
     const div = document.getElementById('inv-decision');
     if (div) div.innerHTML = '<p class="text-gray-400 text-sm">⏳ Analizando...</p>';
     try {

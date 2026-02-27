@@ -431,6 +431,7 @@
     <div class="flex flex-wrap justify-between items-center mb-4 gap-3">
       <div class="flex items-center gap-3">
         <h2 class="text-xl font-semibold">💼 Módulo de Inversión</h2>
+        <span id="inv-algo-mode-badge" class="pill bg-blue-900 text-blue-300">📊 Algo: Normal</span>
         <span id="inv-mode-badge" class="pill bg-blue-900 text-blue-300">⚗️ Simulado</span>
         <span id="inv-exchange-badge" class="pill bg-gray-800 text-gray-300">Binance</span>
       </div>
@@ -1002,6 +1003,12 @@ function setMode(mode) {
     const list = document.getElementById('crypto-list');
     if (list) list.innerHTML = `<p class="text-blue-400 text-sm py-3">🔄 Modo cambiado a <b>${mode === 'speculative' ? 'Especulativo (small-caps)' : 'Normal (large-caps)'}</b> — pulsa <b>Cargar</b> para ver los activos de este modelo.</p>`;
   }
+  // Propagar modo al badge del módulo de inversión (siempre, independientemente del cambio)
+  const algoBadge = document.getElementById('inv-algo-mode-badge');
+  if (algoBadge) {
+    algoBadge.textContent = mode === 'speculative' ? '🎯 Algo: Especulativo' : '📊 Algo: Normal';
+    algoBadge.className = 'pill ' + (mode === 'speculative' ? 'bg-yellow-900 text-yellow-300' : 'bg-blue-900 text-blue-300');
+  }
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1015,7 +1022,7 @@ async function loadCryptos() {
     const d = await r.json();
     if (!d.success) throw new Error(d.error);
     cryptos = d.data;
-    document.getElementById('btn-cycle').disabled = false;
+    window._snapshotLoadedMode = currentMode;  // registrar modo de carga para validación de coherencia en inversión
 
     // FGI
     if (d.marketContext?.fearGreed) {
@@ -1470,7 +1477,7 @@ async function confirmCycle() {
           await fetch('/api/invest/execute', {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({ snapshot, cycleId: cycId })
+            body: JSON.stringify({ snapshot, cycleId: cycId, mode: currentMode })
           });
         }
       } catch(_) {}
