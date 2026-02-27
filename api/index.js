@@ -2170,7 +2170,7 @@ app.post('/api/invest/decide', async (req, res) => {
       targets:          decision.selected,
       allCandidates:    decision.allCandidates || [],
       cycleCapital:     decision.cycleCapital,
-      mode:             cfg.mode,
+      mode:             snapshotMode || (cfg.mode === 'speculative' ? 'speculative' : 'normal'),  // modo efectivo del algoritmo usado
       snapshotMode:     snapshotMode,   // devolver modo para diagnóstico en UI
       exchange:         cfg.exchange,
       takeProfitPct:    cfg.takeProfitPct,
@@ -2204,6 +2204,7 @@ app.post('/api/invest/execute', async (req, res) => {
     const cfg       = await getInvestConfig();
     const positions = await getPositions();
     const { snapshot, cycleId } = req.body;
+    const snapshotMode = req.body.mode || null;  // modo del monitor al ejecutar el ciclo
 
     if (!snapshot?.length) return res.status(400).json({ success: false, error: 'Snapshot requerido' });
 
@@ -2222,7 +2223,9 @@ app.post('/api/invest/execute', async (req, res) => {
 
     // ── Sincronizar umbral con el Algoritmo A (mismo fix que /api/invest/decide) ─
     try {
-      const algoMode   = cfg.mode === 'speculative' ? 'speculative' : 'normal';
+      // FIX: usar snapshotMode con prioridad (cfg.mode es siempre 'simulated'/'real', nunca 'speculative')
+      const algoMode = snapshotMode === 'speculative' ? 'speculative'
+                     : (cfg.mode === 'speculative' ? 'speculative' : 'normal');
       const algoConfig = await getConfig(algoMode);
       const algoMinBP  = algoConfig?.classification?.invertibleMinBoost ?? null;
       if (algoMinBP != null && algoMinBP > 0) {
