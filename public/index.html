@@ -2207,17 +2207,69 @@ async function fixMinPredictedChange() {
   } catch(e) { alert('❌ ' + e.message); }
 }
 
+// ── Helper: normalizar un snapshot antes de enviarlo al backend ──────────────
+// Garantiza que classification sea siempre string y predictedChange siempre número.
+// Así el backend (investment-manager) siempre opera con tipos consistentes.
+function _normalizeSnapshotForBackend(assets) {
+  if (!Array.isArray(assets)) return [];
+  return assets.map(a => {
+    // classification: objeto → string
+    const c   = a.classification;
+    const cls = !c               ? 'RUIDOSO'
+              : typeof c === 'string' ? c.toUpperCase()
+              : typeof c === 'object' ? (c.category || c.label || 'RUIDOSO').toUpperCase()
+              : 'RUIDOSO';
+    // predictedChange: string/null/undefined → número
+    const pred = typeof a.predictedChange === 'number' && !isNaN(a.predictedChange)
+      ? a.predictedChange
+      : parseFloat(a.predictedChange ?? a.predicted_change ?? a.basePrediction ?? '0') || 0;
+    // precio: normalizar al campo estándar que usa el backend
+    const price = a.current_price ?? a.price ?? a.snapshotPrice ?? a.lastPrice ?? a.usd_price ?? 0;
+    return {
+      ...a,
+      classification:   cls,
+      predictedChange:  pred,
+      current_price:    parseFloat(price) || 0,
+    };
+  });
+}
+
 async function decideCycle() {
   if (!cryptos?.length) {
     document.getElementById('inv-decision').innerHTML = '<p class="text-yellow-400 text-sm">⚠️ Primero carga activos en el Monitor.</p>';
     return;
   }
+
+  // Validar coherencia: el snapshot debe haberse cargado con el modo activo actual.
+  // Si no coinciden, los activos y los umbrales del Algoritmo A serían de modelos distintos.
+  const loadedMode = window._snapshotLoadedMode || 'normal';
+  if (loadedMode !== currentMode) {
+    document.getElementById('inv-decision').innerHTML = `
+      <div class="bg-yellow-950 border border-yellow-700 rounded-xl p-4">
+        <p class="text-yellow-400 font-semibold mb-1">⚠️ Inconsistencia de modo detectada</p>
+        <p class="text-sm text-gray-300 mb-3">
+          Los activos del Monitor se cargaron en modo
+          <b>${loadedMode === 'speculative' ? '🎯 Especulativo' : '📊 Normal'}</b>
+          pero el selector está ahora en modo
+          <b>${currentMode === 'speculative' ? '🎯 Especulativo' : '📊 Normal'}</b>.
+        </p>
+        <p class="text-xs text-gray-500 mb-3">Recarga el Monitor con el modo correcto para que algoritmo y snapshot sean coherentes.</p>
+        <button onclick="setTab('monitor')" class="bg-blue-700 hover:bg-blue-600 px-3 py-1.5 rounded-lg text-xs font-semibold">
+          🔄 Ir al Monitor a recargar
+        </button>
+      </div>`;
+    return;
+  }
+
   document.getElementById('inv-decision').innerHTML = '<p class="text-gray-400 text-sm">⏳ Analizando...</p>';
   try {
+    // Normalizar snapshot: classification → string, predictedChange → número, precio unificado.
+    // Crítico para que el sort por predicción en el backend sea siempre correcto.
+    const normalizedSnapshot = _normalizeSnapshotForBackend(cryptos);
+
     const r = await fetch('/api/invest/decide', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      // FIX: pasar currentMode para que el backend sincronice el umbral BP correcto
-      body: JSON.stringify({ snapshot: cryptos, mode: currentMode })
+      body: JSON.stringify({ snapshot: normalizedSnapshot, mode: currentMode })
     });
     const d = await r.json();
     renderDecision(d);
@@ -2268,8 +2320,11 @@ function renderDecision(d) {
     const predBlocking = (debug.invertiblesFailingPredFilter || 0) > 0 &&
       (debug.invertiblesPassingAll || 0) < (debug.minSignalsRequired || 2);
 
+    // snapshotHasPredictedChange ahora viene del backend (investment-manager lo calcula)
+    const hasPred = d.snapshotHasPredictedChange ?? debug.snapshotHasPredictedChange ?? null;
+
     const topRows = debug.topInvertibles?.length ? `
-      <p class="mt-2 text-gray-600 border-t border-gray-800 pt-2">Top INVERTIBLEs del snapshot:</p>
+      <p class="mt-2 text-gray-600 border-t border-gray-800 pt-2">Top INVERTIBLEs del snapshot (por predicción):</p>
       ${debug.topInvertibles.map(a =>
         `<p class="ml-2 ${a.failsPred ? 'text-red-500' : 'text-gray-300'}">
           ${a.failsPred ? '✗' : '✓'} ${a.symbol}: BP=${(a.boostPower*100).toFixed(0)}%
@@ -2298,7 +2353,10 @@ function renderDecision(d) {
           <p>BP aplicado: <span class="text-blue-400">${minBP}%</span>
              ${debug.minBoostFromAlgoA != null ? `<span class="text-gray-600">← Algo A ${d.snapshotMode==='speculative'?'espec.':'normal'}</span>` : ''}
           </p>
-          ${debug.snapshotHasPredictedChange === 0 ? '<p class="text-orange-400">⚠️ Activos sin predictedChange — carga el Monitor primero</p>' : ''}
+          ${hasPred === 0 ? '<p class="text-orange-400">⚠️ Activos sin predictedChange — carga el Monitor primero</p>'
+          : hasPred != null && hasPred < (debug.invertiblesInSnapshot || 0)
+            ? `<p class="text-yellow-400">⚠️ Solo ${hasPred} activos con predicción >0% — posible carga incompleta</p>`
+            : ''}
           ${topRows}${quickFix}
         </div>
       </details>`;
@@ -2410,9 +2468,12 @@ async function executeInvestment() {
   const btn = event.currentTarget;
   btn.disabled = true; btn.textContent = '⏳ Ejecutando...';
   try {
+    // Normalizar snapshot y pasar mode igual que en decideCycle()
+    // para que execute use el mismo umbral BP del Algoritmo A correcto.
+    const normalizedSnapshot = _normalizeSnapshotForBackend(cryptos);
     const r = await fetch('/api/invest/execute', {
       method: 'POST', headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({ snapshot: cryptos, cycleId: null })
+      body: JSON.stringify({ snapshot: normalizedSnapshot, cycleId: null, mode: currentMode })
     });
     const d = await r.json();
     if (d.success && d.invested) {
