@@ -55,40 +55,58 @@ function getPriceFromAsset(a) {
 //
 //   Si el investConfig incluye _syncedMinBoostPower (inyectado por el endpoint),
 //   se usa ese umbral sincronizado en lugar del default.
+// ─── Helper: parsear predictedChange de forma robusta ─────────────────────────
+// Acepta número, string numérico, null, undefined → siempre devuelve número.
+function parsePred(val) {
+  if (typeof val === 'number' && !isNaN(val)) return val;
+  const n = parseFloat(val);
+  return isNaN(n) ? 0 : n;
+}
+
 function selectInvestmentTargets(snapshot, investConfig, existingPositions = []) {
   const cfg = { ...DEFAULT_INVEST_CONFIG, ...investConfig };
 
-  const candidates = snapshot
+  // Pre-normalizar snapshot: classification → string, predictedChange → número.
+  // Esto garantiza que el sort sea siempre numérico y correcto,
+  // independientemente de cómo lleguen los datos del frontend.
+  const normalized = snapshot.map(a => ({
+    ...a,
+    classification:  getClassificationStr(a),          // siempre string
+    predictedChange: parsePred(a.predictedChange        // siempre número
+      ?? a.predicted_change
+      ?? a.basePrediction),
+    boostPower:      parseFloat(a.boostPower ?? a.boost_power ?? 0) || 0,
+  }));
+
+  const candidates = normalized
     .filter(a => {
-      const cat  = getClassificationStr(a);
-      const bp   = a.boostPower || 0;
-      const pred = typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0);
-
       // El activo debe estar clasificado como INVERTIBLE por el Algoritmo A.
-      if (cat !== 'INVERTIBLE') return false;
+      if (a.classification !== 'INVERTIBLE') return false;
 
-      // Solo aplicar filtro de BP si el activo NO tiene clasificación previa
-      // (snapshot sin clasificar) o si el endpoint sincronizó el umbral.
-      // Si viene con classification='INVERTIBLE', el Algoritmo A ya lo validó.
-      const alreadyValidatedByAlgoA = typeof a.classification === 'string'
-        ? a.classification.toUpperCase() === 'INVERTIBLE'
-        : (a.classification?.category || '').toUpperCase() === 'INVERTIBLE';
+      // Solo aplicar filtro de BP si el activo NO tenía clasificación previa
+      // (snapshot sin clasificar). El Algoritmo A ya validó los INVERTIBLE
+      // con su propio invertibleMinBoost — no re-filtrar por BP aquí.
+      const originalCls = snapshot.find(s => (s.id || s.symbol) === (a.id || a.symbol))?.classification;
+      const alreadyValidatedByAlgoA =
+        typeof originalCls === 'string'
+          ? originalCls.toUpperCase() === 'INVERTIBLE'
+          : (originalCls?.category || '').toUpperCase() === 'INVERTIBLE';
 
       if (!alreadyValidatedByAlgoA) {
-        // Snapshot sin clasificar — aplicar umbral propio del invest config
-        if (bp < cfg.minBoostPower) return false;
+        if (a.boostPower < cfg.minBoostPower) return false;
       }
-      // Si ya fue validado por Algo A, no re-filtrar por BP (evita la rotura)
 
       // Filtro de predicción mínima de trading (siempre aplica)
-      if (pred < (cfg.minPredictedChange || 0)) return false;
+      if (a.predictedChange < (cfg.minPredictedChange || 0)) return false;
 
       return true;
     })
     .sort((a, b) => {
-      const diff = (b.predictedChange || 0) - (a.predictedChange || 0);
-      if (Math.abs(diff) > 0.01) return diff;
-      return (b.boostPower || 0) - (a.boostPower || 0);
+      // Ordenar por predictedChange DESC (ya son números garantizados).
+      // Desempate: boostPower DESC.
+      const diff = b.predictedChange - a.predictedChange;
+      if (Math.abs(diff) > 0.001) return diff;
+      return b.boostPower - a.boostPower;
     });
 
   if (candidates.length < cfg.minSignals) {
@@ -101,11 +119,15 @@ function selectInvestmentTargets(snapshot, investConfig, existingPositions = [])
                        : `, BP ≥ ${(cfg.minBoostPower * 100).toFixed(0)}%`) +
                      `) — mínimo requerido: ${cfg.minSignals}.`,
       shouldInvest:  false,
+      // allCandidates ya normalizados (classification string, predictedChange número)
       allCandidates: candidates,
+      // Conteo de activos con predictedChange > 0 para diagnóstico en UI
+      snapshotHasPredictedChange: normalized.filter(a => a.predictedChange > 0).length,
     };
   }
 
   const openIds  = new Set((existingPositions || []).filter(p => p.status === 'open').map(p => p.assetId));
+  // filtered mantiene el orden ya ordenado por predictedChange DESC
   const filtered = candidates.filter(a => !openIds.has(a.id));
   const selected = filtered.slice(0, cfg.maxPositions);
 
@@ -128,15 +150,15 @@ function selectInvestmentTargets(snapshot, investConfig, existingPositions = [])
     symbol:          a.symbol,
     name:            a.name,
     boostPower:      a.boostPower,
-    boostPowerPct:   a.boostPowerPercent ?? Math.round((a.boostPower || 0) * 100),
-    classification:  getClassificationStr(a),   // siempre string normalizado
-    entryPrice:      getPriceFromAsset(a) || a.current_price || 0,
-    predictedChange: a.predictedChange,
+    boostPowerPct:   a.boostPowerPercent ?? Math.round(a.boostPower * 100),
+    classification:  a.classification,                // ya es string normalizado
+    entryPrice:      getPriceFromAsset(a) || 0,
+    predictedChange: a.predictedChange,               // ya es número normalizado
     capitalUSD:      parseFloat(perPosition.toFixed(2)),
     weight:          parseFloat((perPosition / cycleCapital * 100).toFixed(1)),
     rank:            i + 1,
-    takeProfitPrice: parseFloat(((getPriceFromAsset(a) || a.current_price || 0) * (1 + cfg.takeProfitPct / 100)).toFixed(6)),
-    stopLossPrice:   parseFloat(((getPriceFromAsset(a) || a.current_price || 0) * (1 - cfg.stopLossPct   / 100)).toFixed(6)),
+    takeProfitPrice: parseFloat(((getPriceFromAsset(a) || 0) * (1 + cfg.takeProfitPct / 100)).toFixed(6)),
+    stopLossPrice:   parseFloat(((getPriceFromAsset(a) || 0) * (1 - cfg.stopLossPct   / 100)).toFixed(6)),
     expectedFeeUSD:  parseFloat((perPosition * cfg.feePct / 100).toFixed(4)),
   }));
 
@@ -144,12 +166,14 @@ function selectInvestmentTargets(snapshot, investConfig, existingPositions = [])
   const topPred      = selected[0]?.predictedChange?.toFixed(1) ?? '?';
 
   return {
-    selected:      targets,   // FIX: devolver targets (con entryPrice/capitalUSD calculados), no activos crudos
+    selected:      targets,
     reason:        `${targets.length} activos por mayor potencial (+${topPred}% previsto)${minPredLabel}`,
     shouldInvest:  true,
     cycleCapital:  parseFloat(cycleCapital.toFixed(2)),
+    // allCandidates normalizado: classification string + predictedChange número, orden por pred DESC
     allCandidates: candidates,
     sortedBy:      'predictedChange',
+    snapshotHasPredictedChange: normalized.filter(a => a.predictedChange > 0).length,
   };
 }
 
