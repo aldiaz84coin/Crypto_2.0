@@ -52,9 +52,9 @@ function getPriceFromAsset(a) {
 //   confiamos en esa clasificación sin re-aplicar el umbral de BP del investConfig.
 //   El Algoritmo A ya lo validó con su propio invertibleMinBoost.
 //   Solo se aplica cfg.minPredictedChange como filtro adicional de trading.
-//
 //   Si el investConfig incluye _syncedMinBoostPower (inyectado por el endpoint),
 //   se usa ese umbral sincronizado en lugar del default.
+
 // ─── Helper: parsear predictedChange de forma robusta ─────────────────────────
 // Acepta número, string numérico, null, undefined → siempre devuelve número.
 function parsePred(val) {

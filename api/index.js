@@ -2163,15 +2163,17 @@ app.post('/api/invest/decide', async (req, res) => {
     });
 
     res.json({
-      success:          true,
-      shouldInvest:     decision.shouldInvest,
-      reason:           decision.reason,
-      capitalAvailable: parseFloat(available.toFixed(2)),
-      targets:          decision.selected,
-      allCandidates:    decision.allCandidates || [],
-      cycleCapital:     decision.cycleCapital,
-      mode:             snapshotMode || (cfg.mode === 'speculative' ? 'speculative' : 'normal'),  // modo efectivo del algoritmo usado
-      snapshotMode:     snapshotMode,   // devolver modo para diagnóstico en UI
+      success:                    true,
+      shouldInvest:               decision.shouldInvest,
+      reason:                     decision.reason,
+      capitalAvailable:           parseFloat(available.toFixed(2)),
+      targets:                    decision.selected,
+      allCandidates:              decision.allCandidates || [],
+      cycleCapital:               decision.cycleCapital,
+      // snapshotHasPredictedChange: cuántos activos tienen pred > 0 (calculado en investment-manager)
+      snapshotHasPredictedChange: decision.snapshotHasPredictedChange ?? null,
+      mode:             snapshotMode || (cfg.mode === 'speculative' ? 'speculative' : 'normal'),
+      snapshotMode:     snapshotMode,
       exchange:         cfg.exchange,
       takeProfitPct:    cfg.takeProfitPct,
       stopLossPct:      cfg.stopLossPct,
@@ -2185,12 +2187,21 @@ app.post('/api/invest/decide', async (req, res) => {
         minSignalsRequired:           cfg.minSignals,
         minPredictedChange:           cfg.minPredictedChange || 0,
         snapshotMode:                 snapshotMode,
-        topInvertibles: invertiblesInSnapshot.slice(0, 8).map(a => ({
-          symbol:     a.symbol,
-          boostPower: parseFloat((a.boostPower || 0).toFixed(3)),
-          predicted:  a.predictedChange,
-          failsPred:  (typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0)) < (cfg.minPredictedChange || 0),
-        })),
+        snapshotHasPredictedChange:   decision.snapshotHasPredictedChange ?? null,
+        // topInvertibles ordenados por predictedChange DESC para que el diagnóstico sea coherente
+        topInvertibles: [...invertiblesInSnapshot]
+          .sort((a, b) => {
+            const pa = typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0);
+            const pb = typeof b.predictedChange === 'number' ? b.predictedChange : parseFloat(b.predictedChange || 0);
+            return pb - pa;
+          })
+          .slice(0, 8)
+          .map(a => ({
+            symbol:     a.symbol,
+            boostPower: parseFloat((a.boostPower || 0).toFixed(3)),
+            predicted:  typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0),
+            failsPred:  (typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0)) < (cfg.minPredictedChange || 0),
+          })),
       }
     });
   } catch(e) { res.status(500).json({ success: false, error: e.message }); }
@@ -2278,18 +2289,19 @@ app.post('/api/invest/execute', async (req, res) => {
           candidatesFound:    decision.selected?.length || 0,
           minSignalsRequired: cfg.minSignals,
           minBoostRequired:   cfg.minBoostPower,
+          // Ordenar por predictedChange DESC (criterio de selección real del algoritmo)
           topCandidates: snapshot
             .filter(a => getClassificationStr(a) === 'INVERTIBLE')
-            .sort((a,b) => (b.boostPower||0) - (a.boostPower||0))
-            .slice(0, 5)
             .map(a => ({
               symbol:          a.symbol,
               boostPower:      parseFloat((a.boostPower||0).toFixed(3)),
               boostPowerPct:   parseFloat(((a.boostPower||0)*100).toFixed(1)),
-              predictedChange: a.predictedChange,
-              classification:  a.classification,
+              predictedChange: typeof a.predictedChange === 'number' ? a.predictedChange : parseFloat(a.predictedChange || 0),
+              classification:  getClassificationStr(a),
               meetsThreshold:  (a.boostPower||0) >= cfg.minBoostPower,
-            })),
+            }))
+            .sort((a, b) => b.predictedChange - a.predictedChange)
+            .slice(0, 5),
         },
       };
       await appendInvestLog(logEntry);
