@@ -2151,6 +2151,7 @@ function setInvestExchange(exchange) {
 
 // ── Resumen / Overview ───────────────────────────────────────────
 async function loadInvestOverview() {
+  // ── 1. Cargar capital y posiciones abiertas desde Redis ────────────────────
   try {
     const r = await fetch('/api/invest/positions');
     const d = await r.json();
@@ -2175,16 +2176,114 @@ async function loadInvestOverview() {
         <p class="text-xs text-gray-600 mt-1">Posiciones abiertas</p>
       </div>`;
 
-    // Posiciones abiertas en resumen
     const openDiv = document.getElementById('inv-open-summary');
     if (d.open.length === 0) {
       openDiv.innerHTML = '<p class="text-gray-500 text-sm">Sin posiciones abiertas.</p>';
     } else {
-      // Limpiar timers anteriores antes de re-renderizar
-    Object.keys(positionCycleTimers).forEach(id => { clearInterval(positionCycleTimers[id]); delete positionCycleTimers[id]; });
-    openDiv.innerHTML = d.open.map(p => renderPositionCard(p, true)).join('');
+      Object.keys(positionCycleTimers).forEach(id => { clearInterval(positionCycleTimers[id]); delete positionCycleTimers[id]; });
+      openDiv.innerHTML = d.open.map(p => renderPositionCard(p, true)).join('');
     }
   } catch(e) { console.error(e); }
+
+  // ── 2. Mostrar candidatos del snapshot y lanzar análisis completo ──────────
+  // El módulo de inversión debe mostrar los INVERTIBLE del snapshot actual
+  // ordenados por mayor predicción de subida, sin esperar a que el usuario
+  // pulse el botón "Analizar & Decidir".
+  const decisionDiv = document.getElementById('inv-decision');
+  if (!decisionDiv) return;
+
+  // Sin snapshot cargado aún
+  if (!cryptos?.length) {
+    decisionDiv.innerHTML = `
+      <div class="bg-gray-900 border border-dashed border-gray-700 rounded-xl p-5 text-center">
+        <p class="text-gray-400 mb-1">📊 Sin snapshot del monitor</p>
+        <p class="text-xs text-gray-600 mb-3">Carga activos en el Monitor para ver los candidatos INVERTIBLE ordenados por mayor predicción de subida.</p>
+        <button onclick="setTab('monitor')" class="bg-gray-700 hover:bg-gray-600 px-4 py-2 rounded-lg text-xs font-semibold">📡 Ir al Monitor</button>
+      </div>`;
+    return;
+  }
+
+  // Validar coherencia de modo: snapshot cargado vs modo activo
+  const loadedMode = window._snapshotLoadedMode || 'normal';
+  if (loadedMode !== currentMode) {
+    decisionDiv.innerHTML = `
+      <div class="bg-yellow-950 border border-dashed border-yellow-800 rounded-xl p-4 text-center">
+        <p class="text-yellow-400 font-semibold mb-1">⚠️ Snapshot en modo ${loadedMode === 'speculative' ? '🎯 Especulativo' : '📊 Normal'} · selector en ${currentMode === 'speculative' ? '🎯 Especulativo' : '📊 Normal'}</p>
+        <p class="text-xs text-gray-500 mb-3">Recarga el Monitor con el modo correcto para que el análisis sea coherente.</p>
+        <button onclick="setTab('monitor')" class="bg-blue-700 hover:bg-blue-600 px-3 py-1.5 rounded-lg text-xs font-semibold">🔄 Ir al Monitor</button>
+      </div>`;
+    return;
+  }
+
+  // Helpers locales de normalización (sin depender del backend)
+  const _clsStr = c => {
+    if (!c) return 'RUIDOSO';
+    if (typeof c === 'string') return c.toUpperCase();
+    if (typeof c === 'object') return (c.category || c.label || 'RUIDOSO').toUpperCase();
+    return 'RUIDOSO';
+  };
+  const _predNum = v => {
+    if (typeof v === 'number' && !isNaN(v)) return v;
+    const n = parseFloat(v ?? 0); return isNaN(n) ? 0 : n;
+  };
+  const _fmtPrice = p => {
+    const n = parseFloat(p); if (!n || isNaN(n) || n === 0) return '—';
+    if (n < 0.0001) return n.toFixed(8);
+    if (n < 0.01) return n.toFixed(6);
+    if (n < 1) return n.toFixed(4);
+    return n.toFixed(2);
+  };
+
+  // Filtrar y ordenar INVERTIBLE del snapshot: clasificación normalizada, pred DESC, desempate BP DESC
+  const invertibles = cryptos
+    .filter(a => _clsStr(a.classification) === 'INVERTIBLE')
+    .map(a => ({ ...a, _pred: _predNum(a.predictedChange), _bp: parseFloat(a.boostPower ?? 0) || 0 }))
+    .sort((a, b) => {
+      const diff = b._pred - a._pred;
+      return Math.abs(diff) > 0.001 ? diff : b._bp - a._bp;
+    });
+
+  if (invertibles.length === 0) {
+    decisionDiv.innerHTML = `
+      <div class="bg-gray-900 border border-gray-700 rounded-xl p-4 text-center">
+        <p class="text-gray-500 text-sm">Sin activos INVERTIBLE en el snapshot actual (modo: ${loadedMode}).</p>
+        <p class="text-xs text-gray-600 mt-1">Recarga el monitor o ajusta los umbrales de clasificación en Configuración.</p>
+      </div>`;
+    return;
+  }
+
+  // Preview inmediato client-side mientras el backend procesa el análisis completo
+  decisionDiv.innerHTML = `
+    <div class="bg-gray-900 border border-gray-800 rounded-xl p-4">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <p class="text-sm font-semibold text-gray-200">
+            📋 ${invertibles.length} activo${invertibles.length !== 1 ? 's' : ''} INVERTIBLE
+            <span class="text-gray-500 font-normal text-xs ml-1">· ordenados por mayor predicción · modo ${loadedMode}</span>
+          </p>
+        </div>
+        <span class="text-xs text-gray-600 animate-pulse">⏳ analizando con Algo A...</span>
+      </div>
+      <div class="space-y-1">
+        ${invertibles.slice(0, 20).map((a, i) => {
+          const price = a.current_price ?? a.price ?? a.snapshotPrice ?? 0;
+          const predColor = a._pred > 0 ? 'text-green-400' : a._pred < 0 ? 'text-red-400' : 'text-gray-500';
+          return `
+          <div class="flex items-center gap-3 py-1.5 px-2 rounded-lg bg-gray-800/50 text-xs">
+            <span class="text-gray-600 w-5 text-right font-mono shrink-0">#${i + 1}</span>
+            <span class="font-bold text-white w-16 mono shrink-0">${(a.symbol || '').toUpperCase()}</span>
+            <span class="text-gray-400 flex-1 truncate">${a.name || ''}</span>
+            <span class="text-blue-400 w-12 text-right shrink-0">BP ${Math.round(a._bp * 100)}%</span>
+            <span class="${predColor} font-bold w-14 text-right mono shrink-0">${a._pred >= 0 ? '+' : ''}${a._pred.toFixed(1)}%</span>
+            <span class="text-gray-600 w-20 text-right mono shrink-0">$${_fmtPrice(price)}</span>
+          </div>`;
+        }).join('')}
+        ${invertibles.length > 20 ? `<p class="text-xs text-gray-600 text-center pt-1">+${invertibles.length - 20} más...</p>` : ''}
+      </div>
+    </div>`;
+
+  // Lanzar análisis completo en segundo plano (reemplazará el preview con el resultado real)
+  decideCycle();
 }
 
 // ── Decidir inversión ────────────────────────────────────────────
