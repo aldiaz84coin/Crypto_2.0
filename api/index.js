@@ -4746,6 +4746,110 @@ scenariosEndpoint(
   }
 );
 
+// ════════════════════════════════════════════════════════════════════════════
+// ENDPOINT PÚBLICO: BTC BoostPower
+// GET /api/btc/boost-power?mode=normal&fresh=false
+// Publicado para consumo externo. Cachea 10 min en Redis.
+// ════════════════════════════════════════════════════════════════════════════
+const BTC_BOOST_CACHE_KEY = 'btc:boost-power';
+const BTC_BOOST_TTL_S     = 600; // 10 minutos
+
+app.get('/api/btc/boost-power', async (req, res) => {
+  const mode  = (req.query.mode === 'speculative') ? 'speculative' : 'normal';
+  const fresh = req.query.fresh === 'true';
+
+  try {
+    // ── 1. Servir desde caché si no se pide fresh ─────────────────────────
+    if (!fresh && redis) {
+      const cached = await redisGet(`${BTC_BOOST_CACHE_KEY}:${mode}`);
+      if (cached && cached.calculatedAt) {
+        return res.json({ ...cached, cached: true });
+      }
+    }
+
+    // ── 2. Obtener datos de mercado de BTC desde CoinGecko ────────────────
+    const cgRes = await axios.get(
+      'https://api.coingecko.com/api/v3/coins/markets', {
+        params: {
+          vs_currency:             'usd',
+          ids:                     'bitcoin',
+          order:                   'market_cap_desc',
+          per_page:                1,
+          page:                    1,
+          sparkline:               false,
+          price_change_percentage: '24h,7d,30d'
+        },
+        timeout: 10000
+      }
+    );
+
+    const btc = cgRes.data?.[0];
+    if (!btc) {
+      return res.status(502).json({ success: false, error: 'CoinGecko no devolvió datos de BTC' });
+    }
+
+    // ── 3. Calcular BoostPower ────────────────────────────────────────────
+    const config = getDefaultConfig(mode);
+    const result = boostPowerCalc.calculateBoostPower(btc, config, {});
+
+    // ── 4. Normalizar clasificación ───────────────────────────────────────
+    const classificationStr = (() => {
+      const c = result.classification;
+      if (!c) return 'RUIDOSO';
+      if (typeof c === 'string') return c.toUpperCase();
+      if (typeof c === 'object') return (c.category || c.label || 'RUIDOSO').toUpperCase();
+      return 'RUIDOSO';
+    })();
+
+    // ── 5. Construir payload ──────────────────────────────────────────────
+    const payload = {
+      success:      true,
+      cached:       false,
+      calculatedAt: new Date().toISOString(),
+      mode,
+      asset: {
+        id:        btc.id,
+        symbol:    btc.symbol?.toUpperCase() || 'BTC',
+        name:      btc.name,
+        price:     btc.current_price,
+        change24h: btc.price_change_percentage_24h,
+        change7d:  btc.price_change_percentage_7d_in_currency ?? null,
+        change30d: btc.price_change_percentage_30d_in_currency ?? null,
+        marketCap: btc.market_cap,
+        volume24h: btc.total_volume,
+        ath:       btc.ath,
+        atl:       btc.atl,
+      },
+      analysis: {
+        boostPower:        parseFloat((result.boostPower        ?? 0).toFixed(4)),
+        boostPowerPercent: parseFloat((result.boostPowerPercent ?? 0).toFixed(2)),
+        predictedChange:   parseFloat((result.predictedChange   ?? 0).toFixed(2)),
+        classification:    classificationStr,
+        breakdown:         result.breakdown ?? null,
+      }
+    };
+
+    // ── 6. Guardar en caché ───────────────────────────────────────────────
+    if (redis) {
+      try {
+        await redis.set(`${BTC_BOOST_CACHE_KEY}:${mode}`, payload, { ex: BTC_BOOST_TTL_S });
+      } catch (cacheErr) {
+        console.warn('[btc-boost] Cache write error:', cacheErr.message);
+      }
+    }
+
+    res.json(payload);
+
+  } catch (err) {
+    console.error('[btc-boost] Error:', err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+
+
+
+
 // ── Arranque local ────────────────────────────────────────────────────────────
 if (require.main === module) {
   const PORT = process.env.PORT || 3000;
